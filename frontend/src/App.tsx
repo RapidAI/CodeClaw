@@ -4023,7 +4023,7 @@ ${instruction}`;
                                             />
                                             {(() => {
                                                 const providerName = (config as any)[activeTool].models[activeTab].model_name;
-                                                const models = recommendedModels[providerName];
+                                                const models = (activeTool === 'claude' || (providerName !== '阿里云' && providerName !== 'aliyun')) ? recommendedModels[providerName] : undefined;
                                                 if (!models || models.length === 0) return null;
                                                 return (
                                                     <button
@@ -4036,7 +4036,7 @@ ${instruction}`;
                                         </div>
                                         {showModelRecommend && (() => {
                                             const providerName = (config as any)[activeTool].models[activeTab].model_name;
-                                            const models = recommendedModels[providerName];
+                                            const models = (activeTool === 'claude' || (providerName !== '阿里云' && providerName !== 'aliyun')) ? recommendedModels[providerName] : undefined;
                                             if (!models || models.length === 0) return null;
                                             return (
                                                 <div style={{ position: 'absolute', top: '100%', right: 0, zIndex: 100, marginTop: '4px', background: '#ffffff', border: '1px solid #d1d5db', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', minWidth: '200px', maxHeight: '240px', overflowY: 'auto', padding: '4px 0' }}>
