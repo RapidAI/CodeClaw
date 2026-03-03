@@ -4,6 +4,9 @@ set -e
 # Set minimum macOS version to 10.15 (Catalina)
 # We use -weak_framework for UniformTypeIdentifiers to allow running on 10.15
 export MACOSX_DEPLOYMENT_TARGET=10.15
+# Ensure Go build cache is writable in this workspace (sandbox-safe)
+export GOCACHE="${PWD}/.gocache"
+mkdir -p "$GOCACHE"
 
 APP_NAME="AICoder"
 # Read version from build_number if exists, else default
@@ -187,6 +190,7 @@ build_linux arm64
 echo "  - Generating .icns file..."
 if [ -f "build/appicon.png" ]; then
     ICONSET_DIR="build/appicon.iconset"
+    rm -rf "$ICONSET_DIR"
     mkdir -p "$ICONSET_DIR"
     
     # Generate standard sizes
@@ -201,7 +205,17 @@ if [ -f "build/appicon.png" ]; then
     sips -z 512 512   "build/appicon.png" --out "${ICONSET_DIR}/icon_512x512.png" > /dev/null
     sips -z 1024 1024 "build/appicon.png" --out "${ICONSET_DIR}/icon_512x512@2x.png" > /dev/null
     
-    iconutil -c icns "$ICONSET_DIR" -o "build/AppIcon.icns"
+    if ! iconutil -c icns "$ICONSET_DIR" -o "build/AppIcon.icns"; then
+        echo "    Warning: iconutil failed. Falling back to existing .icns if available."
+        if [ -f "build/iconfile.icns" ]; then
+            cp "build/iconfile.icns" "build/AppIcon.icns"
+            echo "    Fallback icon copied from build/iconfile.icns"
+        elif [ -f "build/AppIcon.icns" ]; then
+            echo "    Keeping existing build/AppIcon.icns"
+        else
+            echo "    No .icns fallback found; app bundle will use PNG icon."
+        fi
+    fi
     rm -rf "$ICONSET_DIR"
     echo "    Generated build/AppIcon.icns"
 fi

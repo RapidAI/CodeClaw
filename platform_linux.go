@@ -300,6 +300,30 @@ func (a *App) InstallToolOnDemand(toolName string) error {
 	return nil
 }
 
+func (a *App) updatePathForNode() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	localBinDir := filepath.Join(home, ".cceasy", "tools", "bin")
+	if _, err := os.Stat(localBinDir); err != nil {
+		return
+	}
+
+	currentPath := os.Getenv("PATH")
+	parts := strings.Split(currentPath, string(os.PathListSeparator))
+	for _, part := range parts {
+		if part == localBinDir {
+			return
+		}
+	}
+
+	newPath := localBinDir + string(os.PathListSeparator) + currentPath
+	os.Setenv("PATH", newPath)
+	a.log(a.tr("Updated PATH: ") + newPath)
+}
+
 func (a *App) installNodeJSManually(targetDir string) error {
 	// Simple download and unpack for Linux (assuming x64 for now, or detect)
 	nodeVersion := RequiredNodeVersion
