@@ -796,6 +796,7 @@ const ToolConfiguration = ({
     const getBadge = (model: any): { bg: string; label: string } | null => {
         const name = model.model_name.toLowerCase();
         if (model.model_name === "Original") return { bg: '#3b82f6', label: t("originalFlag") };
+        if (model.has_subscription) return { bg: '#ec4899', label: t("subscription") };
         if (name.includes("glm") || name.includes("kimi") || name.includes("doubao") || name.includes("minimax"))
             return { bg: '#ec4899', label: t("monthly") };
         if (name.includes("deepseek")) return { bg: '#f59e0b', label: t("premium") };
@@ -3948,14 +3949,48 @@ ${instruction}`;
                                         <div style={{ flex: 1, display: 'flex', gap: '2px', overflow: 'hidden' }}>
                                             {(showArrows ? configurableModels.slice(tabStartIndex, tabStartIndex + 4) : configurableModels).map((model: any, index: number) => {
                                                 const globalIndex = allModels.findIndex((m: any) => m.model_name === model.model_name);
+                                                const name = model.model_name.toLowerCase();
+                                                let badge = null;
+
+                                                if (model.has_subscription) {
+                                                    badge = { bg: '#ec4899', label: t("subscription") };
+                                                } else if (name.includes("glm") || name.includes("kimi") || name.includes("doubao") || name.includes("minimax")) {
+                                                    badge = { bg: '#ec4899', label: t("monthly") };
+                                                } else if (name.includes("deepseek")) {
+                                                    badge = { bg: '#f59e0b', label: t("premium") };
+                                                } else if (name.includes("xiaomi")) {
+                                                    badge = { bg: '#f59e0b', label: t("bigSpender") };
+                                                } else if (model.is_custom) {
+                                                    badge = { bg: '#9ca3af', label: t("customized") };
+                                                } else if (["aicodemirror", "aigocode", "noin.ai", "gaccode", "chatfire", "coderelay"].some(p => name.includes(p))) {
+                                                    badge = { bg: '#14b8a6', label: t("forward") };
+                                                }
+
                                                 return (
                                                     <button
                                                         key={globalIndex}
                                                         className={`tab-button ${activeTab === globalIndex ? 'active' : ''}`}
                                                         onClick={() => setActiveTab(globalIndex)}
-                                                        style={{ overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0 }}
+                                                        style={{ overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0, position: 'relative' }}
                                                     >
                                                         {getModelDisplayName(model.model_name, lang)}
+                                                        {badge && (
+                                                            <span style={{
+                                                                position: 'absolute',
+                                                                top: '-6px',
+                                                                right: '-6px',
+                                                                backgroundColor: badge.bg,
+                                                                color: '#fff',
+                                                                padding: '2px 6px',
+                                                                borderRadius: '4px',
+                                                                fontSize: '0.6rem',
+                                                                fontWeight: 'bold',
+                                                                boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                                                                whiteSpace: 'nowrap'
+                                                            }}>
+                                                                {badge.label}
+                                                            </span>
+                                                        )}
                                                     </button>
                                                 );
                                             })}

@@ -38,12 +38,13 @@ var OnConfigChanged func(AppConfig)
 var UpdateTrayMenu func(string)
 var UpdateTrayVisibility func(bool)
 type ModelConfig struct {
-	ModelName string `json:"model_name"`
-	ModelId   string `json:"model_id"`
-	ModelUrl  string `json:"model_url"`
-	ApiKey    string `json:"api_key"`
-	WireApi   string `json:"wire_api"`
-	IsCustom  bool   `json:"is_custom"`
+	ModelName       string `json:"model_name"`
+	ModelId         string `json:"model_id"`
+	ModelUrl        string `json:"model_url"`
+	ApiKey          string `json:"api_key"`
+	WireApi         string `json:"wire_api"`
+	IsCustom        bool   `json:"is_custom"`
+	HasSubscription bool   `json:"has_subscription"`
 }
 type ProjectConfig struct {
 	Id            string `json:"id"`
@@ -1678,9 +1679,9 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "MiniMax", ModelId: "MiniMax-M2.1", ModelUrl: "https://api.minimaxi.com/anthropic", ApiKey: ""},
 		{ModelName: "DeepSeek", ModelId: "deepseek-chat", ModelUrl: "https://api.deepseek.com/anthropic", ApiKey: ""},
 		{ModelName: "ChatFire", ModelId: "sonnet", ModelUrl: "https://api.chatfire.cn", ApiKey: ""},
-		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net", ApiKey: ""},
-		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v1/claude-code-proxy", ApiKey: ""},
-		{ModelName: "阿里云", ModelId: "glm-5", ModelUrl: "https://coding.dashscope.aliyuncs.com/apps/anthropic", ApiKey: ""},
+		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net", ApiKey: "", HasSubscription: true},
+		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v1/claude-code-proxy", ApiKey: "", HasSubscription: true},
+		{ModelName: "阿里云", ModelId: "glm-5", ModelUrl: "https://coding.dashscope.aliyuncs.com/apps/anthropic", ApiKey: "", HasSubscription: true},
 		{ModelName: "Custom", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom1", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom2", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
@@ -1706,8 +1707,8 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Doubao", ModelId: "doubao-seed-code-preview-latest", ModelUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", ApiKey: ""},
 		{ModelName: "Kimi", ModelId: "kimi-for-coding", ModelUrl: "https://api.kimi.com/coding/v1", ApiKey: ""},
 		{ModelName: "MiniMax", ModelId: "MiniMax-M2.1", ModelUrl: "https://api.minimaxi.com/v1", ApiKey: ""},
-		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: ""},
-		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: ""},
+		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: "", HasSubscription: true},
+		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: "", HasSubscription: true},
 		{ModelName: "Custom", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom1", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom2", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
@@ -1723,8 +1724,8 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Doubao", ModelId: "doubao-seed-code-preview-latest", ModelUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", ApiKey: ""},
 		{ModelName: "Kimi", ModelId: "kimi-for-coding", ModelUrl: "https://api.kimi.com/coding/v1", ApiKey: ""},
 		{ModelName: "MiniMax", ModelId: "MiniMax-M2.1", ModelUrl: "https://api.minimaxi.com/v1", ApiKey: ""},
-		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: ""},
-		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: ""},
+		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: "", HasSubscription: true},
+		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: "", HasSubscription: true},
 		{ModelName: "Custom", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom1", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom2", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
@@ -1750,8 +1751,8 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Kimi", ModelId: "kimi-for-coding", ModelUrl: "https://api.kimi.com/coding/v1", ApiKey: ""},
 		{ModelName: "MiniMax", ModelId: "MiniMax-M2.1", ModelUrl: "https://api.minimaxi.com/v1", ApiKey: ""},
 		{ModelName: "XiaoMi", ModelId: "mimo-v2-flash", ModelUrl: "https://api.xiaomimimo.com/v1", ApiKey: ""},
-		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: ""},
-		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: ""},
+		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: "", HasSubscription: true},
+		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: "", HasSubscription: true},
 		{ModelName: "Custom", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom1", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 	}
@@ -1764,8 +1765,8 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Kimi", ModelId: "kimi-for-coding", ModelUrl: "https://api.kimi.com/coding/v1", ApiKey: ""},
 		{ModelName: "MiniMax", ModelId: "MiniMax-M2.1", ModelUrl: "https://api.minimaxi.com/v1", ApiKey: ""},
 		{ModelName: "XiaoMi", ModelId: "mimo-v2-flash", ModelUrl: "https://api.xiaomimimo.com/v1", ApiKey: ""},
-		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: ""},
-		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: ""},
+		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: "", HasSubscription: true},
+		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: "", HasSubscription: true},
 		{ModelName: "Custom", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom1", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom2", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
@@ -1781,8 +1782,8 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Kimi", ModelId: "kimi-for-coding", ModelUrl: "https://api.kimi.com/coding/v1", ApiKey: ""},
 		{ModelName: "MiniMax", ModelId: "MiniMax-M2.1", ModelUrl: "https://api.minimaxi.com/v1", ApiKey: ""},
 		{ModelName: "XiaoMi", ModelId: "mimo-v2-flash", ModelUrl: "https://api.xiaomimimo.com/v1", ApiKey: ""},
-		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: ""},
-		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: ""},
+		{ModelName: "摩尔线程", ModelId: "GLM-4.7", ModelUrl: "https://coding-plan-endpoint.kuaecloud.net/v1", ApiKey: "", HasSubscription: true},
+		{ModelName: "快手", ModelId: "kat-coder-pro-v1", ModelUrl: "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", ApiKey: "", HasSubscription: true},
 		{ModelName: "Custom", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom1", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom2", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
@@ -1965,7 +1966,11 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		config.Claude.CurrentModel = config.Claude.Models[0].ModelName
 	}
 	// Helper to ensure a model exists in the list
-	ensureModel := func(models *[]ModelConfig, name, url, id, wireApi string) {
+	ensureModel := func(models *[]ModelConfig, name, url, id, wireApi string, hasSubscription ...bool) {
+		hasSub := false
+		if len(hasSubscription) > 0 {
+			hasSub = hasSubscription[0]
+		}
 		for i := range *models {
 			if strings.EqualFold((*models)[i].ModelName, name) {
 				(*models)[i].ModelName = name // Update to canonical casing
@@ -1979,10 +1984,11 @@ func (a *App) LoadConfig() (AppConfig, error) {
 				if wireApi != "" {
 					(*models)[i].WireApi = wireApi
 				}
+				(*models)[i].HasSubscription = hasSub
 				return
 			}
 		}
-		*models = append(*models, ModelConfig{ModelName: name, ModelUrl: url, ModelId: id, WireApi: wireApi, ApiKey: ""})
+		*models = append(*models, ModelConfig{ModelName: name, ModelUrl: url, ModelId: id, WireApi: wireApi, ApiKey: "", HasSubscription: hasSub})
 	}
 	// Helper to remove a model from the list
 	removeModel := func(models *[]ModelConfig, name string) {
@@ -2033,9 +2039,9 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	ensureModel(&config.Claude.Models, "GLM", "https://open.bigmodel.cn/api/anthropic", "glm-4.7", "")
 	ensureModel(&config.Claude.Models, "MiniMax", "https://api.minimaxi.com/anthropic", "MiniMax-M2.1", "")
 	ensureModel(&config.Claude.Models, "XiaoMi", "https://api.xiaomimimo.com/anthropic", "mimo-v2-flash", "")
-	ensureModel(&config.Claude.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net", "GLM-4.7", "")
-	ensureModel(&config.Claude.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v1/claude-code-proxy", "kat-coder-pro-v1", "")
-	ensureModel(&config.Claude.Models, "阿里云", "https://coding.dashscope.aliyuncs.com/apps/anthropic", "glm-5", "")
+	ensureModel(&config.Claude.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net", "GLM-4.7", "", true)
+	ensureModel(&config.Claude.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v1/claude-code-proxy", "kat-coder-pro-v1", "", true)
+	ensureModel(&config.Claude.Models, "阿里云", "https://coding.dashscope.aliyuncs.com/apps/anthropic", "glm-5", "", true)
 	ensureModel(&config.Gemini.Models, "ChatFire", "https://api.chatfire.cn/v1beta/models/gemini-2.5-pro:generateContent", "gemini-2.5-pro", "")
 	ensureModel(&config.Codex.Models, "ChatFire", "https://api.chatfire.cn/v1", "gpt-5.1-codex-mini", "responses")
 	ensureModel(&config.Codex.Models, "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "")
@@ -2044,8 +2050,8 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	ensureModel(&config.Codex.Models, "Kimi", "https://api.kimi.com/coding/v1", "kimi-for-coding", "")
 	ensureModel(&config.Codex.Models, "MiniMax", "https://api.minimaxi.com/v1", "MiniMax-M2.1", "")
 	ensureModel(&config.Codex.Models, "XiaoMi", "https://api.xiaomimimo.com/v1", "mimo-v2-flash", "")
-	ensureModel(&config.Codex.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "")
-	ensureModel(&config.Codex.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "")
+	ensureModel(&config.Codex.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "", true)
+	ensureModel(&config.Codex.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "", true)
 	ensureModel(&config.Opencode.Models, "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "")
 	ensureModel(&config.Opencode.Models, "ChatFire", "https://api.chatfire.cn/v1", "gpt-4o", "")
 	ensureModel(&config.Opencode.Models, "GLM", "https://open.bigmodel.cn/api/coding/paas/v4", "glm-4.7", "")
@@ -2053,24 +2059,24 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	ensureModel(&config.Opencode.Models, "Kimi", "https://api.kimi.com/coding/v1", "kimi-for-coding", "")
 	ensureModel(&config.Opencode.Models, "MiniMax", "https://api.minimaxi.com/v1", "MiniMax-M2.1", "")
 	ensureModel(&config.Opencode.Models, "XiaoMi", "https://api.xiaomimimo.com/v1", "mimo-v2-flash", "")
-	ensureModel(&config.Opencode.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "")
-	ensureModel(&config.Opencode.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "")
+	ensureModel(&config.Opencode.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "", true)
+	ensureModel(&config.Opencode.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "", true)
 	ensureModel(&config.CodeBuddy.Models, "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "")
 	ensureModel(&config.CodeBuddy.Models, "GLM", "https://open.bigmodel.cn/api/coding/paas/v4", "glm-4.7", "")
 	ensureModel(&config.CodeBuddy.Models, "Doubao", "https://ark.cn-beijing.volces.com/api/coding/v3", "doubao-seed-code-preview-latest", "")
 	ensureModel(&config.CodeBuddy.Models, "Kimi", "https://api.kimi.com/coding/v1", "kimi-for-coding", "")
 	ensureModel(&config.CodeBuddy.Models, "MiniMax", "https://api.minimaxi.com/v1", "MiniMax-M2.1", "")
 	ensureModel(&config.CodeBuddy.Models, "XiaoMi", "https://api.xiaomimimo.com/v1", "mimo-v2-flash", "")
-	ensureModel(&config.CodeBuddy.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "")
-	ensureModel(&config.CodeBuddy.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "")
+	ensureModel(&config.CodeBuddy.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "", true)
+	ensureModel(&config.CodeBuddy.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "", true)
 	ensureModel(&config.IFlow.Models, "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "")
 	ensureModel(&config.IFlow.Models, "GLM", "https://open.bigmodel.cn/api/coding/paas/v4", "glm-4.7", "")
 	ensureModel(&config.IFlow.Models, "Doubao", "https://ark.cn-beijing.volces.com/api/coding/v3", "doubao-seed-code-preview-latest", "")
 	ensureModel(&config.IFlow.Models, "Kimi", "https://api.kimi.com/coding/v1", "kimi-for-coding", "")
 	ensureModel(&config.IFlow.Models, "MiniMax", "https://api.minimaxi.com/v1", "MiniMax-M2.1", "")
 	ensureModel(&config.IFlow.Models, "XiaoMi", "https://api.xiaomimimo.com/v1", "mimo-v2-flash", "")
-	ensureModel(&config.IFlow.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "")
-	ensureModel(&config.IFlow.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "")
+	ensureModel(&config.IFlow.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "", true)
+	ensureModel(&config.IFlow.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "", true)
 	ensureModel(&config.Kilo.Models, "ChatFire", "https://api.chatfire.cn/v1", "gpt-4o", "")
 	ensureModel(&config.Kilo.Models, "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "")
 	ensureModel(&config.Kilo.Models, "GLM", "https://open.bigmodel.cn/api/coding/paas/v4", "glm-4.7", "")
@@ -2078,8 +2084,8 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	ensureModel(&config.Kilo.Models, "Kimi", "https://api.kimi.com/coding/v1", "kimi-for-coding", "")
 	ensureModel(&config.Kilo.Models, "MiniMax", "https://api.minimaxi.com/v1", "MiniMax-M2.1", "")
 	ensureModel(&config.Kilo.Models, "XiaoMi", "https://api.xiaomimimo.com/v1", "mimo-v2-flash", "")
-	ensureModel(&config.Kilo.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "")
-	ensureModel(&config.Kilo.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "")
+	ensureModel(&config.Kilo.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "", true)
+	ensureModel(&config.Kilo.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "", true)
 	ensureModel(&config.Kode.Models, "ChatFire", "https://api.chatfire.cn/v1", "gpt-4o", "")
 	ensureModel(&config.Kode.Models, "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "")
 	ensureModel(&config.Kode.Models, "GLM", "https://open.bigmodel.cn/api/coding/paas/v4", "glm-4.7", "")
@@ -2087,8 +2093,8 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	ensureModel(&config.Kode.Models, "Kimi", "https://api.kimi.com/coding/v1", "kimi-for-coding", "")
 	ensureModel(&config.Kode.Models, "MiniMax", "https://api.minimaxi.com/v1", "MiniMax-M2.1", "")
 	ensureModel(&config.Kode.Models, "XiaoMi", "https://api.xiaomimimo.com/v1", "mimo-v2-flash", "")
-	ensureModel(&config.Kode.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "")
-	ensureModel(&config.Kode.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "")
+	ensureModel(&config.Kode.Models, "摩尔线程", "https://coding-plan-endpoint.kuaecloud.net/v1", "GLM-4.7", "", true)
+	ensureModel(&config.Kode.Models, "快手", "https://wanqing.streamlakeapi.com/api/gateway/coding/v1", "kat-coder-pro-v1", "", true)
 
 	// Purge Aliyun from other tools if it exists
 	removeModel(&config.Gemini.Models, "阿里云")
