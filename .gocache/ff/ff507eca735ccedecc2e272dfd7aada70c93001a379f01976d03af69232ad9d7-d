@@ -1,0 +1,10 @@
+./CommonFileDialog.go
+./CommonFileDialog_windows.go
+./DialogConfig.go
+./errors.go
+./iFileOpenDialog.go
+./iFileSaveDialog.go
+./iShellItem.go
+./iShellItemArray.go
+./vtblCommon.go
+./vtblCommonFunc.go

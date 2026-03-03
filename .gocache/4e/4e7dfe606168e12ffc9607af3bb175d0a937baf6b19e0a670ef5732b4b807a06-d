@@ -1,0 +1,4 @@
+./systray.go
+_cgo_gotypes.go
+systray_darwin.cgo1.go
+_cgo_import.go
