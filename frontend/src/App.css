@@ -352,6 +352,97 @@ body {
     border-color: #24292f;
 }
 
+.project-manager-panel {
+    padding: 5px 10px;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.project-manager-toolbar {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 150px;
+    gap: 8px;
+    margin-bottom: 4px;
+    align-items: center;
+}
+
+.project-manager-toolbar .form-input {
+    height: 30px;
+    font-size: 0.82rem;
+    padding: 4px 8px;
+}
+
+.project-manager-summary {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    flex: 0 0 auto;
+}
+
+.project-manager-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding-right: 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.65);
+    padding: 6px;
+}
+
+.project-manager-item {
+    padding: 2px 8px;
+    background-color: #fff;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+}
+
+.project-manager-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    flex: 0 0 auto;
+    margin-top: 12px;
+    padding-top: 4px;
+    padding-bottom: 6px;
+}
+
+.project-manager-pagination .btn-link:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+@media (max-width: 900px) {
+    .project-manager-toolbar {
+        grid-template-columns: minmax(160px, 1fr) 130px;
+    }
+
+    .project-manager-item {
+        gap: 6px;
+    }
+
+}
+
+@media (max-width: 560px) {
+    .project-manager-toolbar {
+        grid-template-columns: 1fr;
+    }
+
+}
+
 /* Model Switcher */
 .model-switcher {
     display: grid;

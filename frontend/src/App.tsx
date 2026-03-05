@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import './App.css';
 import { buildNumber } from './version';
 import appIcon from './assets/images/appicon.png';
@@ -42,6 +42,8 @@ interface ProviderEndpoint {
     region: 'china' | 'global';
     description?: string;
 }
+
+const PROJECT_PAGE_SIZE = 4;
 
 const knownProviderEndpoints: ProviderEndpoint[] = [
     // Anthropic Protocol (Claude)
@@ -357,7 +359,19 @@ const translations: any = {
         "chinaProviders": "China Providers",
         "globalProviders": "Global Providers",
         "allProviders": "All Providers",
-        "filterByRegion": "Filter by Region"
+        "filterByRegion": "Filter by Region",
+        "projectSearch": "Search",
+        "projectSearchPlaceholder": "Search by name or path",
+        "projectSortDefault": "Default order",
+        "projectSortNameAsc": "Name A-Z",
+        "projectSortNameDesc": "Name Z-A",
+        "projectSortPathAsc": "Path A-Z",
+        "projectSortPathDesc": "Path Z-A",
+        "projectNoResults": "No projects matched",
+        "projectShowing": "Showing",
+        "projectTotal": "total",
+        "prevPage": "Prev",
+        "nextPage": "Next"
     },
     "zh-Hans": {
         "title": "AICoder",
@@ -567,7 +581,19 @@ const translations: any = {
         "chinaProviders": "国内服务商",
         "globalProviders": "国外服务商",
         "allProviders": "全部服务商",
-        "filterByRegion": "按地区筛选"
+        "filterByRegion": "按地区筛选",
+        "projectSearch": "搜索",
+        "projectSearchPlaceholder": "按名称或路径搜索",
+        "projectSortDefault": "默认顺序",
+        "projectSortNameAsc": "名称 A-Z",
+        "projectSortNameDesc": "名称 Z-A",
+        "projectSortPathAsc": "路径 A-Z",
+        "projectSortPathDesc": "路径 Z-A",
+        "projectNoResults": "没有匹配的项目",
+        "projectShowing": "显示",
+        "projectTotal": "总计",
+        "prevPage": "上一页",
+        "nextPage": "下一页"
     },
     "zh-Hant": {
         "title": "AICoder",
@@ -771,7 +797,19 @@ const translations: any = {
         "chinaProviders": "國內服務商",
         "globalProviders": "國外服務商",
         "allProviders": "全部服務商",
-        "filterByRegion": "按地區篩選"
+        "filterByRegion": "按地區篩選",
+        "projectSearch": "搜尋",
+        "projectSearchPlaceholder": "按名稱或路徑搜尋",
+        "projectSortDefault": "預設順序",
+        "projectSortNameAsc": "名稱 A-Z",
+        "projectSortNameDesc": "名稱 Z-A",
+        "projectSortPathAsc": "路徑 A-Z",
+        "projectSortPathDesc": "路徑 Z-A",
+        "projectNoResults": "沒有匹配的專案",
+        "projectShowing": "顯示",
+        "projectTotal": "總計",
+        "prevPage": "上一頁",
+        "nextPage": "下一頁"
     }
 };
 
@@ -941,6 +979,10 @@ function App() {
     const [backgroundInstallingTool, setBackgroundInstallingTool] = useState<string>("");  // Track which tool is being installed in background
     const [launchingTool, setLaunchingTool] = useState<string>("");  // Track which tool is being launched
     const [selectedProjectForLaunch, setSelectedProjectForLaunch] = useState<string>("");
+    const [launchProjectKeyword, setLaunchProjectKeyword] = useState<string>("");
+    const [projectSearchKeyword, setProjectSearchKeyword] = useState<string>("");
+    const [projectSortMode, setProjectSortMode] = useState<'default' | 'name-asc' | 'name-desc' | 'path-asc' | 'path-desc'>('default');
+    const [projectCurrentPage, setProjectCurrentPage] = useState<number>(1);
     const [showInstallLog, setShowInstallLog] = useState(false);
     const [showUpdateModal, setShowUpdateModal] = useState(false);
     const [updateResult, setUpdateResult] = useState<any>(null);
@@ -1515,6 +1557,96 @@ function App() {
     const t = (key: string) => {
         return translations[lang][key] || translations["en"][key] || key;
     };
+
+    const allProjects = config?.projects || [];
+    const normalizedProjectKeyword = projectSearchKeyword.trim().toLowerCase();
+    const filteredAndSortedProjects = useMemo(() => {
+        const filtered = normalizedProjectKeyword.length === 0
+            ? allProjects
+            : allProjects.filter((proj: any) =>
+                (proj.name || "").toLowerCase().includes(normalizedProjectKeyword) ||
+                (proj.path || "").toLowerCase().includes(normalizedProjectKeyword)
+            );
+
+        if (projectSortMode === 'default') return filtered;
+
+        const sorted = [...filtered];
+        sorted.sort((a: any, b: any) => {
+            const nameA = (a.name || "").toLowerCase();
+            const nameB = (b.name || "").toLowerCase();
+            const pathA = (a.path || "").toLowerCase();
+            const pathB = (b.path || "").toLowerCase();
+            switch (projectSortMode) {
+                case 'name-asc':
+                    return nameA.localeCompare(nameB);
+                case 'name-desc':
+                    return nameB.localeCompare(nameA);
+                case 'path-asc':
+                    return pathA.localeCompare(pathB);
+                case 'path-desc':
+                    return pathB.localeCompare(pathA);
+                default:
+                    return 0;
+            }
+        });
+        return sorted;
+    }, [allProjects, normalizedProjectKeyword, projectSortMode]);
+
+    const totalProjectPages = Math.max(1, Math.ceil(filteredAndSortedProjects.length / PROJECT_PAGE_SIZE));
+    const safeProjectCurrentPage = Math.min(projectCurrentPage, totalProjectPages);
+    const projectPageStartIndex = (safeProjectCurrentPage - 1) * PROJECT_PAGE_SIZE;
+    const pagedProjects = useMemo(() => (
+        filteredAndSortedProjects.slice(projectPageStartIndex, projectPageStartIndex + PROJECT_PAGE_SIZE)
+    ), [filteredAndSortedProjects, projectPageStartIndex]);
+    const normalizedLaunchProjectKeyword = launchProjectKeyword.trim().toLowerCase();
+    const launchProjectOptions = useMemo(() => {
+        const candidates = normalizedLaunchProjectKeyword.length === 0
+            ? allProjects
+            : allProjects.filter((proj: any) =>
+                (proj.name || "").toLowerCase().includes(normalizedLaunchProjectKeyword) ||
+                (proj.path || "").toLowerCase().includes(normalizedLaunchProjectKeyword)
+            );
+        return [...candidates].sort((a: any, b: any) => {
+            if (a.id === config?.current_project) return -1;
+            if (b.id === config?.current_project) return 1;
+            return (a.name || "").localeCompare((b.name || ""));
+        });
+    }, [allProjects, normalizedLaunchProjectKeyword, config?.current_project]);
+    const resolvedLaunchProject = useMemo(() => {
+        if (!config?.projects || config.projects.length === 0) return null;
+        return config.projects.find((p: any) => p.id === selectedProjectForLaunch)
+            || config.projects.find((p: any) => p.id === config.current_project)
+            || config.projects[0];
+    }, [config, selectedProjectForLaunch]);
+    const launchProjectSelectOptions = useMemo(() => {
+        if (!resolvedLaunchProject) return launchProjectOptions;
+        if (launchProjectOptions.some((p: any) => p.id === resolvedLaunchProject.id)) {
+            return launchProjectOptions;
+        }
+        return [resolvedLaunchProject, ...launchProjectOptions];
+    }, [launchProjectOptions, resolvedLaunchProject]);
+
+    useEffect(() => {
+        setProjectCurrentPage(1);
+    }, [projectSearchKeyword, projectSortMode]);
+
+    useEffect(() => {
+        if (projectCurrentPage !== safeProjectCurrentPage) {
+            setProjectCurrentPage(safeProjectCurrentPage);
+        }
+    }, [projectCurrentPage, safeProjectCurrentPage]);
+
+    useEffect(() => {
+        if (!config?.projects || config.projects.length === 0) {
+            if (selectedProjectForLaunch !== "") setSelectedProjectForLaunch("");
+            return;
+        }
+        const exists = config.projects.some((p: any) => p.id === selectedProjectForLaunch);
+        if (!exists) {
+            const fallback = config.projects.find((p: any) => p.id === config.current_project) || config.projects[0];
+            setSelectedProjectForLaunch(fallback.id);
+        }
+    }, [config, selectedProjectForLaunch]);
 
     // Extract provider name from model name
     // Examples: "AICodeMirror-Claude" -> "AICodeMirror", "Doubao-Codex" -> "Doubao", "GLM" -> "GLM"
@@ -2380,7 +2512,7 @@ ${instruction}`;
                     </div>
                 </div>
 
-                <div className={`main-content ${navTab === 'tutorial' || navTab === 'message' ? 'elegant-scrollbar' : 'no-scrollbar'} ${navTab === 'settings' || navTab === 'about' ? '' : ''}`} style={{ overflowY: 'auto', paddingBottom: '20px', '--wails-draggable': 'no-drag' } as any}>
+                <div className={`main-content ${navTab === 'tutorial' || navTab === 'message' || navTab === 'projects' ? 'elegant-scrollbar' : 'no-scrollbar'} ${navTab === 'settings' || navTab === 'about' ? '' : ''}`} style={{ overflowY: navTab === 'projects' ? 'hidden' : 'auto', paddingBottom: '20px', '--wails-draggable': 'no-drag' } as any}>
                     {navTab === 'message' && (
                         <div style={{
                             width: '100%',
@@ -2828,8 +2960,8 @@ ${instruction}`;
                         />
                     )}
                     {navTab === 'projects' && (
-                        <div style={{ padding: '5px 10px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                        <div className="project-manager-panel">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
                                 <button
                                     onClick={() => switchTool(activeTool)}
                                     style={{
@@ -2845,18 +2977,42 @@ ${instruction}`;
                                 <button className="btn-primary" style={{ padding: '3px 12px', fontSize: '0.85rem' }} onClick={handleAddNewProject}>{t("addNewProject")}</button>
                             </div>
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                {config && config.projects && config.projects.map((proj: any) => (
-                                    <div key={proj.id} style={{
-                                        padding: '6px 12px',
-                                        backgroundColor: '#fff',
-                                        borderRadius: '8px',
-                                        border: '1px solid var(--border-color)',
-                                        display: 'flex',
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                        gap: '10px'
-                                    }}>
+                            <div className="project-manager-toolbar">
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={projectSearchKeyword}
+                                    onChange={(e) => setProjectSearchKeyword(e.target.value)}
+                                    placeholder={t("projectSearchPlaceholder")}
+                                    spellCheck={false}
+                                    autoComplete="off"
+                                />
+                                <select
+                                    className="form-input"
+                                    value={projectSortMode}
+                                    onChange={(e) => setProjectSortMode(e.target.value as 'default' | 'name-asc' | 'name-desc' | 'path-asc' | 'path-desc')}
+                                >
+                                    <option value="default">{t("projectSortDefault")}</option>
+                                    <option value="name-asc">{t("projectSortNameAsc")}</option>
+                                    <option value="name-desc">{t("projectSortNameDesc")}</option>
+                                    <option value="path-asc">{t("projectSortPathAsc")}</option>
+                                    <option value="path-desc">{t("projectSortPathDesc")}</option>
+                                </select>
+                            </div>
+
+                            <div className="project-manager-summary">
+                                {filteredAndSortedProjects.length > 0 ? (
+                                    <span>
+                                        {t("projectShowing")} {projectPageStartIndex + 1}-{Math.min(projectPageStartIndex + PROJECT_PAGE_SIZE, filteredAndSortedProjects.length)} / {filteredAndSortedProjects.length} {t("projectTotal")}
+                                    </span>
+                                ) : (
+                                    <span>{t("projectNoResults")}</span>
+                                )}
+                            </div>
+
+                            <div className="project-manager-list elegant-scrollbar">
+                                {pagedProjects.map((proj: any) => (
+                                    <div key={proj.id} className="project-manager-item">
                                         <input
                                             type="text"
                                             className="form-input"
@@ -2868,14 +3024,15 @@ ${instruction}`;
                                                 setConfig(new main.AppConfig({ ...config, projects: newList }));
                                             }}
                                             onContextMenu={(e) => handleContextMenu(e, e.currentTarget)}
-                                            style={{ fontWeight: 'bold', border: 'none', padding: 0, fontSize: '1rem', width: '120px', flexShrink: 0 }}
+                                            style={{ fontWeight: 'bold', border: 'none', padding: 0, fontSize: '0.9rem', width: '112px', flexShrink: 0, lineHeight: 1.1 }}
                                             spellCheck={false}
                                             autoComplete="off"
-                                        />                                        <div style={{ flex: 1, fontSize: '0.85rem', color: '#6b7280', backgroundColor: '#f9fafb', padding: '6px', borderRadius: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        />
+                                        <div style={{ flex: 1, fontSize: '0.78rem', color: '#6b7280', backgroundColor: '#f9fafb', padding: '3px 6px', borderRadius: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.1 }}>
                                             {proj.path}
                                         </div>
 
-                                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0 }}>
+                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
 
                                             <button className="btn-link" onClick={() => {
                                                 SelectProjectDir().then(dir => {
@@ -2895,6 +3052,7 @@ ${instruction}`;
                                                         const newList = config.projects.filter((p: any) => p.id !== proj.id);
                                                         const newConfig = new main.AppConfig({ ...config, projects: newList });
                                                         if (config.current_project === proj.id) newConfig.current_project = newList[0].id;
+                                                        if (selectedProjectForLaunch === proj.id) setSelectedProjectForLaunch(newConfig.current_project);
                                                         setConfig(newConfig);
                                                         SaveConfig(newConfig);
                                                     }
@@ -2906,6 +3064,26 @@ ${instruction}`;
                                     </div>
                                 ))}
                             </div>
+
+                            {filteredAndSortedProjects.length > 0 && (
+                                <div className="project-manager-pagination">
+                                    <button
+                                        className="btn-link"
+                                        onClick={() => setProjectCurrentPage(Math.max(1, safeProjectCurrentPage - 1))}
+                                        disabled={safeProjectCurrentPage <= 1}
+                                    >
+                                        {t("prevPage")}
+                                    </button>
+                                    <span>{safeProjectCurrentPage} / {totalProjectPages}</span>
+                                    <button
+                                        className="btn-link"
+                                        onClick={() => setProjectCurrentPage(Math.min(totalProjectPages, safeProjectCurrentPage + 1))}
+                                        disabled={safeProjectCurrentPage >= totalProjectPages}
+                                    >
+                                        {t("nextPage")}
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -3451,12 +3629,22 @@ ${instruction}`;
                                     </div>
                                 )}
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>{t("project")}:</span>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '10px', flexWrap: 'nowrap' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '1 1 auto', minWidth: 0 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto', minWidth: 0 }}>
+                                        <span style={{ fontSize: '0.8rem', color: '#6b7280', whiteSpace: 'nowrap', lineHeight: 1 }}>{t("project")}:</span>
+                                        <input
+                                            type="text"
+                                            className="form-input"
+                                            value={launchProjectKeyword}
+                                            onChange={(e) => setLaunchProjectKeyword(e.target.value)}
+                                            placeholder={t("projectSearchPlaceholder")}
+                                            style={{ height: '28px', width: '130px', minWidth: '110px', fontSize: '0.76rem', padding: '2px 8px', flexShrink: 0 }}
+                                            spellCheck={false}
+                                            autoComplete="off"
+                                        />
                                         <select
-                                            value={selectedProjectForLaunch}
+                                            value={resolvedLaunchProject?.id || ""}
                                             onChange={(e) => setSelectedProjectForLaunch(e.target.value)}
                                             style={{
                                                 padding: '5px 8px',
@@ -3466,14 +3654,17 @@ ${instruction}`;
                                                 fontSize: '0.85rem',
                                                 color: '#374151',
                                                 cursor: 'pointer',
+                                                minWidth: '120px',
                                                 maxWidth: '200px'
                                             }}
                                         >
-                                            {config?.projects?.map((proj: any) => (
+                                            {launchProjectSelectOptions.length > 0 ? launchProjectSelectOptions.map((proj: any) => (
                                                 <option key={proj.id} value={proj.id}>
                                                     {proj.name}
                                                 </option>
-                                            ))}
+                                            )) : (
+                                                <option value="" disabled>{t("projectNoResults")}</option>
+                                            )}
                                         </select>
                                     </div>
                                     <button
@@ -3489,12 +3680,13 @@ ${instruction}`;
                                             fontWeight: '500',
                                             cursor: 'pointer',
                                             transition: 'all 0.2s',
-                                            whiteSpace: 'normal',
+                                            whiteSpace: 'nowrap',
                                             textAlign: 'center',
                                             width: '32px',
                                             display: 'flex',
                                             alignItems: 'center',
-                                            justifyContent: 'center'
+                                            justifyContent: 'center',
+                                            flexShrink: 0
                                         }}
                                         onMouseEnter={(e) => {
                                             e.currentTarget.style.backgroundColor = '#e5e7eb';
@@ -3510,12 +3702,12 @@ ${instruction}`;
                                 </div>
                                 <button
                                     className="btn-launch"
-                                    style={{ padding: '8px 24px', textAlign: 'center', '--wails-draggable': 'no-drag', pointerEvents: 'auto' } as any}
+                                    style={{ padding: '8px 20px', textAlign: 'center', '--wails-draggable': 'no-drag', pointerEvents: 'auto', flexShrink: 0 } as any}
                                     disabled={onDemandInstallingTool === activeTool || backgroundInstallingTool === activeTool || launchingTool === activeTool}
                                     onClick={async () => {
                                         console.log("Launch button clicked. activeTool:", activeTool);
-                                        const selectedProj = config?.projects?.find((p: any) => p.id === selectedProjectForLaunch);
-                                        if (selectedProj) {
+                                        const selectedProj = resolvedLaunchProject;
+                                        if (selectedProj && selectedProj.path && selectedProj.path.trim() !== "") {
                                             // Check if tool is installed
                                             const toolStatus = toolStatuses?.find((s: any) => s.name === activeTool);
                                             if (toolStatus && !toolStatus.installed) {
@@ -3601,8 +3793,8 @@ ${instruction}`;
                                                     setLaunchingTool("");
                                                 });
                                             // Update current project if different
-                                            if (selectedProjectForLaunch !== config?.current_project) {
-                                                handleProjectSwitch(selectedProjectForLaunch);
+                                            if (selectedProj.id !== config?.current_project) {
+                                                handleProjectSwitch(selectedProj.id);
                                             }
                                         } else {
                                             console.error("No project found for launch ID:", selectedProjectForLaunch);
