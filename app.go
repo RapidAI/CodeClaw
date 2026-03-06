@@ -295,87 +295,138 @@ func (a *App) GetCurrentProjectPath() string {
 	home, _ := os.UserHomeDir()
 	return home // Fallback
 }
-func (a *App) getClaudeConfigPaths() (string, string, string) {
+func (a *App) getClaudeConfigPaths(projectDir string, instanceID string) (string, string, string) {
+	// Use project-specific config directory with instance ID to avoid cross-contamination
+	if projectDir != "" && instanceID != "" {
+		dir := filepath.Join(projectDir, ".aicoder", "claude", instanceID)
+		settings := filepath.Join(dir, "settings.json")
+		legacy := filepath.Join(dir, "claude.json")
+		return dir, settings, legacy
+	}
+	// Fallback to home directory (for backward compatibility)
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".claude")
 	settings := filepath.Join(dir, "settings.json")
 	legacy := filepath.Join(home, ".claude.json")
 	return dir, settings, legacy
 }
-func (a *App) getGeminiConfigPaths() (string, string, string) {
+func (a *App) getGeminiConfigPaths(projectDir string, instanceID string) (string, string, string) {
+	// Use project-specific config directory with instance ID to avoid cross-contamination
+	if projectDir != "" && instanceID != "" {
+		dir := filepath.Join(projectDir, ".aicoder", "gemini", instanceID)
+		config := filepath.Join(dir, "settings.json")
+		legacy := filepath.Join(dir, "geminirc")
+		return dir, config, legacy
+	}
+	// Fallback to home directory (for backward compatibility)
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".gemini")
 	config := filepath.Join(dir, "settings.json")
 	legacy := filepath.Join(home, ".geminirc")
 	return dir, config, legacy
 }
-func (a *App) getCodexConfigPaths() (string, string) {
+func (a *App) getCodexConfigPaths(projectDir string, instanceID string) (string, string) {
+	// Use project-specific config directory with instance ID to avoid cross-contamination
+	if projectDir != "" && instanceID != "" {
+		dir := filepath.Join(projectDir, ".aicoder", "codex", instanceID)
+		auth := filepath.Join(dir, "auth.json")
+		return dir, auth
+	}
+	// Fallback to home directory (for backward compatibility)
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".codex")
 	auth := filepath.Join(dir, "auth.json")
-	// config.toml is also used
 	return dir, auth
 }
-func (a *App) getOpencodeConfigPaths() (string, string) {
+func (a *App) getOpencodeConfigPaths(projectDir string, instanceID string) (string, string) {
+	// Use project-specific config directory with instance ID to avoid cross-contamination
+	if projectDir != "" && instanceID != "" {
+		dir := filepath.Join(projectDir, ".aicoder", "opencode", instanceID)
+		config := filepath.Join(dir, "opencode.json")
+		return dir, config
+	}
+	// Fallback to home directory (for backward compatibility)
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".config", "opencode")
 	config := filepath.Join(dir, "opencode.json")
 	return dir, config
 }
-func (a *App) getIFlowConfigPaths() (string, string) {
+func (a *App) getIFlowConfigPaths(projectDir string, instanceID string) (string, string) {
+	// Use project-specific config directory with instance ID to avoid cross-contamination
+	if projectDir != "" && instanceID != "" {
+		dir := filepath.Join(projectDir, ".aicoder", "iflow", instanceID)
+		config := filepath.Join(dir, "settings.json")
+		return dir, config
+	}
+	// Fallback to home directory (for backward compatibility)
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".iflow")
 	config := filepath.Join(dir, "settings.json")
 	return dir, config
 }
 func (a *App) clearClaudeConfig() {
-	dir, _, legacy := a.getClaudeConfigPaths()
+	// Clear both project-specific and global configs
 	home, _ := os.UserHomeDir()
+	dir, _, legacy := a.getClaudeConfigPaths("", "")
 	os.RemoveAll(dir)
 	os.Remove(legacy)
 	os.Remove(filepath.Join(home, ".claude.json.backup"))
 	a.log("Cleared Claude configuration files")
 }
 func (a *App) clearGeminiConfig() {
-	dir, _, legacy := a.getGeminiConfigPaths()
+	dir, _, legacy := a.getGeminiConfigPaths("", "")
 	os.RemoveAll(dir)
 	os.Remove(legacy)
 	a.log("Cleared Gemini configuration files")
 }
 func (a *App) clearCodexConfig() {
-	dir, _ := a.getCodexConfigPaths()
+	dir, _ := a.getCodexConfigPaths("", "")
 	os.RemoveAll(dir)
 	a.log("Cleared Codex configuration directory")
 }
 func (a *App) clearOpencodeConfig() {
-	dir, _ := a.getOpencodeConfigPaths()
+	dir, _ := a.getOpencodeConfigPaths("", "")
 	os.RemoveAll(dir)
 	a.log("Cleared Opencode configuration directory")
 }
 func (a *App) clearIFlowConfig() {
-	dir, _ := a.getIFlowConfigPaths()
+	dir, _ := a.getIFlowConfigPaths("", "")
 	os.RemoveAll(dir)
 	a.log("Cleared iFlow configuration directory")
 }
-func (a *App) getKiloConfigPaths() (string, string) {
+func (a *App) getKiloConfigPaths(projectDir string, instanceID string) (string, string) {
+	// Use project-specific config directory with instance ID to avoid cross-contamination
+	if projectDir != "" && instanceID != "" {
+		dir := filepath.Join(projectDir, ".aicoder", "kilocode", "cli", instanceID)
+		config := filepath.Join(dir, "config.json")
+		return dir, config
+	}
+	// Fallback to home directory (for backward compatibility)
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".kilocode", "cli")
 	config := filepath.Join(dir, "config.json")
 	return dir, config
 }
 func (a *App) clearKiloConfig() {
-	_, configPath := a.getKiloConfigPaths()
+	_, configPath := a.getKiloConfigPaths("", "")
 	os.Remove(configPath)
 	a.log("Cleared Kilo Code configuration file")
 }
-func (a *App) getKodeConfigPaths() (string, string) {
+func (a *App) getKodeConfigPaths(projectDir string, instanceID string) (string, string) {
+	// Use project-specific config directory with instance ID to avoid cross-contamination
+	if projectDir != "" && instanceID != "" {
+		dir := filepath.Join(projectDir, ".aicoder", "kode", "cli", instanceID)
+		config := filepath.Join(dir, "config.json")
+		return dir, config
+	}
+	// Fallback to home directory (for backward compatibility)
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".kode", "cli")
 	config := filepath.Join(dir, "config.json")
 	return dir, config
 }
 func (a *App) clearKodeConfig() {
-	_, configPath := a.getKodeConfigPaths()
+	_, configPath := a.getKodeConfigPaths("", "")
 	os.Remove(configPath)
 	a.log("Cleared Kode CLI configuration file")
 }
@@ -394,7 +445,7 @@ func (a *App) clearEnvVars() {
 		os.Unsetenv(v)
 	}
 }
-func (a *App) syncToClaudeSettings(config AppConfig) error {
+func (a *App) syncToClaudeSettings(config AppConfig, projectDir string, instanceID string) error {
 	var selectedModel *ModelConfig
 	for _, m := range config.Claude.Models {
 		if m.ModelName == config.Claude.CurrentModel {
@@ -405,7 +456,7 @@ func (a *App) syncToClaudeSettings(config AppConfig) error {
 	if selectedModel == nil {
 		return fmt.Errorf("selected model not found")
 	}
-	dir, settingsPath, legacyPath := a.getClaudeConfigPaths()
+	dir, settingsPath, legacyPath := a.getClaudeConfigPaths(projectDir, instanceID)
 	if strings.ToLower(selectedModel.ModelName) == "original" {
 		a.clearClaudeConfig()
 		return nil
@@ -525,7 +576,7 @@ updateLegacyJson:
 	}
 	return os.WriteFile(legacyPath, data2, 0644)
 }
-func (a *App) syncToCodexSettings(config AppConfig) error {
+func (a *App) syncToCodexSettings(config AppConfig, projectDir string, instanceID string) error {
 	var selectedModel *ModelConfig
 	for _, m := range config.Codex.Models {
 		if m.ModelName == config.Codex.CurrentModel {
@@ -536,7 +587,7 @@ func (a *App) syncToCodexSettings(config AppConfig) error {
 	if selectedModel == nil {
 		return fmt.Errorf("selected codex model not found")
 	}
-	dir, authPath := a.getCodexConfigPaths()
+	dir, authPath := a.getCodexConfigPaths(projectDir, instanceID)
 	if strings.ToLower(selectedModel.ModelName) == "original" {
 		a.clearCodexConfig()
 		return nil
@@ -792,7 +843,7 @@ wire_api = "%s"
 	}
 	return os.WriteFile(configPath, configBytes, 0644)
 }
-func (a *App) syncToOpencodeSettings(config AppConfig) error {
+func (a *App) syncToOpencodeSettings(config AppConfig, projectDir string, instanceID string) error {
 	var selectedModel *ModelConfig
 	for _, m := range config.Opencode.Models {
 		if m.ModelName == config.Opencode.CurrentModel {
@@ -803,7 +854,7 @@ func (a *App) syncToOpencodeSettings(config AppConfig) error {
 	if selectedModel == nil {
 		return fmt.Errorf("selected opencode model not found")
 	}
-	dir, configPath := a.getOpencodeConfigPaths()
+	dir, configPath := a.getOpencodeConfigPaths(projectDir, instanceID)
 	if strings.ToLower(selectedModel.ModelName) == "original" {
 		a.clearOpencodeConfig()
 		return nil
@@ -884,7 +935,7 @@ func (a *App) syncToOpencodeSettings(config AppConfig) error {
 	}
 	return os.WriteFile(configPath, data, 0644)
 }
-func (a *App) syncToGeminiSettings(config AppConfig) error {
+func (a *App) syncToGeminiSettings(config AppConfig, projectDir string, instanceID string) error {
 	var selectedModel *ModelConfig
 	for _, m := range config.Gemini.Models {
 		if m.ModelName == config.Gemini.CurrentModel {
@@ -896,7 +947,7 @@ func (a *App) syncToGeminiSettings(config AppConfig) error {
 		return fmt.Errorf("selected gemini model not found")
 	}
 
-	dir, configPath, _ := a.getGeminiConfigPaths()
+	dir, configPath, _ := a.getGeminiConfigPaths(projectDir, instanceID)
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -948,7 +999,7 @@ func (a *App) syncToGeminiSettings(config AppConfig) error {
 
 	return os.WriteFile(configPath, configJson, 0644)
 }
-func (a *App) syncToIFlowSettings(config AppConfig) error {
+func (a *App) syncToIFlowSettings(config AppConfig, projectDir string, instanceID string) error {
 	var selectedModel *ModelConfig
 	for _, m := range config.IFlow.Models {
 		if m.ModelName == config.IFlow.CurrentModel {
@@ -959,7 +1010,7 @@ func (a *App) syncToIFlowSettings(config AppConfig) error {
 	if selectedModel == nil {
 		return fmt.Errorf("selected iflow model not found")
 	}
-	dir, configPath := a.getIFlowConfigPaths()
+	dir, configPath := a.getIFlowConfigPaths(projectDir, instanceID)
 	if strings.ToLower(selectedModel.ModelName) == "original" {
 		a.clearIFlowConfig()
 		return nil
@@ -1021,7 +1072,7 @@ func (a *App) syncToIFlowSettings(config AppConfig) error {
 	}
 	return os.WriteFile(configPath, data, 0644)
 }
-func (a *App) syncToKiloSettings(config AppConfig) error {
+func (a *App) syncToKiloSettings(config AppConfig, projectDir string, instanceID string) error {
 	var selectedModel *ModelConfig
 	for _, m := range config.Kilo.Models {
 		if m.ModelName == config.Kilo.CurrentModel {
@@ -1032,7 +1083,7 @@ func (a *App) syncToKiloSettings(config AppConfig) error {
 	if selectedModel == nil {
 		return fmt.Errorf("selected kilo model not found")
 	}
-	dir, configPath := a.getKiloConfigPaths()
+	dir, configPath := a.getKiloConfigPaths(projectDir, instanceID)
 	if strings.ToLower(selectedModel.ModelName) == "original" {
 		a.clearKiloConfig()
 		return nil
@@ -1117,8 +1168,8 @@ func (a *App) syncToKiloSettings(config AppConfig) error {
 	return os.WriteFile(configPath, data, 0644)
 }
 
-func (a *App) syncToKodeSettings(config AppConfig) error {
-	// Kode CLI uses .kode.json configuration file in user home directory
+func (a *App) syncToKodeSettings(config AppConfig, projectDir string, instanceID string) error {
+	// Kode CLI uses .kode.json configuration file
 	var selectedModel *ModelConfig
 	for _, m := range config.Kode.Models {
 		if m.ModelName == config.Kode.CurrentModel {
@@ -1130,12 +1181,18 @@ func (a *App) syncToKodeSettings(config AppConfig) error {
 		return fmt.Errorf("selected kode model not found")
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
+	var kodeConfigPath string
+	if projectDir != "" && instanceID != "" {
+		// Use project-specific config with instance ID
+		kodeConfigPath = filepath.Join(projectDir, ".aicoder", "kode", instanceID, "kode.json")
+	} else {
+		// Fallback to home directory
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		kodeConfigPath = filepath.Join(home, ".kode.json")
 	}
-
-	kodeConfigPath := filepath.Join(home, ".kode.json")
 
 	// Create model profile
 	modelProfile := map[string]interface{}{
@@ -1355,6 +1412,10 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 	a.log(fmt.Sprintf("LaunchTool called: %s, yolo=%v, admin=%v, py=%v, pyenv=%s, dir=%s, proxy=%v",
 		toolName, yoloMode, adminMode, pythonProject, pythonEnv, projectDir, useProxy))
 	a.log(fmt.Sprintf("Launching %s...", toolName))
+
+	// Generate unique instance ID for this launch (timestamp-based)
+	instanceID := fmt.Sprintf("%d", time.Now().UnixNano())
+
 	// Only process Python environment if pythonProject is true
 	if pythonProject && pythonEnv != "" && pythonEnv != "None (Default)" {
 		a.log(fmt.Sprintf("Python project: using Python environment: %s", pythonEnv))
@@ -1442,8 +1503,7 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 	// Ensure ActiveTool is set correctly for syncToSystemEnv
 	config.ActiveTool = strings.ToLower(toolName)
 	a.syncToSystemEnv(config)
-	// 1. CLEAR PROCESS ENV VARS (Safety First - avoid leaks from current process)
-	a.clearEnvVars()
+	// Create env map for passing to batch script
 	env := make(map[string]string)
 	// Proxy settings
 	if useProxy && goruntime.GOOS != "windows" {
@@ -1486,11 +1546,7 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 			} else {
 				proxyURL = fmt.Sprintf("http://%s:%s", proxyHost, proxyPort)
 			}
-			// Set proxy environment variables (both cases for compatibility)
-			os.Setenv("HTTP_PROXY", proxyURL)
-			os.Setenv("HTTPS_PROXY", proxyURL)
-			os.Setenv("http_proxy", proxyURL)
-			os.Setenv("https_proxy", proxyURL)
+			// Set proxy environment variables (only in env map, not main process)
 			env["HTTP_PROXY"] = proxyURL
 			env["HTTPS_PROXY"] = proxyURL
 			env["http_proxy"] = proxyURL
@@ -1500,128 +1556,105 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 	}
 	if strings.ToLower(selectedModel.ModelName) != "original" {
 		// --- OTHER PROVIDER MODE: WRITE CONFIG & SET ENV ---
-		// Set process environment variables
-		os.Setenv(envKey, selectedModel.ApiKey)
+		// Only add to env map, do NOT set in main process (to avoid cross-contamination)
 		env[envKey] = selectedModel.ApiKey
 		if selectedModel.ModelUrl != "" && envBaseUrl != "" {
-			os.Setenv(envBaseUrl, selectedModel.ModelUrl)
 			env[envBaseUrl] = selectedModel.ModelUrl
 		}
 		// Add CODEBUDDY_CODE_MAX_OUTPUT_TOKENS for DeepSeek
 		if strings.ToLower(selectedModel.ModelName) == "deepseek" {
-			os.Setenv("CODEBUDDY_CODE_MAX_OUTPUT_TOKENS", "8192")
 			env["CODEBUDDY_CODE_MAX_OUTPUT_TOKENS"] = "8192"
 		}
 		// Set generic model name env var if applicable
 		if selectedModel.ModelId != "" {
 			switch strings.ToLower(toolName) {
 			case "claude":
-				os.Setenv("ANTHROPIC_MODEL", selectedModel.ModelId)
 				env["ANTHROPIC_MODEL"] = selectedModel.ModelId
 			case "gemini":
-				os.Setenv("GOOGLE_GEMINI_MODEL", selectedModel.ModelId)
 				env["GOOGLE_GEMINI_MODEL"] = selectedModel.ModelId
 			case "codex":
-				os.Setenv("OPENAI_MODEL", selectedModel.ModelId)
 				env["OPENAI_MODEL"] = selectedModel.ModelId
 			case "opencode":
-				os.Setenv("OPENCODE_MODEL", selectedModel.ModelId)
 				env["OPENCODE_MODEL"] = selectedModel.ModelId
 			case "codebuddy":
-				// os.Setenv("CODEBUDDY_MODEL", selectedModel.ModelId)
 				// env["CODEBUDDY_MODEL"] = selectedModel.ModelId
 			case "qoder":
 				// Qoder doesn't use model env var
 			case "iflow":
 				// iFlow uses settings.json, but maybe env var too?
-				os.Setenv("IFLOW_MODEL", selectedModel.ModelId)
 				env["IFLOW_MODEL"] = selectedModel.ModelId
 			case "kilo":
-				os.Setenv("KILO_MODEL", selectedModel.ModelId)
 				env["KILO_MODEL"] = selectedModel.ModelId
 			}
 		}
 		// Tool-specific configurations
+		// Tools that support pure env vars: clear old config files to avoid interference
+		// Tools that need config files: use instanceID for isolation
 		switch strings.ToLower(toolName) {
 		case "claude":
-			// Ensure AUTH_TOKEN is unset when using API_KEY to avoid conflict
-			a.syncToClaudeSettings(config)
+			// Claude Code reads env vars directly, no config file needed
+			// Clear old config to prevent interference with env vars
+			a.clearClaudeConfig()
+			a.log("Claude: Using environment variables only (cleared old config)")
 		case "gemini":
-			a.syncToGeminiSettings(config)
+			// Gemini reads env vars directly, no config file needed
+			// Clear old config to prevent interference with env vars
+			a.clearGeminiConfig()
+			a.log("Gemini: Using environment variables only (cleared old config)")
 		case "codex":
-			os.Setenv("WIRE_API", "responses")
 			env["WIRE_API"] = "responses"
 			// Ensure OpenAI standard vars for Codex
-			os.Setenv("OPENAI_API_KEY", selectedModel.ApiKey)
 			env["OPENAI_API_KEY"] = selectedModel.ApiKey
 			if selectedModel.ModelUrl != "" {
-				os.Setenv("OPENAI_BASE_URL", selectedModel.ModelUrl)
 				env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
 			}
-			a.syncToCodexSettings(config)
+			// Clear old config to prevent interference with env vars
+			a.clearCodexConfig()
+			a.log("Codex: Using environment variables only (cleared old config)")
 		case "opencode":
-			// Opencode might use similar settings to Codex or its own
-			a.syncToOpencodeSettings(config)
+			// Opencode needs config file - use instanceID for isolation
+			a.syncToOpencodeSettings(config, projectDir, instanceID)
 		case "codebuddy":
-			// a.syncToCodeBuddySettings(config, projectDir)
+			// CodeBuddy may need config file
+			// a.syncToCodeBuddySettings(config, projectDir, instanceID)
 		case "qoder":
+			// Qoder needs config file - keep the sync call
 			a.syncToQoderSettings(config, projectDir)
 		case "iflow":
+			// iFlow needs config file - use instanceID for isolation
 			// Ensure OpenAI standard vars for iFlow (compatibility)
-			os.Setenv("OPENAI_API_KEY", selectedModel.ApiKey)
 			env["OPENAI_API_KEY"] = selectedModel.ApiKey
 			if selectedModel.ModelUrl != "" {
-				os.Setenv("OPENAI_BASE_URL", selectedModel.ModelUrl)
 				env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
 			}
-			a.syncToIFlowSettings(config)
+			a.syncToIFlowSettings(config, projectDir, instanceID)
 		case "kilo":
-			// Configure Kilo Code settings
-			a.syncToKiloSettings(config)
+			// Kilo needs config file - use instanceID for isolation
+			a.syncToKiloSettings(config, projectDir, instanceID)
 		case "kode":
-			// Configure Kode CLI settings - uses .kode.json configuration file
-			a.syncToKodeSettings(config)
+			// Kode needs config file - use instanceID for isolation
+			a.syncToKodeSettings(config, projectDir, instanceID)
 		}
 	} else {
 		// --- ORIGINAL MODE: CLEANUP SPECIFIC TOOL ONLY ---
-		// Clear process environment variables for this tool
-		os.Unsetenv(envKey)
-		os.Unsetenv(envBaseUrl)
+		// Clear config files to ensure tools use original settings
 		if strings.ToLower(toolName) == "claude" {
-			os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
-			os.Unsetenv("ANTHROPIC_MODEL")
 			a.clearClaudeConfig()
 		} else if strings.ToLower(toolName) == "gemini" {
-			os.Unsetenv("GOOGLE_GEMINI_MODEL")
-			a.syncToGeminiSettings(config)
+			a.clearGeminiConfig()
 		} else if strings.ToLower(toolName) == "codex" {
-			os.Unsetenv("WIRE_API")
-			os.Unsetenv("OPENAI_API_KEY")
-			os.Unsetenv("OPENAI_BASE_URL")
-			os.Unsetenv("OPENAI_MODEL")
 			a.clearCodexConfig()
 		} else if strings.ToLower(toolName) == "opencode" {
-			os.Unsetenv("OPENCODE_API_KEY")
-			os.Unsetenv("OPENCODE_BASE_URL")
-			os.Unsetenv("OPENCODE_MODEL")
 			a.clearOpencodeConfig()
 		} else if strings.ToLower(toolName) == "codebuddy" {
-			os.Unsetenv("CODEBUDDY_API_KEY")
-			os.Unsetenv("CODEBUDDY_BASE_URL")
-			os.Unsetenv("CODEBUDDY_CODE_MAX_OUTPUT_TOKENS")
 			// Codebuddy might need cleanup too if we added a clear function
 		} else if strings.ToLower(toolName) == "qoder" {
-			os.Unsetenv("QODER_PERSONAL_ACCESS_TOKEN")
-			os.Unsetenv("QODER_BASE_URL")
 			// Qoder cleanup if needed
 		} else if strings.ToLower(toolName) == "iflow" {
-			os.Unsetenv("IFLOW_MODEL")
 			a.clearIFlowConfig()
 		} else if strings.ToLower(toolName) == "kilo" {
-			os.Unsetenv("KILO_MODEL")
 			a.clearKiloConfig()
 		} else if strings.ToLower(toolName) == "kode" {
-			os.Unsetenv("KODE_MODEL")
 			a.clearKodeConfig()
 		}
 		a.log(fmt.Sprintf("Running %s in Original mode: Custom configurations cleared.", toolName))
@@ -1633,11 +1666,8 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 		for _, proj := range config.Projects {
 			if proj.Path == projectDir || proj.Id == config.CurrentProject {
 				if proj.TeamMode {
-					os.Setenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
 					env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
 					a.log("Claude Code Agent Teams mode enabled")
-				} else {
-					os.Unsetenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
 				}
 				break
 			}

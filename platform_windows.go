@@ -1474,6 +1474,7 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 	}
 
 	batchContent := "@echo off\r\n"
+	batchContent += "setlocal\r\n"
 	batchContent += "chcp 65001 > nul\r\n"
 	batchContent += fmt.Sprintf("cd /d \"%s\"\r\n", projectDir)
 
@@ -1602,8 +1603,15 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 		verb := syscall.StringToUTF16Ptr("runas")
 		var file, params *uint16
 		if useWT {
-			file = syscall.StringToUTF16Ptr("wt.exe")
-			params = syscall.StringToUTF16Ptr(fmt.Sprintf("-d \"%s\" cmd /k \"%s\"", projectDir, tempBatchPath))
+			wtPath := a.getWindowsTerminalPath()
+			if wtPath == "" {
+				a.log("Windows Terminal path not found, falling back to cmd")
+				file = syscall.StringToUTF16Ptr("cmd.exe")
+				params = syscall.StringToUTF16Ptr(fmt.Sprintf("/c \"%s\"", tempBatchPath))
+			} else {
+				file = syscall.StringToUTF16Ptr(wtPath)
+				params = syscall.StringToUTF16Ptr(fmt.Sprintf("-w new -d \"%s\" cmd /k \"%s\"", projectDir, tempBatchPath))
+			}
 		} else {
 			file = syscall.StringToUTF16Ptr("cmd.exe")
 			params = syscall.StringToUTF16Ptr(fmt.Sprintf("/c \"%s\"", tempBatchPath))
@@ -1626,6 +1634,7 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 	} else {
 		if binaryName == "codex" || binaryName == "openai" {
 			codexBatchContent := "@echo off\r\n"
+			codexBatchContent += "setlocal\r\n"
 			codexBatchContent += "chcp 65001 > nul\r\n"
 			codexBatchContent += fmt.Sprintf("cd /d \"%s\"\r\n", projectDir)
 
@@ -1669,8 +1678,16 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 
 			var cmdLine string
 			if useWT {
-				cmdLine = fmt.Sprintf(`cmd /c wt.exe -d "%s" --title "AICoder - %s" cmd /k "%s"`,
-					projectDir, binaryName, codexBatchPath)
+				wtPath := a.getWindowsTerminalPath()
+				if wtPath == "" {
+					a.log("Windows Terminal path not found, falling back to cmd")
+					cmdLine = fmt.Sprintf(`cmd /c start "AICoder - %s" /d "%s" cmd /k "%s"`,
+						binaryName, projectDir, codexBatchPath)
+				} else {
+					// Use start command to properly handle paths with spaces
+					cmdLine = fmt.Sprintf(`cmd /c start "" "%s" -w new -d "%s" --title "AICoder - %s" cmd /k "%s"`,
+						wtPath, projectDir, binaryName, codexBatchPath)
+				}
 			} else {
 				cmdLine = fmt.Sprintf(`cmd /c start "AICoder - %s" /d "%s" cmd /k "%s"`,
 					binaryName, projectDir, codexBatchPath)
@@ -1689,8 +1706,15 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 		} else {
 			var cmdLine string
 			if useWT {
-				cmdLine = fmt.Sprintf(`cmd /c wt.exe -d "%s" --title "AICoder - %s" cmd /k "%s"`,
-					projectDir, binaryName, tempBatchPath)
+				wtPath := a.getWindowsTerminalPath()
+				if wtPath == "" {
+					a.log("Windows Terminal path not found, falling back to cmd")
+					cmdLine = fmt.Sprintf(`cmd /c start "AICoder - %s" /d "%s" cmd /k "%s"`, binaryName, projectDir, tempBatchPath)
+				} else {
+					// Use start command to properly handle paths with spaces
+					cmdLine = fmt.Sprintf(`cmd /c start "" "%s" -w new -d "%s" --title "AICoder - %s" cmd /k "%s"`,
+						wtPath, projectDir, binaryName, tempBatchPath)
+				}
 			} else {
 				cmdLine = fmt.Sprintf(`cmd /c start "AICoder - %s" /d "%s" cmd /k "%s"`, binaryName, projectDir, tempBatchPath)
 			}
@@ -1710,104 +1734,10 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 }
 
 func (a *App) syncToSystemEnv(config AppConfig) {
-	toolName := strings.ToLower(config.ActiveTool)
-	var toolCfg ToolConfig
-	var envKey, envBaseUrl string
-
-	switch toolName {
-	case "claude":
-		toolCfg = config.Claude
-		envKey = "ANTHROPIC_AUTH_TOKEN"
-		envBaseUrl = "ANTHROPIC_BASE_URL"
-	case "gemini":
-		toolCfg = config.Gemini
-		envKey = "GEMINI_API_KEY"
-		envBaseUrl = "GOOGLE_GEMINI_BASE_URL"
-	case "codex":
-		toolCfg = config.Codex
-		envKey = "OPENAI_API_KEY"
-		envBaseUrl = "OPENAI_BASE_URL"
-	default:
-		return
-	}
-
-	var selectedModel *ModelConfig
-	for _, m := range toolCfg.Models {
-		if m.ModelName == toolCfg.CurrentModel {
-			selectedModel = &m
-			break
-		}
-	}
-
-	if selectedModel == nil {
-		return
-	}
-
-	if strings.ToLower(selectedModel.ModelName) == "original" {
-		os.Unsetenv(envKey)
-		os.Unsetenv(envBaseUrl)
-		if toolName == "codex" {
-			os.Unsetenv("WIRE_API")
-		}
-
-		go func() {
-			cmd1 := exec.Command("setx", envKey, "")
-			cmd1.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-			cmd1.Run()
-
-			cmd2 := exec.Command("setx", envBaseUrl, "")
-			cmd2.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-			cmd2.Run()
-
-			if toolName == "claude" {
-				cmd3 := exec.Command("setx", "ANTHROPIC_API_KEY", "")
-				cmd3.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				cmd3.Run()
-			}
-			if toolName == "codex" {
-				cmd4 := exec.Command("setx", "WIRE_API", "")
-				cmd4.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				cmd4.Run()
-			}
-		}()
-		return
-	}
-
-	baseUrl := selectedModel.ModelUrl
-	if toolName == "claude" {
-		baseUrl = getBaseUrl(selectedModel)
-	}
-
-	os.Setenv(envKey, selectedModel.ApiKey)
-	if baseUrl != "" {
-		os.Setenv(envBaseUrl, baseUrl)
-	}
-
-	if toolName == "codex" {
-		os.Setenv("WIRE_API", "responses")
-	}
-
-	go func() {
-		cmd1 := exec.Command("setx", envKey, selectedModel.ApiKey)
-		cmd1.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		cmd1.Run()
-
-		if baseUrl != "" {
-			cmd2 := exec.Command("setx", envBaseUrl, baseUrl)
-			cmd2.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-			cmd2.Run()
-		}
-		if toolName == "claude" {
-			cmd3 := exec.Command("setx", "ANTHROPIC_API_KEY", "")
-			cmd3.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-			cmd3.Run()
-		}
-		if toolName == "codex" {
-			cmd4 := exec.Command("setx", "WIRE_API", "responses")
-			cmd4.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-			cmd4.Run()
-		}
-	}()
+	// On Windows, we don't set environment variables in the main process
+	// to avoid cross-contamination between multiple tool instances.
+	// Environment variables are set in the batch scripts instead.
+	// This function is kept for compatibility but does nothing on Windows.
 }
 
 func createVersionCmd(path string) *exec.Cmd {
@@ -1931,10 +1861,16 @@ func createHiddenCmd(name string, args ...string) *exec.Cmd {
 
 // isWindowsTerminalAvailable checks if Windows Terminal (wt.exe) is installed and available
 func (a *App) isWindowsTerminalAvailable() bool {
+	wtPath := a.getWindowsTerminalPath()
+	return wtPath != ""
+}
+
+// getWindowsTerminalPath returns the full path to wt.exe if available, empty string otherwise
+func (a *App) getWindowsTerminalPath() string {
 	// Check if wt.exe is in PATH
 	if wtPath, err := exec.LookPath("wt.exe"); err == nil {
 		a.log(fmt.Sprintf("Windows Terminal found in PATH: %s", wtPath))
-		return true
+		return wtPath
 	}
 
 	// Check common installation paths
@@ -1944,12 +1880,23 @@ func (a *App) isWindowsTerminalAvailable() bool {
 		wtPath := filepath.Join(localAppData, "Microsoft", "WindowsApps", "wt.exe")
 		if _, err := os.Stat(wtPath); err == nil {
 			a.log(fmt.Sprintf("Windows Terminal found at: %s", wtPath))
-			return true
+			return wtPath
+		}
+	}
+
+	// Check Program Files paths (for manual installations)
+	programFiles := os.Getenv("ProgramFiles")
+	if programFiles != "" {
+		wtPath := filepath.Join(programFiles, "WindowsApps", "Microsoft.WindowsTerminal_*", "wt.exe")
+		matches, _ := filepath.Glob(wtPath)
+		if len(matches) > 0 {
+			a.log(fmt.Sprintf("Windows Terminal found at: %s", matches[0]))
+			return matches[0]
 		}
 	}
 
 	a.log("Windows Terminal not found")
-	return false
+	return ""
 }
 
 // IsWindowsTerminalAvailable is exported for frontend to check availability
