@@ -43,7 +43,7 @@ interface ProviderEndpoint {
     description?: string;
 }
 
-const PROJECT_PAGE_SIZE = 4;
+const PROJECT_PAGE_SIZE = 5;
 
 const knownProviderEndpoints: ProviderEndpoint[] = [
     // Anthropic Protocol (Claude)
@@ -94,7 +94,7 @@ const recommendedModels: { [provider: string]: { id: string; note?: string }[] }
         { id: "glm-4.7" },
     ],
 };
-const APP_VERSION = "4.0.0.9100"
+const APP_VERSION = "4.1.0.9200"
 
 // Tool name constants to avoid repeated string arrays
 const TOOL_NAMES = ['claude', 'gemini', 'codex', 'opencode', 'codebuddy', 'qoder', 'iflow', 'kilo', 'kode'] as const;

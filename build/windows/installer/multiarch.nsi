@@ -10,10 +10,10 @@ Unicode true
     !define INFO_PRODUCTNAME "AICoder"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "2.6.2.3000"
+    !define INFO_PRODUCTVERSION "4.1.0.9200"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "Copyright 2025"
+    !define INFO_COPYRIGHT "Copyright (C) 2026 RapidAI"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "AICoder.exe"
@@ -155,3 +155,4 @@ Section "uninstall"
     
     skipUserData:
 SectionEnd
+

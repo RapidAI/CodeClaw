@@ -8,9 +8,9 @@
   "frontend:dev:serverUrl": "auto",
   "info": {
     "productName": "AICoder",
-    "productVersion": "3.8.2.9200",
-    "companyName": "QianXin",
-    "copyright": "Copyright © 2026 QianXin",
+    "productVersion": "4.1.0.9200",
+    "companyName": "RapidAI",
+    "copyright": "Copyright (C) 2026 RapidAI",
     "comments": "AICoder - AI Coding Assistant"
   },
   "author": {
