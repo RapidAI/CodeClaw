@@ -1,0 +1,521 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	goruntime "runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+type HubEnvelope struct {
+	Type      string      `json:"type"`
+	RequestID string      `json:"request_id,omitempty"`
+	TS        int64       `json:"ts,omitempty"`
+	MachineID string      `json:"machine_id,omitempty"`
+	SessionID string      `json:"session_id,omitempty"`
+	Payload   interface{} `json:"payload"`
+}
+
+type inboundHubEnvelope struct {
+	Type      string          `json:"type"`
+	RequestID string          `json:"request_id,omitempty"`
+	TS        int64           `json:"ts,omitempty"`
+	MachineID string          `json:"machine_id,omitempty"`
+	SessionID string          `json:"session_id,omitempty"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+type RemoteHubClient struct {
+	app     *App
+	manager *RemoteSessionManager
+
+	mu             sync.Mutex
+	conn           *websocket.Conn
+	hubURL         string
+	machineID      string
+	machineToken   string
+	connected      bool
+	lastError      string
+	dial           func(urlStr string) (*websocket.Conn, error)
+	reconnectCh    chan struct{}
+	reconnecting   atomic.Bool
+	allowReconnect atomic.Bool
+}
+
+func NewRemoteHubClient(app *App, manager *RemoteSessionManager) *RemoteHubClient {
+	return &RemoteHubClient{
+		app:         app,
+		manager:     manager,
+		dial:        defaultHubDial,
+		reconnectCh: make(chan struct{}, 1),
+	}
+}
+
+func defaultHubDial(urlStr string) (*websocket.Conn, error) {
+	conn, _, err := websocket.DefaultDialer.Dial(urlStr, nil)
+	return conn, err
+}
+
+func (c *RemoteHubClient) loadConfig() error {
+	cfg, err := c.app.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	c.hubURL = strings.TrimRight(cfg.RemoteHubURL, "/")
+	c.machineID = cfg.RemoteMachineID
+	c.machineToken = cfg.RemoteMachineToken
+
+	if c.hubURL == "" {
+		return fmt.Errorf("remote hub url is empty")
+	}
+	if c.machineID == "" || c.machineToken == "" {
+		return fmt.Errorf("remote machine identity is incomplete")
+	}
+	return nil
+}
+
+func (c *RemoteHubClient) Connect() error {
+	c.mu.Lock()
+	if err := c.connectLocked(); err != nil {
+		c.lastError = err.Error()
+		c.mu.Unlock()
+		return err
+	}
+
+	c.allowReconnect.Store(true)
+	c.lastError = ""
+	c.mu.Unlock()
+
+	c.app.emitRemoteStateChanged()
+	go c.readLoop()
+	go c.heartbeatLoop()
+	go c.SyncSessions()
+
+	return nil
+}
+
+func (c *RemoteHubClient) connectLocked() error {
+	if err := c.loadConfig(); err != nil {
+		c.lastError = err.Error()
+		return err
+	}
+
+	wsURL := c.toWebSocketURL(c.hubURL) + "/ws"
+	conn, err := c.dial(wsURL)
+	if err != nil {
+		c.lastError = err.Error()
+		return err
+	}
+
+	c.conn = conn
+	c.connected = true
+
+	if err := c.sendMachineAuthLocked(); err != nil {
+		_ = c.conn.Close()
+		c.conn = nil
+		c.connected = false
+		c.lastError = err.Error()
+		return err
+	}
+
+	if err := c.sendMachineHelloLocked(); err != nil {
+		_ = c.conn.Close()
+		c.conn = nil
+		c.connected = false
+		c.lastError = err.Error()
+		return err
+	}
+	return nil
+}
+
+func (c *RemoteHubClient) toWebSocketURL(base string) string {
+	if strings.HasPrefix(base, "https://") {
+		return "wss://" + strings.TrimPrefix(base, "https://")
+	}
+	if strings.HasPrefix(base, "http://") {
+		return "ws://" + strings.TrimPrefix(base, "http://")
+	}
+	return "ws://" + base
+}
+
+func (c *RemoteHubClient) sendMachineAuthLocked() error {
+	msg := HubEnvelope{
+		Type: "auth.machine",
+		TS:   time.Now().Unix(),
+		Payload: map[string]string{
+			"machine_id":    c.machineID,
+			"machine_token": c.machineToken,
+		},
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+func (c *RemoteHubClient) sendMachineHelloLocked() error {
+	msg := HubEnvelope{
+		Type:      "machine.hello",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		Payload: map[string]interface{}{
+			"name":        c.machineName(),
+			"platform":    goruntime.GOOS,
+			"app_version": c.appVersion(),
+			"capabilities": map[string]interface{}{
+				"remote_sessions": true,
+				"pty":             true,
+				"tools":           []string{"claude"},
+			},
+		},
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+func (c *RemoteHubClient) SendSessionCreated(s *RemoteSession) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return nil
+	}
+
+	msg := HubEnvelope{
+		Type:      "session.created",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		SessionID: s.ID,
+		Payload: map[string]interface{}{
+			"tool":         s.Tool,
+			"title":        s.Title,
+			"project_path": s.ProjectPath,
+			"status":       string(s.Status),
+			"started_at":   s.CreatedAt.Unix(),
+		},
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+func (c *RemoteHubClient) SendSessionSummary(summary SessionSummary) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return nil
+	}
+
+	summary.MachineID = c.machineID
+	msg := HubEnvelope{
+		Type:      "session.summary",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		SessionID: summary.SessionID,
+		Payload:   summary,
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+func (c *RemoteHubClient) SendImportantEvent(event ImportantEvent) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return nil
+	}
+
+	event.MachineID = c.machineID
+	msg := HubEnvelope{
+		Type:      "session.important_event",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		SessionID: event.SessionID,
+		Payload:   event,
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+func (c *RemoteHubClient) SendPreviewDelta(delta SessionPreviewDelta) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return nil
+	}
+
+	msg := HubEnvelope{
+		Type:      "session.preview_delta",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		SessionID: delta.SessionID,
+		Payload:   delta,
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+func (c *RemoteHubClient) SendSessionClosed(s *RemoteSession) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return nil
+	}
+
+	msg := HubEnvelope{
+		Type:      "session.closed",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		SessionID: s.ID,
+		Payload: map[string]interface{}{
+			"status":    string(s.Status),
+			"exit_code": s.ExitCode,
+			"ended_at":  time.Now().Unix(),
+		},
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+func (c *RemoteHubClient) SyncSessions() {
+	if c.manager == nil {
+		return
+	}
+
+	for _, s := range c.manager.List() {
+		if s == nil {
+			continue
+		}
+		_ = c.SendSessionCreated(s)
+		for _, event := range s.Events {
+			_ = c.SendImportantEvent(event)
+		}
+		_ = c.SendSessionSummary(s.Summary)
+		if len(s.Preview.PreviewLines) > 0 {
+			_ = c.SendPreviewDelta(SessionPreviewDelta{
+				SessionID:   s.ID,
+				OutputSeq:   s.Preview.OutputSeq,
+				AppendLines: append([]string{}, s.Preview.PreviewLines...),
+				UpdatedAt:   time.Now().Unix(),
+			})
+		}
+	}
+}
+
+func (c *RemoteHubClient) SendHeartbeat() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return nil
+	}
+
+	activeSessions := 0
+	if c.manager != nil {
+		activeSessions = len(c.manager.List())
+	}
+
+	msg := HubEnvelope{
+		Type:      "machine.heartbeat",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		Payload: map[string]interface{}{
+			"active_sessions": activeSessions,
+		},
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+func (c *RemoteHubClient) readLoop() {
+	for {
+		c.mu.Lock()
+		conn := c.conn
+		c.mu.Unlock()
+		if conn == nil {
+			return
+		}
+
+		var msg inboundHubEnvelope
+		if err := conn.ReadJSON(&msg); err != nil {
+			c.handleConnectionLoss(err)
+			return
+		}
+
+		switch msg.Type {
+		case "error":
+			c.storeHubError(msg.Payload)
+		case "session.input":
+			c.handleSessionInput(msg)
+		case "session.interrupt":
+			c.handleSessionInterrupt(msg)
+		case "session.kill":
+			c.handleSessionKill(msg)
+		}
+	}
+}
+
+func (c *RemoteHubClient) handleSessionInput(msg inboundHubEnvelope) {
+	if c.manager == nil || msg.SessionID == "" {
+		return
+	}
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.setLastError(err.Error())
+		return
+	}
+	if payload.Text == "" {
+		return
+	}
+	if err := c.manager.WriteInput(msg.SessionID, payload.Text); err != nil {
+		c.setLastError(err.Error())
+	}
+}
+
+func (c *RemoteHubClient) handleSessionInterrupt(msg inboundHubEnvelope) {
+	if c.manager == nil || msg.SessionID == "" {
+		return
+	}
+	if err := c.manager.Interrupt(msg.SessionID); err != nil {
+		c.setLastError(err.Error())
+	}
+}
+
+func (c *RemoteHubClient) handleSessionKill(msg inboundHubEnvelope) {
+	if c.manager == nil || msg.SessionID == "" {
+		return
+	}
+	if err := c.manager.Kill(msg.SessionID); err != nil {
+		c.setLastError(err.Error())
+	}
+}
+
+func (c *RemoteHubClient) storeHubError(payload json.RawMessage) {
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(payload, &body); err != nil {
+		c.setLastError(err.Error())
+		return
+	}
+	if body.Message != "" {
+		c.setLastError(body.Message)
+	}
+}
+
+func (c *RemoteHubClient) setLastError(message string) {
+	c.mu.Lock()
+	c.lastError = message
+	c.mu.Unlock()
+
+	c.app.emitRemoteStateChanged()
+}
+
+func (c *RemoteHubClient) heartbeatLoop() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if !c.IsConnected() {
+			return
+		}
+		if err := c.SendHeartbeat(); err != nil {
+			c.handleConnectionLoss(err)
+			return
+		}
+	}
+}
+
+func (c *RemoteHubClient) IsConnected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connected && c.conn != nil
+}
+
+func (c *RemoteHubClient) LastError() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastError
+}
+
+func (c *RemoteHubClient) Disconnect() error {
+	c.mu.Lock()
+	c.allowReconnect.Store(false)
+	c.connected = false
+	if c.conn == nil {
+		c.mu.Unlock()
+		c.app.emitRemoteStateChanged()
+		return nil
+	}
+
+	err := c.conn.Close()
+	c.conn = nil
+	c.mu.Unlock()
+
+	c.app.emitRemoteStateChanged()
+	return err
+}
+
+func (c *RemoteHubClient) handleConnectionLoss(err error) {
+	c.mu.Lock()
+	if err != nil {
+		c.lastError = err.Error()
+	}
+	if c.conn != nil {
+		_ = c.conn.Close()
+		c.conn = nil
+	}
+	c.connected = false
+	c.mu.Unlock()
+
+	c.app.emitRemoteStateChanged()
+
+	c.triggerReconnect()
+}
+
+func (c *RemoteHubClient) triggerReconnect() {
+	if !c.allowReconnect.Load() {
+		return
+	}
+	if c.reconnecting.Swap(true) {
+		return
+	}
+
+	select {
+	case c.reconnectCh <- struct{}{}:
+	default:
+	}
+
+	go c.reconnectLoop()
+}
+
+func (c *RemoteHubClient) reconnectLoop() {
+	defer c.reconnecting.Store(false)
+
+	backoff := 500 * time.Millisecond
+	for c.allowReconnect.Load() {
+		if c.IsConnected() {
+			return
+		}
+
+		if err := c.Connect(); err == nil {
+			return
+		}
+
+		time.Sleep(backoff)
+		if backoff < 5*time.Second {
+			backoff *= 2
+			if backoff > 5*time.Second {
+				backoff = 5 * time.Second
+			}
+		}
+	}
+}
+
+func (c *RemoteHubClient) machineName() string {
+	name, err := os.Hostname()
+	if err != nil || name == "" {
+		return "CodeClaw Desktop"
+	}
+	return name
+}
+
+func (c *RemoteHubClient) appVersion() string {
+	return "1.0.0"
+}

@@ -11,12 +11,14 @@ import opencodeIcon from './assets/images/opencode.png';
 import kiloIcon from './assets/images/KiloCode.png';
 import kodeIcon from './assets/images/Kodecli.png';
 import qoderIcon from './assets/images/qodercli.png';
-import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable } from "../wailsjs/go/main/App";
+import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, InterruptRemoteSession, KillRemoteSession, ListRemoteHubs } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
+import { RemoteSettingsPanel } from './components/remote/RemoteSettingsPanel';
+import { useRemotePanel } from './components/remote/useRemotePanel';
 
 const subscriptionUrls: { [key: string]: string } = {
     "GLM": "https://bigmodel.cn/glm-coding",
@@ -44,6 +46,16 @@ interface ProviderEndpoint {
     protocol: 'anthropic' | 'gemini' | 'openai';
     region: 'china' | 'global';
     description?: string;
+}
+
+interface RemoteCenterHubOption {
+    hub_id: string;
+    name: string;
+    base_url: string;
+    pwa_url?: string;
+    visibility?: string;
+    enrollment_mode?: string;
+    status?: string;
 }
 
 const PROJECT_PAGE_SIZE = 5;
@@ -109,7 +121,7 @@ const recommendedModels: { [provider: string]: { id: string; note?: string }[] }
         { id: "glm-4.7" },
     ],
 };
-const APP_VERSION = "4.1.0.9200"
+const APP_VERSION = "5.0.0.9300"
 
 // Tool name constants to avoid repeated string arrays
 const TOOL_NAMES = ['claude', 'gemini', 'codex', 'opencode', 'codebuddy', 'qoder', 'iflow', 'kilo', 'kode'] as const;
@@ -312,6 +324,140 @@ const translations: any = {
         "useDefaultProxy": "Use default proxy settings",
         "proxyHostPlaceholder": "e.g., 192.168.1.1 or proxy.company.com",
         "proxyPortPlaceholder": "e.g., 8080",
+        "remoteControl": "Remote Control",
+        "remoteControlDesc": "Configure CodeClaw remote diagnostics, Hub connection, and remote session control.",
+        "remoteRefresh": "Refresh",
+        "remoteRunReadiness": "Run Readiness",
+        "remoteRunConpty": "Run ConPTY Probe",
+        "remoteRunLaunchProbe": "Run {tool} Launch Probe",
+        "remoteRunFullSmoke": "Run Full Smoke",
+        "remoteActivation": "Activation",
+        "remoteActivated": "Activated",
+        "remoteNotActivated": "Not Activated",
+        "remoteEmailNotConfigured": "Remote email not configured",
+        "remoteHub": "Hub",
+        "remoteConnected": "Connected",
+        "remoteDisconnected": "Disconnected",
+        "remoteNoHubUrl": "No hub URL",
+        "remoteReadiness": "Readiness",
+        "remoteReady": "Ready",
+        "remoteNeedsAttention": "Needs Attention",
+        "remoteNotRun": "Not Run",
+        "remoteLaunch": "Launch",
+        "remotePassed": "Passed",
+        "remoteFailed": "Failed",
+        "remoteSmoke": "Smoke",
+        "remoteRouting": "Remote Routing",
+        "remoteEnableLaunchPath": "Enable remote launch path",
+        "remoteHubUrl": "Hub URL",
+        "remoteHubCenterUrl": "Hub Center URL",
+        "remoteEmail": "Remote Email",
+        "remoteNotInstalled": "Not installed",
+        "remoteActivating": "Activating...",
+        "remoteActivate": "Activate Remote",
+        "remoteStarting": "Starting...",
+        "remoteStartTool": "Start Remote",
+        "remoteStopTool": "Stop Remote",
+        "remoteUnavailable": "Unavailable: {reason}",
+        "remoteInstallingTool": "Installing {tool}...",
+        "remoteInstallTool": "Install {tool}",
+        "remoteReconnecting": "Reconnecting...",
+        "remoteReconnectHub": "Reconnect Hub",
+        "remoteClearing": "Clearing...",
+        "remoteClearActivation": "Clear Activation",
+        "remoteToolPath": "Tool path",
+        "remoteNextStep": "Next Step",
+        "remoteLaunchProject": "Launch project",
+        "remoteNoProjectSelected": "No project selected",
+        "remoteReadinessWarnings": "Readiness Warnings",
+        "remoteNoReadinessIssues": "No readiness issues detected.",
+        "remoteProbeNotRun": "Probe not run yet.",
+        "remoteConptyAvailable": "ConPTY available for remote {tool} sessions.",
+        "remoteConptyUnavailable": "ConPTY unavailable.",
+        "remoteLaunchProbeTitle": "{tool} Launch Probe",
+        "remoteLaunchProbePending": "{tool} launch probe pending",
+        "remoteCommandReady": "Command ready: {value}",
+        "remoteLaunchProbeFailed": "Launch probe failed",
+        "remoteFullSmoke": "Full Smoke",
+        "remoteFullSmokeNotRun": "Full smoke has not been run yet.",
+        "remoteTool": "Tool",
+        "remotePty": "PTY",
+        "remoteSupported": "Supported",
+        "remoteUnavailableShort": "Unavailable",
+        "remoteSession": "Session",
+        "remoteHubVisibility": "Hub Visibility",
+        "remoteVerified": "Verified",
+        "remoteNotVerified": "Not verified",
+        "remoteNoImportantEvents": "No important events yet.",
+        "remoteSendInstructionPlaceholder": "Send a remote instruction...",
+        "remoteSend": "Send",
+        "remoteDiagnosticsTitle": "Diagnostics",
+        "remoteManagedSessions": "Managed Remote Sessions",
+        "remoteManagedSessionsDesc": "Desktop-hosted remote sessions ready for Hub and PWA control.",
+        "remoteActiveRecords": "{count} active record(s)",
+        "remoteNoSessions": "No remote sessions yet. Start a remote tool with remote mode enabled to populate this panel.",
+        "remoteCurrentTask": "Current Task",
+        "remoteLastResult": "Last Result",
+        "remoteProgress": "Progress",
+        "remoteRecentActivity": "Recent Activity",
+        "remoteEvent": "Event",
+        "remoteStatusUnknown": "unknown",
+        "remoteSeverityInfo": "info",
+        "remoteToolInstalled": "{tool} installed",
+        "remoteAlreadyInstalled": "{tool} is already installed",
+        "remoteOpenAICompat": "OpenAI Compat",
+        "remoteNativeProtocol": "Native Protocol",
+        "remoteSessionConfig": "Session Config",
+        "remoteStatelessLaunch": "Stateless Launch",
+        "remoteProxyAware": "Proxy Aware",
+        "remoteNoProxySupport": "No Proxy Support",
+        "remoteInterrupt": "Interrupt",
+        "remoteInterruptSent": "Interrupt sent",
+        "remoteInterruptFailed": "Interrupt failed: {error}",
+        "remoteKillSession": "Kill Session",
+        "remoteKillSent": "Kill signal sent",
+        "remoteKillFailed": "Kill failed: {error}",
+        "remoteReadinessFailed": "Remote readiness failed: {error}",
+        "remoteConptyFailed": "ConPTY probe failed: {error}",
+        "remoteLaunchProbeFailedToast": "{tool} launch probe failed: {error}",
+        "remoteSmokeCompleted": "Remote {tool} smoke completed",
+        "remoteSmokeFailed": "Remote {tool} smoke failed: {error}",
+        "remoteEmailRequired": "Remote email is required",
+        "remoteServerRequired": "Remote server is required",
+        "remoteActivateFirst": "Please activate remote access first",
+        "remoteActivationDialogTitle": "Activate Remote",
+        "remoteActivationDialogDesc": "Enter a Hub URL directly, or load your registered Hubs from HubCenter and choose one.",
+        "remoteActivateAndLaunch": "Activate and Launch",
+        "remoteLoadRegisteredHubs": "Load Registered Hubs",
+        "remoteLoadingRegisteredHubs": "Loading Hubs...",
+        "remoteSelectRegisteredHub": "Registered Hub",
+        "remoteNoRegisteredHubs": "No registered Hubs found",
+        "remoteLoadHubListFailed": "Failed to load Hub list: {error}",
+        "remoteHubManualOrSelect": "You can paste a Hub URL directly, or pick one from the HubCenter list above.",
+        "remoteActivationCompleted": "Remote activation completed",
+        "remoteActivationFailed": "Remote activation failed: {error}",
+        "remoteReconnectFailed": "Reconnect failed: {error}",
+        "remoteSelectProjectFirst": "Please select a launch project first",
+        "remoteStartFailed": "Start failed: {error}",
+        "remoteInstallFailed": "Install failed: {error}",
+        "remoteSaveFailed": "Save failed: {error}",
+        "remoteSendFailed": "Send failed: {error}",
+        "remoteActivationCleared": "Remote activation cleared",
+        "remoteClearFailed": "Clear failed: {error}",
+        "remoteActivateStep": "Activate Remote",
+        "remoteActivateStepDesc": "Register the selected email and machine before starting remote sessions.",
+        "remoteReconnectStep": "Reconnect Hub",
+        "remoteReconnectStepDesc": "Hub URL is configured but the connection is currently offline.",
+        "remoteConfigureModelStep": "Configure model",
+        "remoteConfigureModelStepDesc": "Open the provider settings and save an API key plus model before launching remotely.",
+        "remoteRunReadinessStep": "Run Readiness",
+        "remoteRunReadinessStepDesc": "Collect the latest diagnostics for the selected tool and project.",
+        "remoteRunReadinessAgain": "Run Readiness Again",
+        "remoteRunReadinessAgainDesc": "Refresh diagnostics after fixing setup issues.",
+        "remoteModeLabel": "Remote",
+        "remoteModeDesc": "Start this tool through Hub for phone control",
+        "localModeLabel": "Local",
+        "launchModeLabel": "Mode",
         "freeload": "Free",
         "bigSpender": "Big Spender",
         "skills": "Skills",
@@ -534,6 +680,120 @@ const translations: any = {
         "useDefaultProxy": "使用默认代理设置",
         "proxyHostPlaceholder": "例如：192.168.1.1 或 proxy.company.com",
         "proxyPortPlaceholder": "例如：8080",
+        "remoteControl": "远程控制",
+        "remoteControlDesc": "配置 CodeClaw 远程诊断、Hub 连接和远程会话控制。",
+        "remoteRefresh": "刷新",
+        "remoteRunReadiness": "运行就绪检查",
+        "remoteRunConpty": "运行 ConPTY 检测",
+        "remoteRunLaunchProbe": "运行 {tool} 启动探测",
+        "remoteRunFullSmoke": "运行完整冒烟测试",
+        "remoteActivation": "激活状态",
+        "remoteActivated": "已激活",
+        "remoteNotActivated": "未激活",
+        "remoteEmailNotConfigured": "尚未配置远程邮箱",
+        "remoteHub": "Hub 连接",
+        "remoteConnected": "已连接",
+        "remoteDisconnected": "未连接",
+        "remoteNoHubUrl": "未配置 Hub 地址",
+        "remoteReadiness": "就绪状态",
+        "remoteReady": "已就绪",
+        "remoteNeedsAttention": "需要处理",
+        "remoteNotRun": "未运行",
+        "remoteLaunch": "启动探测",
+        "remotePassed": "通过",
+        "remoteFailed": "失败",
+        "remoteSmoke": "冒烟测试",
+        "remoteRouting": "远程路由",
+        "remoteEnableLaunchPath": "启用远程启动路径",
+        "remoteHubUrl": "Hub 地址",
+        "remoteHubCenterUrl": "Hub Center 地址",
+        "remoteEmail": "远程邮箱",
+        "remoteNotInstalled": "未安装",
+        "remoteActivating": "激活中...",
+        "remoteActivate": "激活远程控制",
+        "remoteStarting": "启动中...",
+        "remoteStartTool": "启动远程",
+        "remoteStopTool": "停止远程",
+        "remoteUnavailable": "不可用：{reason}",
+        "remoteInstallingTool": "正在安装 {tool}...",
+        "remoteInstallTool": "安装 {tool}",
+        "remoteReconnecting": "重连中...",
+        "remoteReconnectHub": "重连 Hub",
+        "remoteClearing": "清除中...",
+        "remoteClearActivation": "清除激活状态",
+        "remoteToolPath": "工具路径",
+        "remoteNextStep": "下一步",
+        "remoteLaunchProject": "启动项目",
+        "remoteNoProjectSelected": "未选择项目",
+        "remoteReadinessWarnings": "就绪检查提示",
+        "remoteNoReadinessIssues": "未检测到就绪问题。",
+        "remoteProbeNotRun": "尚未运行检测。",
+        "remoteConptyAvailable": "{tool} 远程会话已支持 ConPTY。",
+        "remoteConptyUnavailable": "ConPTY 不可用。",
+        "remoteLaunchProbeTitle": "{tool} 启动探测",
+        "remoteLaunchProbePending": "{tool} 启动探测尚未运行",
+        "remoteCommandReady": "命令已就绪：{value}",
+        "remoteLaunchProbeFailed": "启动探测失败",
+        "remoteFullSmoke": "完整冒烟测试",
+        "remoteFullSmokeNotRun": "尚未运行完整冒烟测试。",
+        "remoteTool": "工具",
+        "remotePty": "PTY",
+        "remoteSupported": "支持",
+        "remoteUnavailableShort": "不可用",
+        "remoteSession": "会话",
+        "remoteHubVisibility": "Hub 可见性",
+        "remoteVerified": "已验证",
+        "remoteNotVerified": "未验证",
+        "remoteNoImportantEvents": "暂时没有重要事件。",
+        "remoteSendInstructionPlaceholder": "向远程会话发送指令...",
+        "remoteSend": "发送",
+        "remoteInterrupt": "中断",
+        "remoteInterruptSent": "已发送中断",
+        "remoteInterruptFailed": "中断失败：{error}",
+        "remoteKillSession": "结束会话",
+        "remoteKillSent": "已发送结束信号",
+        "remoteKillFailed": "结束失败：{error}",
+        "remoteReadinessFailed": "远程就绪检查失败：{error}",
+        "remoteConptyFailed": "ConPTY 检测失败：{error}",
+        "remoteLaunchProbeFailedToast": "{tool} 启动探测失败：{error}",
+        "remoteSmokeCompleted": "远程 {tool} 冒烟测试已完成",
+        "remoteSmokeFailed": "远程 {tool} 冒烟测试失败：{error}",
+        "remoteEmailRequired": "必须填写远程邮箱",
+        "remoteServerRequired": "必须先配置远程服务器地址",
+        "remoteActivateFirst": "请先激活远程控制",
+        "remoteActivationDialogTitle": "激活远程控制",
+        "remoteActivationDialogDesc": "你可以直接输入 Hub 地址，或者先从 HubCenter 加载已注册的 Hub 再选择一个。",
+        "remoteActivateAndLaunch": "激活并启动",
+        "remoteLoadRegisteredHubs": "加载已注册 Hub",
+        "remoteLoadingRegisteredHubs": "正在加载 Hub...",
+        "remoteSelectRegisteredHub": "已注册 Hub",
+        "remoteNoRegisteredHubs": "没有可用的已注册 Hub",
+        "remoteLoadHubListFailed": "加载 Hub 列表失败：{error}",
+        "remoteHubManualOrSelect": "你可以直接粘贴 Hub 地址，也可以从上面的 HubCenter 列表中选择。",
+        "remoteActivationCompleted": "远程激活已完成",
+        "remoteActivationFailed": "远程激活失败：{error}",
+        "remoteReconnectFailed": "重连失败：{error}",
+        "remoteSelectProjectFirst": "请先选择一个启动项目",
+        "remoteStartFailed": "启动失败：{error}",
+        "remoteInstallFailed": "安装失败：{error}",
+        "remoteSaveFailed": "保存失败：{error}",
+        "remoteSendFailed": "发送失败：{error}",
+        "remoteActivationCleared": "远程激活状态已清除",
+        "remoteClearFailed": "清除失败：{error}",
+        "remoteActivateStep": "激活远程控制",
+        "remoteActivateStepDesc": "启动远程会话前，先登记邮箱和设备信息。",
+        "remoteReconnectStep": "重连 Hub",
+        "remoteReconnectStepDesc": "已配置 Hub 地址，但当前连接处于离线状态。",
+        "remoteConfigureModelStep": "配置模型",
+        "remoteConfigureModelStepDesc": "先打开服务商配置，保存 API Key 和模型后再远程启动。",
+        "remoteRunReadinessStep": "运行就绪检查",
+        "remoteRunReadinessStepDesc": "为当前工具和项目采集最新诊断信息。",
+        "remoteRunReadinessAgain": "重新运行就绪检查",
+        "remoteRunReadinessAgainDesc": "修复问题后重新刷新诊断结果。",
+        "remoteModeLabel": "远程",
+        "remoteModeDesc": "通过 Hub 启动此工具，便于手机控制",
+        "localModeLabel": "本地",
+        "launchModeLabel": "方式",
         "freeload": "白嫖中",
         "bigSpender": "大力氪金",
         "skills": "技能",
@@ -754,6 +1014,120 @@ const translations: any = {
         "useDefaultProxy": "使用預設代理設置",
         "proxyHostPlaceholder": "例如：192.168.1.1 或 proxy.company.com",
         "proxyPortPlaceholder": "例如：8080",
+        "remoteControl": "遠端控制",
+        "remoteControlDesc": "設定 CodeClaw 遠端診斷、Hub 連線與遠端會話控制。",
+        "remoteRefresh": "重新整理",
+        "remoteRunReadiness": "執行就緒檢查",
+        "remoteRunConpty": "執行 ConPTY 檢測",
+        "remoteRunLaunchProbe": "執行 {tool} 啟動探測",
+        "remoteRunFullSmoke": "執行完整冒煙測試",
+        "remoteActivation": "啟用狀態",
+        "remoteActivated": "已啟用",
+        "remoteNotActivated": "未啟用",
+        "remoteEmailNotConfigured": "尚未設定遠端信箱",
+        "remoteHub": "Hub 連線",
+        "remoteConnected": "已連線",
+        "remoteDisconnected": "未連線",
+        "remoteNoHubUrl": "未設定 Hub 位址",
+        "remoteReadiness": "就緒狀態",
+        "remoteReady": "已就緒",
+        "remoteNeedsAttention": "需要處理",
+        "remoteNotRun": "未執行",
+        "remoteLaunch": "啟動探測",
+        "remotePassed": "通過",
+        "remoteFailed": "失敗",
+        "remoteSmoke": "冒煙測試",
+        "remoteRouting": "遠端路由",
+        "remoteEnableLaunchPath": "啟用遠端啟動路徑",
+        "remoteHubUrl": "Hub 位址",
+        "remoteHubCenterUrl": "Hub Center 位址",
+        "remoteEmail": "遠端信箱",
+        "remoteNotInstalled": "未安裝",
+        "remoteActivating": "啟用中...",
+        "remoteActivate": "啟用遠端控制",
+        "remoteStarting": "啟動中...",
+        "remoteStartTool": "啟動遠端",
+        "remoteStopTool": "停止遠端",
+        "remoteUnavailable": "不可用：{reason}",
+        "remoteInstallingTool": "正在安裝 {tool}...",
+        "remoteInstallTool": "安裝 {tool}",
+        "remoteReconnecting": "重新連線中...",
+        "remoteReconnectHub": "重新連線 Hub",
+        "remoteClearing": "清除中...",
+        "remoteClearActivation": "清除啟用狀態",
+        "remoteToolPath": "工具路徑",
+        "remoteNextStep": "下一步",
+        "remoteLaunchProject": "啟動專案",
+        "remoteNoProjectSelected": "未選擇專案",
+        "remoteReadinessWarnings": "就緒檢查提示",
+        "remoteNoReadinessIssues": "未檢測到就緒問題。",
+        "remoteProbeNotRun": "尚未執行檢測。",
+        "remoteConptyAvailable": "{tool} 遠端會話已支援 ConPTY。",
+        "remoteConptyUnavailable": "ConPTY 不可用。",
+        "remoteLaunchProbeTitle": "{tool} 啟動探測",
+        "remoteLaunchProbePending": "{tool} 啟動探測尚未執行",
+        "remoteCommandReady": "指令已就緒：{value}",
+        "remoteLaunchProbeFailed": "啟動探測失敗",
+        "remoteFullSmoke": "完整冒煙測試",
+        "remoteFullSmokeNotRun": "尚未執行完整冒煙測試。",
+        "remoteTool": "工具",
+        "remotePty": "PTY",
+        "remoteSupported": "支援",
+        "remoteUnavailableShort": "不可用",
+        "remoteSession": "會話",
+        "remoteHubVisibility": "Hub 可見性",
+        "remoteVerified": "已驗證",
+        "remoteNotVerified": "未驗證",
+        "remoteNoImportantEvents": "暫時沒有重要事件。",
+        "remoteSendInstructionPlaceholder": "向遠端會話傳送指令...",
+        "remoteSend": "傳送",
+        "remoteInterrupt": "中斷",
+        "remoteInterruptSent": "已送出中斷",
+        "remoteInterruptFailed": "中斷失敗：{error}",
+        "remoteKillSession": "結束會話",
+        "remoteKillSent": "已送出結束訊號",
+        "remoteKillFailed": "結束失敗：{error}",
+        "remoteReadinessFailed": "遠端就緒檢查失敗：{error}",
+        "remoteConptyFailed": "ConPTY 檢測失敗：{error}",
+        "remoteLaunchProbeFailedToast": "{tool} 啟動探測失敗：{error}",
+        "remoteSmokeCompleted": "遠端 {tool} 冒煙測試已完成",
+        "remoteSmokeFailed": "遠端 {tool} 冒煙測試失敗：{error}",
+        "remoteEmailRequired": "必須填寫遠端信箱",
+        "remoteServerRequired": "必須先設定遠端伺服器位址",
+        "remoteActivateFirst": "請先啟用遠端控制",
+        "remoteActivationDialogTitle": "啟用遠端控制",
+        "remoteActivationDialogDesc": "你可以直接輸入 Hub 位址，或先從 HubCenter 載入已註冊的 Hub 再選擇一個。",
+        "remoteActivateAndLaunch": "啟用並啟動",
+        "remoteLoadRegisteredHubs": "載入已註冊 Hub",
+        "remoteLoadingRegisteredHubs": "正在載入 Hub...",
+        "remoteSelectRegisteredHub": "已註冊 Hub",
+        "remoteNoRegisteredHubs": "沒有可用的已註冊 Hub",
+        "remoteLoadHubListFailed": "載入 Hub 清單失敗：{error}",
+        "remoteHubManualOrSelect": "你可以直接貼上 Hub 位址，也可以從上方的 HubCenter 清單中選擇。",
+        "remoteActivationCompleted": "遠端啟用已完成",
+        "remoteActivationFailed": "遠端啟用失敗：{error}",
+        "remoteReconnectFailed": "重新連線失敗：{error}",
+        "remoteSelectProjectFirst": "請先選擇一個啟動專案",
+        "remoteStartFailed": "啟動失敗：{error}",
+        "remoteInstallFailed": "安裝失敗：{error}",
+        "remoteSaveFailed": "儲存失敗：{error}",
+        "remoteSendFailed": "傳送失敗：{error}",
+        "remoteActivationCleared": "遠端啟用狀態已清除",
+        "remoteClearFailed": "清除失敗：{error}",
+        "remoteActivateStep": "啟用遠端控制",
+        "remoteActivateStepDesc": "啟動遠端會話前，先登記信箱與裝置資訊。",
+        "remoteReconnectStep": "重新連線 Hub",
+        "remoteReconnectStepDesc": "已設定 Hub 位址，但目前連線處於離線狀態。",
+        "remoteConfigureModelStep": "設定模型",
+        "remoteConfigureModelStepDesc": "先開啟服務商設定，儲存 API Key 與模型後再遠端啟動。",
+        "remoteRunReadinessStep": "執行就緒檢查",
+        "remoteRunReadinessStepDesc": "為目前工具與專案蒐集最新診斷資訊。",
+        "remoteRunReadinessAgain": "重新執行就緒檢查",
+        "remoteRunReadinessAgainDesc": "修復問題後重新整理診斷結果。",
+        "remoteModeLabel": "遠端",
+        "remoteModeDesc": "透過 Hub 啟動此工具，方便手機控制",
+        "localModeLabel": "本機",
+        "launchModeLabel": "方式",
         "freeload": "白嫖中",
         "bigSpender": "大力氪金",
         "skills": "技能",
@@ -921,6 +1295,7 @@ function App() {
     const [status, setStatus] = useState("");
     const [activeTab, setActiveTab] = useState(0);
     const [tabStartIndex, setTabStartIndex] = useState(0);
+    const [settingsTab, setSettingsTab] = useState<'general' | 'display' | 'remote'>('general');
     const [installLocation, setInstallLocation] = useState<'user' | 'project'>('user');
     const [installProject, setInstallProject] = useState<string>("");
     const [isBatchInstalling, setIsBatchInstalling] = useState(false);
@@ -1009,11 +1384,22 @@ function App() {
     const isWindows = /window/i.test(navigator.userAgent);
     const [hasWindowsTerminal, setHasWindowsTerminal] = useState(false);
     const [lang, setLang] = useState("en");
+    const translate = (key: string) => translations[lang][key] || translations["en"][key] || key;
+    const formatText = (key: string, values: Record<string, string> = {}) => {
+        return Object.entries(values).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value), translate(key));
+    };
+    const localizeText = (en: string, zhHans: string, zhHant: string) => (
+        lang === 'zh-Hans' ? zhHans : lang === 'zh-Hant' ? zhHant : en
+    );
     const [toastMessage, setToastMessage] = useState<string>("");
     const [showToast, setShowToast] = useState(false);
-
     const [skills, setSkills] = useState<main.Skill[]>([]);
     const [showAddSkillModal, setShowAddSkillModal] = useState(false);
+    const [showRemoteActivationModal, setShowRemoteActivationModal] = useState(false);
+    const [pendingRemoteLaunchTool, setPendingRemoteLaunchTool] = useState<string>("");
+    const [remoteActivationDraft, setRemoteActivationDraft] = useState({ hub_url: "", hubcenter_url: "", email: "" });
+    const [remoteCenterHubs, setRemoteCenterHubs] = useState<RemoteCenterHubOption[]>([]);
+    const [loadingRemoteCenterHubs, setLoadingRemoteCenterHubs] = useState(false);
     const [newSkillName, setNewSkillName] = useState("");
     const [newSkillDesc, setNewSkillDesc] = useState("");
     const [newSkillType, setNewSkillType] = useState("address");
@@ -1569,9 +1955,7 @@ function App() {
         });
     };
 
-    const t = (key: string) => {
-        return translations[lang][key] || translations["en"][key] || key;
-    };
+    const t = translate;
 
     const allProjects = config?.projects || [];
     const normalizedProjectKeyword = projectSearchKeyword.trim().toLowerCase();
@@ -1633,6 +2017,16 @@ function App() {
             || config.projects.find((p: any) => p.id === config.current_project)
             || config.projects[0];
     }, [config, selectedProjectForLaunch]);
+    const updateResolvedLaunchProject = (updater: (project: any) => any) => {
+        if (!config?.projects || !resolvedLaunchProject) return;
+        const newProjects = config.projects.map((project: any) =>
+            project.id === resolvedLaunchProject.id ? updater(project) : project
+        );
+        const newConfig = new main.AppConfig({ ...config, projects: newProjects });
+        setConfig(newConfig);
+        SaveConfig(newConfig);
+    };
+    const getSelectedProjectForRemote = () => resolvedLaunchProject?.path || "";
     const launchProjectSelectOptions = useMemo(() => {
         if (!resolvedLaunchProject) return launchProjectOptions;
         if (launchProjectOptions.some((p: any) => p.id === resolvedLaunchProject.id)) {
@@ -1640,6 +2034,78 @@ function App() {
         }
         return [resolvedLaunchProject, ...launchProjectOptions];
     }, [launchProjectOptions, resolvedLaunchProject]);
+    const normalizeIssueItems = (items: any): string[] => {
+        if (!Array.isArray(items)) return [];
+        return items.map((item: any) => {
+            if (typeof item === 'string') return item;
+            if (item?.message) return item.message;
+            if (item?.detail) return item.detail;
+            return JSON.stringify(item);
+        });
+    };
+
+
+    const {
+        remoteActivationStatus,
+        remoteConnectionStatus,
+        remoteToolReadiness,
+        remotePTYProbe,
+        remoteToolLaunchProbe,
+        remoteSmokeReport,
+        remoteSessions,
+        remoteInputDrafts,
+        setRemoteInputDrafts,
+        remoteBusy,
+        selectedRemoteTool,
+        setSelectedRemoteTool,
+        visibleRemoteTools,
+        selectedRemoteToolInfo,
+        selectedRemoteToolCanStart,
+        selectedRemoteToolUnavailableReason,
+        selectedRemoteToolBadges,
+        remoteSuggestedAction,
+        getRemoteToolLabel,
+        getRemoteToolConfigHint,
+        getRemoteToolSmokeHint,
+        getRemoteReadinessDetail,
+        getRemoteLaunchDetail,
+        getRemoteSmokeDetail,
+        refreshRemotePanel,
+        refreshRemoteReadiness,
+        refreshRemotePTYProbe,
+        refreshRemoteLaunchProbe,
+        runRemoteSmoke,
+        activateRemoteWithEmail,
+        reconnectRemote,
+        startRemoteSession,
+        quickStartRemoteSession,
+        installSelectedRemoteTool,
+        saveRemoteConfigField,
+        sendRemoteInput,
+        clearRemoteActivationState,
+    } = useRemotePanel({
+        config,
+        setConfig,
+        setToolStatuses,
+        getSelectedProjectForRemote,
+        selectedProjectForLaunch,
+        navTab,
+        translate,
+        formatText,
+        localizeText,
+        showToastMessage,
+        onDemandInstallingTool,
+        setOnDemandInstallingTool,
+    });
+    const activeRemoteSessionForTool = useMemo(() => {
+        const inactiveStatuses = new Set(["stopped", "finished", "failed", "killed", "exited", "closed", "done"]);
+        return remoteSessions.find((session) => {
+            if (session.tool !== activeTool) return false;
+            const status = String(session.status || session.summary?.status || "").toLowerCase();
+            return !inactiveStatuses.has(status);
+        }) || null;
+    }, [remoteSessions, activeTool]);
+    const hasActiveRemoteSessionForTool = !!activeRemoteSessionForTool;
 
     useEffect(() => {
         setProjectCurrentPage(1);
@@ -1956,6 +2422,80 @@ function App() {
         SaveConfig(newConfig);
     };
 
+    const openRemoteActivationModal = (toolName: string) => {
+        const nextHubCenterURL = config?.remote_hubcenter_url || "";
+        const nextEmail = config?.remote_email || "";
+        setPendingRemoteLaunchTool(toolName);
+        setRemoteActivationDraft({
+            hub_url: config?.remote_hub_url || "",
+            hubcenter_url: nextHubCenterURL,
+            email: nextEmail,
+        });
+        setRemoteCenterHubs([]);
+        setShowRemoteActivationModal(true);
+        if (nextEmail.trim()) {
+            void loadRemoteHubsFromCenter(nextHubCenterURL, nextEmail, false);
+        }
+    };
+
+    const loadRemoteHubsFromCenter = async (centerURLArg?: string, emailArg?: string, notifyOnEmpty = true) => {
+        const centerURL = (centerURLArg ?? remoteActivationDraft.hubcenter_url).trim();
+        const email = (emailArg ?? remoteActivationDraft.email).trim();
+        if (!email) {
+            showToastMessage(t("remoteEmailRequired"), 3000);
+            return;
+        }
+        setLoadingRemoteCenterHubs(true);
+        try {
+            const hubs = await ListRemoteHubs(centerURL, email) as RemoteCenterHubOption[];
+            setRemoteCenterHubs(Array.isArray(hubs) ? hubs : []);
+            if (Array.isArray(hubs) && hubs.length > 0) {
+                setRemoteActivationDraft((prev) => {
+                    if (prev.hub_url.trim()) {
+                        return prev;
+                    }
+                    return { ...prev, hub_url: hubs[0].base_url || "" };
+                });
+            } else if (notifyOnEmpty) {
+                showToastMessage(t("remoteNoRegisteredHubs"), 3000);
+            }
+        } catch (err) {
+            console.error("Failed to load remote hubs from center:", err);
+            setRemoteCenterHubs([]);
+            showToastMessage(formatText("remoteLoadHubListFailed", { error: String(err) }), 4000);
+        } finally {
+            setLoadingRemoteCenterHubs(false);
+        }
+    };
+
+    const activateRemoteFromDialog = async () => {
+        if (!config) return;
+        const hubURL = remoteActivationDraft.hub_url.trim();
+        const hubCenterURL = remoteActivationDraft.hubcenter_url.trim();
+        const email = remoteActivationDraft.email.trim();
+        const newConfig = new main.AppConfig({
+            ...config,
+            remote_hub_url: hubURL,
+            remote_hubcenter_url: hubCenterURL,
+            remote_email: email,
+            remote_enabled: true,
+        });
+        setConfig(newConfig);
+        await SaveConfig(newConfig);
+        const activated = await activateRemoteWithEmail();
+        if (!activated) {
+            return;
+        }
+        setShowRemoteActivationModal(false);
+        if (pendingRemoteLaunchTool) {
+            setStatus(lang === 'zh-Hans' ? '正在远程启动...' : lang === 'zh-Hant' ? '正在遠端啟動...' : 'Starting remotely...');
+            setLaunchingTool(pendingRemoteLaunchTool);
+            await quickStartRemoteSession(pendingRemoteLaunchTool as any);
+            setPendingRemoteLaunchTool("");
+            setTimeout(() => { setStatus(""); setLaunchingTool(""); }, 2000);
+        }
+    };
+
     const handleAddNewProject = async () => {
         if (!config) return;
 
@@ -2186,6 +2726,25 @@ ${instruction}`;
         : null;
 
     const currentProject = getCurrentProject();
+    const settingsTabOptions = [
+        {
+            id: 'general' as const,
+            label: lang === 'zh-Hans' ? '通用设置' : lang === 'zh-Hant' ? '通用設置' : 'General',
+            desc: lang === 'zh-Hans' ? '语言、项目、代理与环境' : lang === 'zh-Hant' ? '語言、項目、代理與環境' : 'Language, projects, proxy, and environment',
+        },
+        {
+            id: 'display' as const,
+            label: lang === 'zh-Hans' ? '显示配置' : lang === 'zh-Hant' ? '顯示配置' : 'Display',
+            desc: lang === 'zh-Hans' ? '工具显示与启动页行为' : lang === 'zh-Hant' ? '工具顯示與啟動頁行為' : 'Tool visibility and startup behavior',
+        },
+        {
+            id: 'remote' as const,
+            label: lang === 'zh-Hans' ? '远程控制' : lang === 'zh-Hant' ? '遠端控制' : 'Remote',
+            desc: lang === 'zh-Hans' ? '仅配置远程服务器地址' : lang === 'zh-Hant' ? '僅配置遠端伺服器位址' : 'Server addresses only',
+        },
+    ];
+    const remoteCapableTools = ['claude', 'codex', 'opencode', 'iflow', 'kilo', 'kode'] as const;
+    const isRemoteCapableActiveTool = remoteCapableTools.includes(activeTool as typeof remoteCapableTools[number]);
 
     return (
         <div id="App">
@@ -3109,7 +3668,27 @@ ${instruction}`;
                     )}
 
                     {navTab === 'settings' && (
-                        <div style={{ padding: '10px' }}>
+                        <div className="settings-shell" style={{ padding: '10px' }}>
+                            <div className="settings-top-tabs">
+                                {settingsTabOptions.map((tab) => (
+                                    <button
+                                        key={tab.id}
+                                        type="button"
+                                        className={`settings-top-tab ${settingsTab === tab.id ? 'active' : ''}`}
+                                        onClick={() => setSettingsTab(tab.id)}
+                                        title={tab.desc}
+                                    >
+                                        {tab.label}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="settings-panel" style={{ display: settingsTab === 'general' ? 'block' : 'none' }}>
+                                <div className="settings-panel-header">
+                                    <div>
+                                        <h3 className="settings-panel-title">{settingsTabOptions[0].label}</h3>
+                                        <p className="settings-panel-desc">{settingsTabOptions[0].desc}</p>
+                                    </div>
+                                </div>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '20px', marginBottom: '15px' }}>
                                 <div className="form-group" style={{ flex: '1', marginBottom: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
                                     <label className="form-label" style={{ marginBottom: 0, whiteSpace: 'nowrap', fontSize: '0.8rem' }}>{t("language")}</label>
@@ -3140,7 +3719,23 @@ ${instruction}`;
                                 )}
                             </div>
 
-                            <div className="form-group" style={{ marginTop: '10px', borderTop: '1px solid #f1f5f9', paddingTop: '10px' }}>
+                            </div>
+
+                            <div className="settings-panel" style={{ display: settingsTab === 'remote' ? 'block' : 'none' }}>
+                                <RemoteSettingsPanel
+                                    config={config}
+                                    saveRemoteConfigField={saveRemoteConfigField}
+                                    translate={translate}
+                                    remoteBusy={remoteBusy}
+                                    remoteActivationStatus={remoteActivationStatus}
+                                    remoteSmokeReport={remoteSmokeReport}
+                                    getRemoteSmokeDetail={getRemoteSmokeDetail}
+                                    activateRemoteWithEmail={activateRemoteWithEmail}
+                                />
+                            </div>
+
+                            <div className="settings-panel" style={{ display: settingsTab === 'display' ? 'block' : 'none' }}>
+                            <div className="form-group" style={{ marginTop: '0', borderTop: 'none', paddingTop: '0' }}>
                                 <h4 style={{ fontSize: '0.8rem', color: '#60a5fa', marginBottom: '12px', marginTop: 0, textTransform: 'uppercase', letterSpacing: '0.025em' }}>{lang === 'zh-Hans' ? '工具显示' : lang === 'zh-Hant' ? '工具顯示' : 'Tool Visibility'}</h4>
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -3266,7 +3861,10 @@ ${instruction}`;
                                 </div>
                             </div>
 
-                            <div className="form-group" style={{ marginTop: '10px', borderTop: '1px solid #f1f5f9', paddingTop: '10px' }}>
+                            </div>
+
+                            <div className="settings-panel" style={{ display: settingsTab === 'general' ? 'block' : 'none' }}>
+                            <div className="form-group" style={{ marginTop: '0', borderTop: 'none', paddingTop: '0' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                                     <input
                                         type="checkbox"
@@ -3352,6 +3950,7 @@ ${instruction}`;
                                         </label>
                                     </div>
                                 )}
+                            </div>
                             </div>
                         </div>
                     )}
@@ -3461,35 +4060,24 @@ ${instruction}`;
                                         })()}
                                     </span>
                                 </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                 {activeTool !== 'kilo' && (
                                     <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.8rem', color: '#6b7280' }}>
                                         <input
                                             type="checkbox"
-                                            checked={config?.projects?.find((p: any) => p.id === selectedProjectForLaunch)?.yolo_mode || false}
+                                            checked={resolvedLaunchProject?.yolo_mode || false}
                                             onChange={(e) => {
-                                                const proj = config?.projects?.find((p: any) => p.id === selectedProjectForLaunch);
-                                                if (proj) {
-                                                    const isWindows = /window/i.test(navigator.userAgent);
-                                                    const newProjects = config.projects.map((p: any) => {
-                                                        if (p.id === proj.id) {
-                                                            const updated = { ...p, yolo_mode: e.target.checked };
-                                                            // On non-Windows, yolo and admin are mutually exclusive
-                                                            if (!isWindows && e.target.checked) {
-                                                                updated.admin_mode = false;
-                                                            }
-                                                            return updated;
-                                                        }
-                                                        return p;
-                                                    });
-                                                    const newConfig = new main.AppConfig({ ...config, projects: newProjects });
-                                                    setConfig(newConfig);
-                                                    SaveConfig(newConfig);
-                                                }
+                                                updateResolvedLaunchProject((project) => {
+                                                    const updated = { ...project, yolo_mode: e.target.checked };
+                                                    if (!isWindows && e.target.checked) {
+                                                        updated.admin_mode = false;
+                                                    }
+                                                    return updated;
+                                                });
                                             }}
-                                            style={{ marginRight: '6px' }}
                                         />
                                         <span>{t("yoloModeLabel")}</span>
-                                        {config?.projects?.find((p: any) => p.id === selectedProjectForLaunch)?.yolo_mode && (
+                                        {resolvedLaunchProject?.yolo_mode && (
                                             <span style={{
                                                 marginLeft: '2px',
                                                 backgroundColor: '#fee2e2',
@@ -3508,19 +4096,8 @@ ${instruction}`;
                                     <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.8rem', color: '#6b7280' }}>
                                         <input
                                             type="checkbox"
-                                            checked={config?.projects?.find((p: any) => p.id === selectedProjectForLaunch)?.team_mode || false}
-                                            onChange={(e) => {
-                                                const proj = config?.projects?.find((p: any) => p.id === selectedProjectForLaunch);
-                                                if (proj) {
-                                                    const newProjects = config.projects.map((p: any) =>
-                                                        p.id === proj.id ? { ...p, team_mode: e.target.checked } : p
-                                                    );
-                                                    const newConfig = new main.AppConfig({ ...config, projects: newProjects });
-                                                    setConfig(newConfig);
-                                                    SaveConfig(newConfig);
-                                                }
-                                            }}
-                                            style={{ marginRight: '6px' }}
+                                            checked={resolvedLaunchProject?.team_mode || false}
+                                            onChange={(e) => updateResolvedLaunchProject((project) => ({ ...project, team_mode: e.target.checked }))}
                                         />
                                         <span>{t("teamModeLabel")}</span>
                                     </label>
@@ -3529,26 +4106,15 @@ ${instruction}`;
                                     <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.8rem', color: '#6b7280' }}>
                                         <input
                                             type="checkbox"
-                                            checked={config?.projects?.find((p: any) => p.id === selectedProjectForLaunch)?.use_proxy || false}
+                                            checked={resolvedLaunchProject?.use_proxy || false}
                                             onChange={(e) => {
-                                                const proj = config?.projects?.find((p: any) => p.id === selectedProjectForLaunch);
-                                                if (proj) {
-                                                    // If checking but not configured, show dialog
-                                                    if (e.target.checked && !proj.proxy_host && !config?.default_proxy_host) {
-                                                        setProxyEditMode('project');
-                                                        setShowProxySettings(true);
-                                                        return;
-                                                    }
-
-                                                    const newProjects = config.projects.map((p: any) =>
-                                                        p.id === proj.id ? { ...p, use_proxy: e.target.checked } : p
-                                                    );
-                                                    const newConfig = new main.AppConfig({ ...config, projects: newProjects });
-                                                    setConfig(newConfig);
-                                                    SaveConfig(newConfig);
+                                                if (e.target.checked && !resolvedLaunchProject?.proxy_host && !config?.default_proxy_host) {
+                                                    setProxyEditMode('project');
+                                                    setShowProxySettings(true);
+                                                    return;
                                                 }
+                                                updateResolvedLaunchProject((project) => ({ ...project, use_proxy: e.target.checked }));
                                             }}
-                                            style={{ marginRight: '6px' }}
                                         />
                                         <span>{t("proxyMode")}</span>
                                         <span
@@ -3566,70 +4132,96 @@ ${instruction}`;
                                     </label>
                                 )}
                             </div>
+                            </div>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '15px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>{t("launchModeLabel")}:</span>
+                                    <div style={{ display: 'inline-flex', padding: '3px', borderRadius: '999px', border: '1px solid #dbeafe', background: '#eff6ff' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const newConfig = new main.AppConfig({ ...config, remote_enabled: false });
+                                                setConfig(newConfig);
+                                                SaveConfig(newConfig);
+                                            }}
+                                            style={{
+                                                border: 'none',
+                                                borderRadius: '999px',
+                                                padding: '5px 12px',
+                                                background: !config?.remote_enabled ? '#2563eb' : 'transparent',
+                                                color: !config?.remote_enabled ? '#ffffff' : '#475569',
+                                                fontSize: '0.78rem',
+                                                fontWeight: 700,
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            {t("localModeLabel")}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (!isRemoteCapableActiveTool) return;
+                                                const newConfig = new main.AppConfig({ ...config, remote_enabled: true });
+                                                setConfig(newConfig);
+                                                SaveConfig(newConfig);
+                                            }}
+                                            disabled={!isRemoteCapableActiveTool}
+                                            style={{
+                                                border: 'none',
+                                                borderRadius: '999px',
+                                                padding: '5px 12px',
+                                                background: config?.remote_enabled ? '#2563eb' : 'transparent',
+                                                color: config?.remote_enabled ? '#ffffff' : (isRemoteCapableActiveTool ? '#475569' : '#94a3b8'),
+                                                fontSize: '0.78rem',
+                                                fontWeight: 700,
+                                                cursor: isRemoteCapableActiveTool ? 'pointer' : 'not-allowed',
+                                                opacity: isRemoteCapableActiveTool ? 1 : 0.65
+                                            }}
+                                            title={isRemoteCapableActiveTool ? t("remoteModeDesc") : (lang === 'zh-Hans' ? '当前工具不支持远程' : lang === 'zh-Hant' ? '目前工具不支援遠端' : 'Remote is not supported for this tool')}
+                                        >
+                                            {t("remoteModeLabel")}
+                                        </button>
+                                    </div>
+                                </div>
+                                {config?.remote_enabled && (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '999px' }}>
+                                        <span style={{ fontSize: '0.75rem', color: remoteActivationStatus?.activated ? '#16a34a' : '#d97706', whiteSpace: 'nowrap' }}>
+                                            {remoteActivationStatus?.activated ? t("remoteActivated") : t("remoteNotActivated")}
+                                        </span>
+                                    </div>
+                                )}
                                 <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.8rem', color: '#6b7280' }}>
                                     <input
                                         type="checkbox"
-                                        checked={config?.projects?.find((p: any) => p.id === selectedProjectForLaunch)?.admin_mode || false}
+                                        checked={resolvedLaunchProject?.admin_mode || false}
                                         onChange={(e) => {
-                                            const proj = config?.projects?.find((p: any) => p.id === selectedProjectForLaunch);
-                                            if (proj) {
-                                                const isWindows = /window/i.test(navigator.userAgent);
-                                                const newProjects = config.projects.map((p: any) => {
-                                                    if (p.id === proj.id) {
-                                                        const updated = { ...p, admin_mode: e.target.checked };
-                                                        // On non-Windows, yolo and admin are mutually exclusive
-                                                        if (!isWindows && e.target.checked) {
-                                                            updated.yolo_mode = false;
-                                                        }
-                                                        return updated;
-                                                    }
-                                                    return p;
-                                                });
-                                                const newConfig = new main.AppConfig({ ...config, projects: newProjects });
-                                                setConfig(newConfig);
-                                                SaveConfig(newConfig);
-                                            }
+                                            updateResolvedLaunchProject((project) => {
+                                                const updated = { ...project, admin_mode: e.target.checked };
+                                                if (!isWindows && e.target.checked) {
+                                                    updated.yolo_mode = false;
+                                                }
+                                                return updated;
+                                            });
                                         }}
                                         style={{ marginRight: '6px' }}
                                     />
-                                    <span>{/window/i.test(navigator.userAgent) ? t("adminModeLabel") : t("rootModeLabel")}</span>
+                                    <span>{isWindows ? t("adminModeLabel") : t("rootModeLabel")}</span>
                                 </label>
                                 <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.8rem', color: '#6b7280' }}>
                                     <input
                                         type="checkbox"
-                                        checked={config?.projects?.find((p: any) => p.id === selectedProjectForLaunch)?.python_project || false}
-                                        onChange={(e) => {
-                                            const proj = config?.projects?.find((p: any) => p.id === selectedProjectForLaunch);
-                                            if (proj) {
-                                                const newProjects = config.projects.map((p: any) =>
-                                                    p.id === proj.id ? { ...p, python_project: e.target.checked } : p
-                                                );
-                                                const newConfig = new main.AppConfig({ ...config, projects: newProjects });
-                                                setConfig(newConfig);
-                                                SaveConfig(newConfig);
-                                            }
-                                        }}
+                                        checked={resolvedLaunchProject?.python_project || false}
+                                        onChange={(e) => updateResolvedLaunchProject((project) => ({ ...project, python_project: e.target.checked }))}
                                         style={{ marginRight: '6px' }}
                                     />
                                     <span>{t("pythonProjectLabel")}</span>
                                 </label>
-                                {config?.projects?.find((p: any) => p.id === selectedProjectForLaunch)?.python_project && (
+                                {resolvedLaunchProject?.python_project && (
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                         <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>{t("pythonEnvLabel")}:</span>
                                         <select
-                                            value={config?.projects?.find((p: any) => p.id === selectedProjectForLaunch)?.python_env || ""}
-                                            onChange={(e) => {
-                                                const proj = config?.projects?.find((p: any) => p.id === selectedProjectForLaunch);
-                                                if (proj) {
-                                                    const newProjects = config.projects.map((p: any) =>
-                                                        p.id === proj.id ? { ...p, python_env: e.target.value } : p
-                                                    );
-                                                    const newConfig = new main.AppConfig({ ...config, projects: newProjects });
-                                                    setConfig(newConfig);
-                                                    SaveConfig(newConfig);
-                                                }
-                                            }}
+                                            value={resolvedLaunchProject?.python_env || ""}
+                                            onChange={(e) => updateResolvedLaunchProject((project) => ({ ...project, python_env: e.target.value }))}
                                             style={{
                                                 padding: '5px 8px',
                                                 borderRadius: '4px',
@@ -3727,8 +4319,41 @@ ${instruction}`;
                                     disabled={onDemandInstallingTool === activeTool || backgroundInstallingTool === activeTool || launchingTool === activeTool}
                                     onClick={async () => {
                                         console.log("Launch button clicked. activeTool:", activeTool);
+                                        if (config?.remote_enabled && hasActiveRemoteSessionForTool && activeRemoteSessionForTool?.id) {
+                                            setLaunchingTool(activeTool);
+                                            try {
+                                                await KillRemoteSession(activeRemoteSessionForTool.id);
+                                                await refreshRemotePanel();
+                                                setStatus(lang === 'zh-Hans' ? '远程已停止' : lang === 'zh-Hant' ? '遠端已停止' : 'Remote stopped');
+                                                setTimeout(() => { setStatus(""); setLaunchingTool(""); }, 2000);
+                                            } catch (err) {
+                                                setStatus("Error: " + err);
+                                                setLaunchingTool("");
+                                            }
+                                            return;
+                                        }
                                         const selectedProj = resolvedLaunchProject;
                                         if (selectedProj && selectedProj.path && selectedProj.path.trim() !== "") {
+                                            if (config?.remote_enabled) {
+                                                if (!isRemoteCapableActiveTool) {
+                                                    setStatus(lang === 'zh-Hans' ? '当前工具暂不支持远程启动' : lang === 'zh-Hant' ? '目前工具暫不支援遠端啟動' : 'This tool does not support remote launch');
+                                                    return;
+                                                }
+                                                if (!config?.remote_hub_url?.trim() || !remoteActivationStatus?.activated || !config?.remote_email?.trim()) {
+                                                    openRemoteActivationModal(activeTool);
+                                                    return;
+                                                }
+                                                setStatus(lang === 'zh-Hans' ? '正在远程启动...' : lang === 'zh-Hant' ? '正在遠端啟動...' : 'Starting remotely...');
+                                                setLaunchingTool(activeTool);
+                                                try {
+                                                    await quickStartRemoteSession(activeTool as any);
+                                                    setTimeout(() => { setStatus(""); setLaunchingTool(""); }, 2000);
+                                                } catch (err) {
+                                                    setStatus("Error: " + err);
+                                                    setLaunchingTool("");
+                                                }
+                                                return;
+                                            }
                                             // Check if tool is installed
                                             const toolStatus = toolStatuses?.find((s: any) => s.name === activeTool);
                                             if (toolStatus && !toolStatus.installed) {
@@ -3823,7 +4448,10 @@ ${instruction}`;
                                         }
                                     }}
                                 >
-                                    <span style={{ marginRight: '6px' }}>➤</span>{t("launch")}
+                                    <span style={{ marginRight: '6px' }}>{config?.remote_enabled ? '☁' : '➤'}</span>
+                                    {config?.remote_enabled
+                                        ? (hasActiveRemoteSessionForTool ? t("remoteStopTool") : t("remoteStartTool"))
+                                        : t("launch")}
                                 </button>
                             </div>
                         </div>
@@ -3860,6 +4488,92 @@ ${instruction}`;
             </div>
 
             {/* Modals */}
+            {showRemoteActivationModal && (
+                <div className="modal-overlay" onClick={() => { setShowRemoteActivationModal(false); setPendingRemoteLaunchTool(""); setRemoteCenterHubs([]); }}>
+                    <div className="modal-content" style={{ width: '640px', maxWidth: '94vw', maxHeight: '82vh', textAlign: 'left', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>{t("remoteActivationDialogTitle")}</h3>
+                            <button className="btn-close" onClick={() => { setShowRemoteActivationModal(false); setPendingRemoteLaunchTool(""); setRemoteCenterHubs([]); }}>&times;</button>
+                        </div>
+                        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', paddingBottom: '10px' }}>
+                            <div style={{ fontSize: '0.82rem', color: '#64748b', lineHeight: 1.5 }}>
+                                {t("remoteActivationDialogDesc")}
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '10px' }}>
+                                <div>
+                                    <label className="form-label">{t("remoteHubCenterUrl")}</label>
+                                    <input
+                                        className="form-input"
+                                        value={remoteActivationDraft.hubcenter_url}
+                                        onChange={(e) => setRemoteActivationDraft((prev) => ({ ...prev, hubcenter_url: e.target.value }))}
+                                        placeholder="http://127.0.0.1:9388"
+                                        spellCheck={false}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="form-label">{t("remoteEmail")}</label>
+                                    <input
+                                        className="form-input"
+                                        value={remoteActivationDraft.email}
+                                        onChange={(e) => setRemoteActivationDraft((prev) => ({ ...prev, email: e.target.value }))}
+                                        placeholder="name@example.com"
+                                        spellCheck={false}
+                                    />
+                                </div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '10px', alignItems: 'end' }}>
+                                <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '6px' }}>
+                                        <label className="form-label" style={{ marginBottom: 0 }}>{t("remoteSelectRegisteredHub")}</label>
+                                        <button
+                                            className="btn-secondary"
+                                            onClick={() => loadRemoteHubsFromCenter()}
+                                            disabled={loadingRemoteCenterHubs}
+                                            style={{ minWidth: '112px', height: '30px', padding: '4px 10px', fontSize: '0.78rem', flexShrink: 0 }}
+                                        >
+                                            {loadingRemoteCenterHubs ? t("remoteLoadingRegisteredHubs") : t("remoteLoadRegisteredHubs")}
+                                        </button>
+                                    </div>
+                                    <select
+                                        className="form-select"
+                                        value={remoteCenterHubs.some((hub) => hub.base_url === remoteActivationDraft.hub_url.trim()) ? remoteActivationDraft.hub_url.trim() : ""}
+                                        onChange={(e) => setRemoteActivationDraft((prev) => ({ ...prev, hub_url: e.target.value }))}
+                                    >
+                                        <option value="">
+                                            {remoteCenterHubs.length > 0 ? t("remoteSelectRegisteredHub") : t("remoteNoRegisteredHubs")}
+                                        </option>
+                                        {remoteCenterHubs.map((hub) => (
+                                            <option key={`${hub.hub_id}-${hub.base_url}`} value={hub.base_url}>
+                                                {hub.name ? `${hub.name} (${hub.base_url})` : hub.base_url}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="form-label">{t("remoteHubUrl")}</label>
+                                    <input
+                                        className="form-input"
+                                        value={remoteActivationDraft.hub_url}
+                                        onChange={(e) => setRemoteActivationDraft((prev) => ({ ...prev, hub_url: e.target.value }))}
+                                        placeholder="https://hub.example.com"
+                                        spellCheck={false}
+                                    />
+                                </div>
+                            </div>
+                            <div style={{ fontSize: '0.79rem', color: '#64748b', lineHeight: 1.5 }}>
+                                {t("remoteHubManualOrSelect")}
+                            </div>
+                        </div>
+                        <div className="modal-footer" style={{ marginTop: '0', flexShrink: 0 }}>
+                            <button className="btn-secondary" onClick={() => { setShowRemoteActivationModal(false); setPendingRemoteLaunchTool(""); setRemoteCenterHubs([]); }}>{t("cancel")}</button>
+                            <button className="btn-primary" onClick={activateRemoteFromDialog} disabled={remoteBusy === 'activate'}>
+                                {remoteBusy === 'activate' ? t("remoteActivating") : t("remoteActivateAndLaunch")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {showInstallLog && (
                 <div className="modal-overlay" onClick={() => setShowInstallLog(false)}>
                     <div className="modal-content" style={{ width: '600px', maxWidth: '90vw' }} onClick={e => e.stopPropagation()}>

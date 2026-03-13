@@ -18,6 +18,10 @@ export function DeleteSkill(arg1:string,arg2:string):Promise<void>;
 
 export function DownloadUpdate(arg1:string,arg2:string):Promise<string>;
 
+export function ActivateRemote(arg1:string):Promise<any>;
+
+export function ClearRemoteActivation():Promise<void>;
+
 export function GetCurrentProjectPath():Promise<string>;
 
 export function GetDownloadsFolder():Promise<string>;
@@ -25,6 +29,26 @@ export function GetDownloadsFolder():Promise<string>;
 export function GetEnvCheckInterval():Promise<number>;
 
 export function GetLocalCacheDir():Promise<string>;
+
+export function GetRemoteActivationStatus():Promise<any>;
+
+export function GetRemoteClaudeReadiness(arg1:string,arg2:boolean):Promise<any>;
+
+export function GetRemoteToolReadiness(arg1:string,arg2:string,arg3:boolean):Promise<any>;
+
+export function GetRemoteConnectionStatus():Promise<any>;
+
+export function GetRemoteClaudeLaunchProbe(arg1:string,arg2:boolean):Promise<any>;
+
+export function GetRemoteToolLaunchProbe(arg1:string,arg2:string,arg3:boolean):Promise<any>;
+
+export function GetRemotePTYProbe():Promise<any>;
+
+export function GetLastRemoteSmokeReport():Promise<any>;
+
+export function StartRemoteClaudeSession(arg1:string,arg2:boolean):Promise<any>;
+
+export function StartRemoteSession(arg1:string,arg2:string,arg3:boolean):Promise<any>;
 
 export function GetSkillsDir(arg1:string):Promise<string>;
 
@@ -50,6 +74,12 @@ export function LaunchTool(arg1:string,arg2:boolean,arg3:boolean,arg4:boolean,ar
 
 export function ListPythonEnvironments():Promise<Array<main.PythonEnvironment>>;
 
+export function ListRemoteHubs(arg1:string,arg2:string):Promise<Array<any>>;
+
+export function ListRemoteSessions():Promise<Array<any>>;
+
+export function ListRemoteToolMetadata():Promise<Array<any>>;
+
 export function ListSkills(arg1:string):Promise<Array<main.Skill>>;
 
 export function ListSkillsWithInstallStatus(arg1:string,arg2:string,arg3:string):Promise<Array<main.Skill>>;
@@ -66,6 +96,12 @@ export function ReadThanks():Promise<string>;
 
 export function ReadTutorial():Promise<string>;
 
+export function ReconnectRemoteHub():Promise<void>;
+
+export function RunRemoteClaudeSmoke(arg1:string,arg2:boolean):Promise<any>;
+
+export function RunRemoteToolSmoke(arg1:string,arg2:string,arg3:boolean):Promise<any>;
+
 export function RecoverCC():Promise<void>;
 
 export function ResizeWindow(arg1:number,arg2:number):Promise<void>;
@@ -78,6 +114,8 @@ export function SelectProjectDir():Promise<string>;
 
 export function SelectSkillFile():Promise<string>;
 
+export function SendRemoteSessionInput(arg1:string,arg2:string):Promise<void>;
+
 export function SetEnvCheckInterval(arg1:number):Promise<void>;
 
 export function SetLanguage(arg1:string):Promise<void>;
@@ -87,6 +125,10 @@ export function ShouldCheckEnvironment():Promise<boolean>;
 export function ShowItemInFolder(arg1:string):Promise<void>;
 
 export function ShowMessage(arg1:string,arg2:string):Promise<void>;
+
+export function InterruptRemoteSession(arg1:string):Promise<void>;
+
+export function KillRemoteSession(arg1:string):Promise<void>;
 
 export function UpdateLastEnvCheckTime():Promise<void>;
 

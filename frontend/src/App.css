@@ -186,6 +186,7 @@ body {
     box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.03);
 }
 
+
 /* Tabs */
 .tabs {
     display: flex;
@@ -234,6 +235,77 @@ body {
     height: 3px;
     background-color: var(--primary-color);
     border-radius: 2px 2px 0 0;
+}
+
+.settings-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.settings-top-tabs {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.settings-top-tab {
+    border: 1px solid var(--border-color);
+    background: #ffffff;
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.settings-top-tab:hover {
+    color: var(--primary-dark);
+    border-color: var(--primary-light);
+    background: #f8fbff;
+}
+
+.settings-top-tab.active {
+    color: #ffffff;
+    background: linear-gradient(135deg, var(--primary-dark), var(--primary-color));
+    border-color: transparent;
+    box-shadow: var(--shadow-md);
+}
+
+.settings-panel {
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: var(--shadow-sm);
+}
+
+.settings-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+
+.settings-panel-title {
+    margin: 0 0 4px 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-color);
+}
+
+.settings-panel-desc {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
 }
 
 /* Form Elements */

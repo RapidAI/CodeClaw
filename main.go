@@ -23,6 +23,10 @@ func main() {
 	// Check for command line arguments
 	args := os.Args
 	if len(args) > 1 {
+		if args[1] == "remote-smoke" {
+			code := runRemoteSmoke(app, args[2:])
+			os.Exit(code)
+		}
 		for _, arg := range args[1:] {
 			if arg == "init" {
 				app.IsInitMode = true
@@ -36,14 +40,14 @@ func main() {
 
 	// Create application with options
 	appOptions := &options.App{
-		Title:     "AICoder",
+		Title:     "CodeClaw",
 		Frameless: true,
 		Width:     510,
 		Height:    259,
 		OnStartup: app.startup,
 		OnDomReady: app.domReady,
 		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: "aicoder-lock",
+			UniqueId: "codeclaw-lock",
 			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
 				if app.ctx == nil {
 					return

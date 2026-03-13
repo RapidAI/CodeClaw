@@ -1,0 +1,321 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+type OutputPipeline struct {
+	buffer            PreviewBuffer
+	extract           EventExtractor
+	reducer           SummaryReducer
+	recentEventTimes  map[string]time.Time
+	dedupeWindow      time.Duration
+	recentFileBursts  map[string]fileBurst
+	recentCommandRuns map[string]time.Time
+	burstWindow       time.Duration
+}
+
+type fileBurst struct {
+	eventType string
+	files     []string
+	lastSeen  time.Time
+}
+
+func NewOutputPipeline() *OutputPipeline {
+	return &OutputPipeline{
+		buffer:            NewRingPreviewBuffer(80),
+		extract:           NewClaudeEventExtractor(),
+		reducer:           NewClaudeSummaryReducer(),
+		recentEventTimes:  map[string]time.Time{},
+		dedupeWindow:      2 * time.Second,
+		recentFileBursts:  map[string]fileBurst{},
+		recentCommandRuns: map[string]time.Time{},
+		burstWindow:       4 * time.Second,
+	}
+}
+
+func (p *OutputPipeline) Consume(session *RemoteSession, chunk []byte) OutputResult {
+	lines := normalizeChunkLines(chunk)
+	if len(lines) == 0 {
+		return OutputResult{}
+	}
+
+	events := p.coalesceAcrossBursts(session, p.coalesceEvents(p.filterDuplicateEvents(p.extract.Consume(session, lines))))
+	summary := p.reducer.Apply(session.Summary, events, lines)
+	previewDelta := p.buffer.Append(session.ID, lines)
+
+	return OutputResult{
+		Summary:      &summary,
+		PreviewDelta: previewDelta,
+		Events:       events,
+	}
+}
+
+func (p *OutputPipeline) filterDuplicateEvents(events []ImportantEvent) []ImportantEvent {
+	if len(events) == 0 {
+		return events
+	}
+	if p.recentEventTimes == nil {
+		p.recentEventTimes = map[string]time.Time{}
+	}
+
+	now := time.Now()
+	filtered := make([]ImportantEvent, 0, len(events))
+	for _, event := range events {
+		key := buildEventDedupeKey(event)
+		lastSeen, exists := p.recentEventTimes[key]
+		if exists && now.Sub(lastSeen) < p.dedupeWindow {
+			continue
+		}
+		p.recentEventTimes[key] = now
+		filtered = append(filtered, event)
+	}
+
+	for key, seenAt := range p.recentEventTimes {
+		if now.Sub(seenAt) > 5*p.dedupeWindow {
+			delete(p.recentEventTimes, key)
+		}
+	}
+
+	return filtered
+}
+
+func (p *OutputPipeline) coalesceEvents(events []ImportantEvent) []ImportantEvent {
+	if len(events) < 2 {
+		return events
+	}
+
+	merged := make([]ImportantEvent, 0, len(events))
+	for i := 0; i < len(events); {
+		event := events[i]
+		if event.Type != "file.change" && event.Type != "file.read" {
+			merged = append(merged, event)
+			i++
+			continue
+		}
+
+		j := i + 1
+		files := []string{}
+		seen := map[string]struct{}{}
+		if event.RelatedFile != "" {
+			files = append(files, event.RelatedFile)
+			seen[event.RelatedFile] = struct{}{}
+		}
+
+		for j < len(events) && events[j].Type == event.Type {
+			if file := events[j].RelatedFile; file != "" {
+				if _, ok := seen[file]; !ok {
+					files = append(files, file)
+					seen[file] = struct{}{}
+				}
+			}
+			j++
+		}
+
+		if len(files) <= 1 {
+			event.Count = 1
+			merged = append(merged, event)
+			i++
+			continue
+		}
+
+		event.Title = buildMergedEventTitle(event.Type, len(files))
+		event.Summary = buildMergedEventSummary(event.Type, files)
+		event.Count = len(files)
+		event.Grouped = true
+		event.RelatedFile = files[len(files)-1]
+		merged = append(merged, event)
+		i = j
+	}
+
+	return merged
+}
+
+func (p *OutputPipeline) coalesceAcrossBursts(session *RemoteSession, events []ImportantEvent) []ImportantEvent {
+	if len(events) == 0 || session == nil {
+		return events
+	}
+	if p.recentFileBursts == nil {
+		p.recentFileBursts = map[string]fileBurst{}
+	}
+	if p.recentCommandRuns == nil {
+		p.recentCommandRuns = map[string]time.Time{}
+	}
+
+	now := time.Now()
+	merged := make([]ImportantEvent, 0, len(events))
+	for _, event := range events {
+		if event.Type == "command.started" {
+			key := session.ID + "|" + event.Type + "|" + event.Command
+			lastSeen, ok := p.recentCommandRuns[key]
+			if ok && now.Sub(lastSeen) <= p.burstWindow {
+				continue
+			}
+			p.recentCommandRuns[key] = now
+			merged = append(merged, event)
+			continue
+		}
+		if event.Type != "file.change" && event.Type != "file.read" {
+			merged = append(merged, event)
+			continue
+		}
+
+		key := session.ID + "|" + event.Type
+		burst, ok := p.recentFileBursts[key]
+		if !ok || now.Sub(burst.lastSeen) > p.burstWindow {
+			files := collectEventFiles(event)
+			p.recentFileBursts[key] = fileBurst{
+				eventType: event.Type,
+				files:     files,
+				lastSeen:  now,
+			}
+			merged = append(merged, event)
+			continue
+		}
+
+		files, changed := mergeBurstFiles(burst.files, collectEventFiles(event))
+		burst.files = files
+		burst.lastSeen = now
+		p.recentFileBursts[key] = burst
+		if !changed {
+			continue
+		}
+		if len(files) > 1 {
+			event.Title = buildMergedEventTitle(event.Type, len(files))
+			event.Summary = buildMergedEventSummary(event.Type, files)
+			event.Count = len(files)
+			event.Grouped = true
+			event.RelatedFile = files[len(files)-1]
+		} else if event.Count == 0 {
+			event.Count = 1
+		}
+		merged = append(merged, event)
+	}
+
+	for key, burst := range p.recentFileBursts {
+		if now.Sub(burst.lastSeen) > 2*p.burstWindow {
+			delete(p.recentFileBursts, key)
+		}
+	}
+	for key, seenAt := range p.recentCommandRuns {
+		if now.Sub(seenAt) > 2*p.burstWindow {
+			delete(p.recentCommandRuns, key)
+		}
+	}
+
+	return merged
+}
+
+func buildEventDedupeKey(event ImportantEvent) string {
+	return fmt.Sprintf("%s|%s|%s|%s", event.Type, event.RelatedFile, event.Command, event.Summary)
+}
+
+func buildMergedEventTitle(eventType string, count int) string {
+	switch eventType {
+	case "file.read":
+		return fmt.Sprintf("Inspected %d files", count)
+	case "file.change":
+		return fmt.Sprintf("Changed %d files", count)
+	default:
+		return fmt.Sprintf("%d events", count)
+	}
+}
+
+func buildMergedEventSummary(eventType string, files []string) string {
+	label := "files"
+	verb := "Updated"
+	if eventType == "file.read" {
+		verb = "Inspected"
+	}
+
+	preview := files
+	if len(preview) > 3 {
+		preview = preview[:3]
+	}
+
+	summary := fmt.Sprintf("%s %d %s", verb, len(files), label)
+	if len(preview) > 0 {
+		summary += ": " + strings.Join(preview, ", ")
+		if len(files) > len(preview) {
+			summary += ", ..."
+		}
+	}
+	return summary
+}
+
+func collectEventFiles(event ImportantEvent) []string {
+	files := []string{}
+	if event.RelatedFile != "" {
+		files = append(files, event.RelatedFile)
+	}
+	if idx := strings.Index(event.Summary, ": "); idx >= 0 {
+		for _, part := range strings.Split(event.Summary[idx+2:], ",") {
+			file := strings.TrimSpace(strings.TrimSuffix(part, "..."))
+			if file == "" {
+				continue
+			}
+			files, _ = mergeBurstFiles(files, []string{file})
+		}
+	}
+	return files
+}
+
+func mergeBurstFiles(existing []string, incoming []string) ([]string, bool) {
+	if len(incoming) == 0 {
+		return existing, false
+	}
+
+	seen := make(map[string]struct{}, len(existing))
+	out := append([]string(nil), existing...)
+	for _, file := range existing {
+		if file == "" {
+			continue
+		}
+		seen[file] = struct{}{}
+	}
+
+	changed := false
+	for _, file := range incoming {
+		if file == "" {
+			continue
+		}
+		if _, ok := seen[file]; ok {
+			continue
+		}
+		seen[file] = struct{}{}
+		out = append(out, file)
+		changed = true
+	}
+	return out, changed
+}
+
+func normalizeChunkLines(chunk []byte) []string {
+	text := string(chunk)
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+
+	rawLines := strings.Split(text, "\n")
+	out := make([]string, 0, len(rawLines))
+	for _, line := range rawLines {
+		line = strings.TrimSpace(stripANSI(line))
+		if line == "" || isNoiseLine(line) {
+			continue
+		}
+		if len(line) > 300 {
+			line = line[:300] + "..."
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func stripANSI(s string) string {
+	return s
+}
+
+func isNoiseLine(s string) bool {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	return lower == "" || lower == "." || lower == ".." || lower == "..."
+}

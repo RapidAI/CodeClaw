@@ -5,13 +5,13 @@
 !include "FileFunc.nsh"
 
 !ifndef INFO_PROJECTNAME
-    !define INFO_PROJECTNAME "AICoder"
+!define INFO_PROJECTNAME "CodeClaw"
 !endif
 !ifndef INFO_COMPANYNAME
-    !define INFO_COMPANYNAME "AICoder"
+!define INFO_COMPANYNAME "CodeClaw"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "AICoder"
+!define INFO_PRODUCTNAME "CodeClaw"
 !endif
 !ifndef INFO_PRODUCTVERSION
     !define INFO_PRODUCTVERSION "1.0.0"

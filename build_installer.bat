@@ -2,13 +2,13 @@
 setlocal EnableDelayedExpansion
 
 REM ==============================================================================
-REM == Batch Script to Build and Package the AICoder Application for Windows    ==
+REM == Batch Script to Build and Package the CodeClaw Application for Windows    ==
 REM ==============================================================================
 
 echo [INFO] Starting the build process...
 
 REM -- Set Environment Variables --
-set "APP_NAME=AICoder"
+set "APP_NAME=CodeClaw"
 set "OUTPUT_DIR=%~dp0dist"
 set "NSIS_PATH=C:\Program Files (x86)\NSIS\makensis.exe"
 set "GOVERSIONINFO_PATH=%USERPROFILE%\go\bin\goversioninfo.exe"

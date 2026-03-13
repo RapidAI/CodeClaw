@@ -22,8 +22,8 @@ func setupTray(app *App, appOptions *options.App) {
 				// For now, let's assume 'icon' is defined globally or we use nil.
 				// Based on windows/darwin files, 'icon' seems to be available (likely in a resources file).
 				systray.SetIcon(icon)
-				systray.SetTitle("AICoder")
-				systray.SetTooltip("AICoder Dashboard")
+	systray.SetTitle("CodeClaw")
+	systray.SetTooltip("CodeClaw Dashboard")
 
 				mShow := systray.AddMenuItem("Show", "Show Main Window")
 				mLaunch := systray.AddMenuItem("开始编程", "Start Coding")

@@ -1,0 +1,794 @@
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"time"
+
+	"github.com/RapidAI/CodeClaw/hub/internal/store"
+)
+
+type adminRepo struct{ db *sql.DB }
+type systemRepo struct{ db *sql.DB }
+type adminAuditRepo struct{ db *sql.DB }
+type userRepo struct{ db *sql.DB }
+type enrollmentRepo struct{ db *sql.DB }
+type emailBlockRepo struct{ db *sql.DB }
+type emailInviteRepo struct{ db *sql.DB }
+type machineRepo struct{ db *sql.DB }
+type viewerTokenRepo struct{ db *sql.DB }
+type loginTokenRepo struct{ db *sql.DB }
+type sessionRepo struct{ db *sql.DB }
+
+func NewStore(p *Provider) *store.Store {
+	return &store.Store{
+		Admins:       &adminRepo{db: p.Write},
+		System:       &systemRepo{db: p.Write},
+		AdminAudit:   &adminAuditRepo{db: p.Write},
+		Users:        &userRepo{db: p.Write},
+		Enrollments:  &enrollmentRepo{db: p.Write},
+		EmailBlocks:  &emailBlockRepo{db: p.Write},
+		EmailInvites: &emailInviteRepo{db: p.Write},
+		Machines:     &machineRepo{db: p.Write},
+		ViewerTokens: &viewerTokenRepo{db: p.Write},
+		LoginTokens:  &loginTokenRepo{db: p.Write},
+		Sessions:     &sessionRepo{db: p.Write},
+	}
+}
+
+func (r *adminRepo) Create(ctx context.Context, admin *store.AdminUser) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO admin_users (id, username, password_hash, email, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		admin.ID,
+		admin.Username,
+		admin.PasswordHash,
+		admin.Email,
+		admin.Status,
+		admin.CreatedAt.Format(time.RFC3339),
+		admin.UpdatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (r *adminRepo) GetByUsername(ctx context.Context, username string) (*store.AdminUser, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT id, username, password_hash, email, status, created_at, updated_at
+		 FROM admin_users WHERE username = ?`,
+		username,
+	)
+
+	var (
+		admin                store.AdminUser
+		createdAt, updatedAt string
+	)
+	if err := row.Scan(
+		&admin.ID,
+		&admin.Username,
+		&admin.PasswordHash,
+		&admin.Email,
+		&admin.Status,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	admin.CreatedAt = mustParseTime(createdAt)
+	admin.UpdatedAt = mustParseTime(updatedAt)
+	return &admin, nil
+}
+
+func (r *adminRepo) Count(ctx context.Context) (int, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_users`)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *adminRepo) DeleteAll(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM admin_users`)
+	return err
+}
+
+func (r *adminRepo) UpdatePassword(ctx context.Context, username, passwordHash string, updatedAt time.Time) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE username = ?`,
+		passwordHash,
+		updatedAt.Format(time.RFC3339),
+		username,
+	)
+	return err
+}
+
+func (r *systemRepo) Set(ctx context.Context, key, valueJSON string) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO system_settings (key, value_json, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+		key,
+		valueJSON,
+		time.Now().Format(time.RFC3339),
+	)
+	return err
+}
+
+func (r *systemRepo) Get(ctx context.Context, key string) (string, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT value_json FROM system_settings WHERE key = ?`, key)
+	var value string
+	if err := row.Scan(&value); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+func (r *adminAuditRepo) Create(ctx context.Context, log *store.AdminAuditLog) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO admin_audit_logs (id, admin_user_id, action, payload_json, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		log.ID,
+		log.AdminUserID,
+		log.Action,
+		log.PayloadJSON,
+		log.CreatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (r *userRepo) Create(ctx context.Context, user *store.User) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO users (id, email, sn, status, enrollment_status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		user.ID,
+		user.Email,
+		user.SN,
+		user.Status,
+		user.EnrollmentStatus,
+		user.CreatedAt.Format(time.RFC3339),
+		user.UpdatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (r *userRepo) GetByID(ctx context.Context, id string) (*store.User, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT id, email, sn, status, enrollment_status, created_at, updated_at
+		 FROM users WHERE id = ?`,
+		id,
+	)
+
+	var (
+		user                 store.User
+		createdAt, updatedAt string
+	)
+	if err := row.Scan(
+		&user.ID,
+		&user.Email,
+		&user.SN,
+		&user.Status,
+		&user.EnrollmentStatus,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	user.CreatedAt = mustParseTime(createdAt)
+	user.UpdatedAt = mustParseTime(updatedAt)
+	return &user, nil
+}
+
+func (r *userRepo) GetByEmail(ctx context.Context, email string) (*store.User, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT id, email, sn, status, enrollment_status, created_at, updated_at
+		 FROM users WHERE email = ?`,
+		email,
+	)
+
+	var (
+		user                 store.User
+		createdAt, updatedAt string
+	)
+	if err := row.Scan(
+		&user.ID,
+		&user.Email,
+		&user.SN,
+		&user.Status,
+		&user.EnrollmentStatus,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	user.CreatedAt = mustParseTime(createdAt)
+	user.UpdatedAt = mustParseTime(updatedAt)
+	return &user, nil
+}
+
+func (r *userRepo) List(ctx context.Context) ([]*store.User, error) {
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, email, sn, status, enrollment_status, created_at, updated_at
+		 FROM users
+		 ORDER BY updated_at DESC, email ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*store.User
+	for rows.Next() {
+		var (
+			user                 store.User
+			createdAt, updatedAt string
+		)
+		if err := rows.Scan(
+			&user.ID,
+			&user.Email,
+			&user.SN,
+			&user.Status,
+			&user.EnrollmentStatus,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		user.CreatedAt = mustParseTime(createdAt)
+		user.UpdatedAt = mustParseTime(updatedAt)
+		items = append(items, &user)
+	}
+	return items, rows.Err()
+}
+
+func (r *enrollmentRepo) Create(ctx context.Context, item *store.UserEnrollment) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO user_enrollments (id, email, status, note, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		item.ID,
+		item.Email,
+		item.Status,
+		item.Note,
+		item.CreatedAt.Format(time.RFC3339),
+		item.UpdatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (r *enrollmentRepo) GetPendingByEmail(ctx context.Context, email string) (*store.UserEnrollment, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT id, email, status, note, created_at, updated_at
+		 FROM user_enrollments WHERE email = ? AND status = 'pending'
+		 ORDER BY created_at DESC LIMIT 1`,
+		email,
+	)
+	var item store.UserEnrollment
+	var createdAt, updatedAt string
+	if err := row.Scan(&item.ID, &item.Email, &item.Status, &item.Note, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	item.CreatedAt = mustParseTime(createdAt)
+	item.UpdatedAt = mustParseTime(updatedAt)
+	return &item, nil
+}
+
+func (r *enrollmentRepo) ListPending(ctx context.Context) ([]*store.UserEnrollment, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, email, status, note, created_at, updated_at FROM user_enrollments WHERE status = 'pending' ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*store.UserEnrollment
+	for rows.Next() {
+		var item store.UserEnrollment
+		var createdAt, updatedAt string
+		if err := rows.Scan(&item.ID, &item.Email, &item.Status, &item.Note, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = mustParseTime(createdAt)
+		item.UpdatedAt = mustParseTime(updatedAt)
+		items = append(items, &item)
+	}
+	return items, rows.Err()
+}
+
+func (r *enrollmentRepo) Approve(ctx context.Context, id string, updatedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE user_enrollments SET status = 'approved', updated_at = ? WHERE id = ?`, updatedAt.Format(time.RFC3339), id)
+	return err
+}
+
+func (r *enrollmentRepo) Reject(ctx context.Context, id string, updatedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE user_enrollments SET status = 'rejected', updated_at = ? WHERE id = ?`, updatedAt.Format(time.RFC3339), id)
+	return err
+}
+
+func (r *emailBlockRepo) Create(ctx context.Context, item *store.EmailBlockItem) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO email_blocklist (id, email, reason, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(email) DO UPDATE SET reason = excluded.reason, updated_at = excluded.updated_at`,
+		item.ID,
+		item.Email,
+		item.Reason,
+		item.CreatedAt.Format(time.RFC3339),
+		item.UpdatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (r *emailBlockRepo) DeleteByEmail(ctx context.Context, email string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM email_blocklist WHERE email = ?`, email)
+	return err
+}
+
+func (r *emailBlockRepo) GetByEmail(ctx context.Context, email string) (*store.EmailBlockItem, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT id, email, reason, created_at, updated_at FROM email_blocklist WHERE email = ?`, email)
+	var item store.EmailBlockItem
+	var createdAt, updatedAt string
+	if err := row.Scan(&item.ID, &item.Email, &item.Reason, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	item.CreatedAt = mustParseTime(createdAt)
+	item.UpdatedAt = mustParseTime(updatedAt)
+	return &item, nil
+}
+
+func (r *emailBlockRepo) List(ctx context.Context) ([]*store.EmailBlockItem, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, email, reason, created_at, updated_at FROM email_blocklist ORDER BY email ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*store.EmailBlockItem
+	for rows.Next() {
+		var item store.EmailBlockItem
+		var createdAt, updatedAt string
+		if err := rows.Scan(&item.ID, &item.Email, &item.Reason, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = mustParseTime(createdAt)
+		item.UpdatedAt = mustParseTime(updatedAt)
+		items = append(items, &item)
+	}
+	return items, rows.Err()
+}
+
+func (r *emailInviteRepo) Create(ctx context.Context, item *store.EmailInvite) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO email_invites (id, email, role, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		item.ID,
+		item.Email,
+		item.Role,
+		item.Status,
+		item.CreatedAt.Format(time.RFC3339),
+		item.UpdatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (r *emailInviteRepo) UpdateStatus(ctx context.Context, id string, status string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE email_invites SET status = ?, updated_at = ? WHERE id = ?`, status, time.Now().Format(time.RFC3339), id)
+	return err
+}
+
+func (r *emailInviteRepo) GetByEmail(ctx context.Context, email string) ([]*store.EmailInvite, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, email, role, status, created_at, updated_at FROM email_invites WHERE email = ? ORDER BY created_at DESC`, email)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanInvites(rows)
+}
+
+func (r *emailInviteRepo) List(ctx context.Context) ([]*store.EmailInvite, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, email, role, status, created_at, updated_at FROM email_invites ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanInvites(rows)
+}
+
+func scanInvites(rows *sql.Rows) ([]*store.EmailInvite, error) {
+	var items []*store.EmailInvite
+	for rows.Next() {
+		var item store.EmailInvite
+		var createdAt, updatedAt string
+		if err := rows.Scan(&item.ID, &item.Email, &item.Role, &item.Status, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = mustParseTime(createdAt)
+		item.UpdatedAt = mustParseTime(updatedAt)
+		items = append(items, &item)
+	}
+	return items, rows.Err()
+}
+
+func (r *machineRepo) Create(ctx context.Context, machine *store.Machine) error {
+	var lastSeen any
+	if machine.LastSeenAt != nil {
+		lastSeen = machine.LastSeenAt.Format(time.RFC3339)
+	}
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO machines (id, user_id, name, platform, machine_token_hash, status, last_seen_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		machine.ID,
+		machine.UserID,
+		machine.Name,
+		machine.Platform,
+		machine.MachineTokenHash,
+		machine.Status,
+		lastSeen,
+		machine.CreatedAt.Format(time.RFC3339),
+		machine.UpdatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (r *machineRepo) GetByID(ctx context.Context, id string) (*store.Machine, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT id, user_id, name, platform, machine_token_hash, status, last_seen_at, created_at, updated_at
+		 FROM machines WHERE id = ?`,
+		id,
+	)
+
+	var (
+		machine                        store.Machine
+		lastSeen, createdAt, updatedAt sql.NullString
+	)
+	if err := row.Scan(
+		&machine.ID,
+		&machine.UserID,
+		&machine.Name,
+		&machine.Platform,
+		&machine.MachineTokenHash,
+		&machine.Status,
+		&lastSeen,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if lastSeen.Valid {
+		t := mustParseTime(lastSeen.String)
+		machine.LastSeenAt = &t
+	}
+	if createdAt.Valid {
+		machine.CreatedAt = mustParseTime(createdAt.String)
+	}
+	if updatedAt.Valid {
+		machine.UpdatedAt = mustParseTime(updatedAt.String)
+	}
+	return &machine, nil
+}
+
+func (r *machineRepo) ListByUserID(ctx context.Context, userID string) ([]*store.Machine, error) {
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, user_id, name, platform, machine_token_hash, status, last_seen_at, created_at, updated_at
+		 FROM machines WHERE user_id = ? ORDER BY updated_at DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*store.Machine
+	for rows.Next() {
+		var (
+			machine                        store.Machine
+			lastSeen, createdAt, updatedAt sql.NullString
+		)
+		if err := rows.Scan(
+			&machine.ID,
+			&machine.UserID,
+			&machine.Name,
+			&machine.Platform,
+			&machine.MachineTokenHash,
+			&machine.Status,
+			&lastSeen,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if lastSeen.Valid {
+			t := mustParseTime(lastSeen.String)
+			machine.LastSeenAt = &t
+		}
+		if createdAt.Valid {
+			machine.CreatedAt = mustParseTime(createdAt.String)
+		}
+		if updatedAt.Valid {
+			machine.UpdatedAt = mustParseTime(updatedAt.String)
+		}
+		items = append(items, &machine)
+	}
+
+	return items, rows.Err()
+}
+
+func (r *machineRepo) UpdateStatus(ctx context.Context, machineID string, status string) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE machines SET status = ?, updated_at = ? WHERE id = ?`,
+		status,
+		time.Now().Format(time.RFC3339),
+		machineID,
+	)
+	return err
+}
+
+func (r *machineRepo) UpdateHeartbeat(ctx context.Context, machineID string, at time.Time) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE machines SET last_seen_at = ?, updated_at = ? WHERE id = ?`,
+		at.Format(time.RFC3339),
+		at.Format(time.RFC3339),
+		machineID,
+	)
+	return err
+}
+
+func (r *viewerTokenRepo) Create(ctx context.Context, token *store.ViewerToken) error {
+	var revokedAt any
+	if token.RevokedAt != nil {
+		revokedAt = token.RevokedAt.Format(time.RFC3339)
+	}
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO viewer_tokens (id, user_id, token_hash, expires_at, created_at, revoked_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		token.ID,
+		token.UserID,
+		token.TokenHash,
+		token.ExpiresAt.Format(time.RFC3339),
+		token.CreatedAt.Format(time.RFC3339),
+		revokedAt,
+	)
+	return err
+}
+
+func (r *viewerTokenRepo) GetByTokenHash(ctx context.Context, tokenHash string) (*store.ViewerToken, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT id, user_id, token_hash, expires_at, created_at, revoked_at
+		 FROM viewer_tokens WHERE token_hash = ?`,
+		tokenHash,
+	)
+
+	var (
+		token                           store.ViewerToken
+		expiresAt, createdAt, revokedAt sql.NullString
+	)
+	if err := row.Scan(
+		&token.ID,
+		&token.UserID,
+		&token.TokenHash,
+		&expiresAt,
+		&createdAt,
+		&revokedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if expiresAt.Valid {
+		token.ExpiresAt = mustParseTime(expiresAt.String)
+	}
+	if createdAt.Valid {
+		token.CreatedAt = mustParseTime(createdAt.String)
+	}
+	if revokedAt.Valid {
+		t := mustParseTime(revokedAt.String)
+		token.RevokedAt = &t
+	}
+	return &token, nil
+}
+
+func (r *loginTokenRepo) Create(ctx context.Context, token *store.LoginToken) error {
+	var consumedAt any
+	if token.ConsumedAt != nil {
+		consumedAt = token.ConsumedAt.Format(time.RFC3339)
+	}
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO login_tokens (id, email, token_hash, purpose, expires_at, consumed_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		token.ID,
+		token.Email,
+		token.TokenHash,
+		token.Purpose,
+		token.ExpiresAt.Format(time.RFC3339),
+		consumedAt,
+		token.CreatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (r *loginTokenRepo) GetByTokenHash(ctx context.Context, tokenHash string) (*store.LoginToken, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT id, email, token_hash, purpose, expires_at, consumed_at, created_at
+		 FROM login_tokens WHERE token_hash = ?`,
+		tokenHash,
+	)
+
+	var (
+		token                            store.LoginToken
+		expiresAt, consumedAt, createdAt sql.NullString
+	)
+	if err := row.Scan(
+		&token.ID,
+		&token.Email,
+		&token.TokenHash,
+		&token.Purpose,
+		&expiresAt,
+		&consumedAt,
+		&createdAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if expiresAt.Valid {
+		token.ExpiresAt = mustParseTime(expiresAt.String)
+	}
+	if consumedAt.Valid {
+		t := mustParseTime(consumedAt.String)
+		token.ConsumedAt = &t
+	}
+	if createdAt.Valid {
+		token.CreatedAt = mustParseTime(createdAt.String)
+	}
+	return &token, nil
+}
+
+func (r *loginTokenRepo) Consume(ctx context.Context, tokenID string, consumedAt time.Time) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE login_tokens SET consumed_at = ? WHERE id = ?`,
+		consumedAt.Format(time.RFC3339),
+		tokenID,
+	)
+	return err
+}
+
+func (r *sessionRepo) Create(ctx context.Context, session *store.Session) error {
+	var endedAt any
+	if session.EndedAt != nil {
+		endedAt = session.EndedAt.Format(time.RFC3339)
+	}
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO sessions (id, machine_id, user_id, tool, title, project_path, status, summary_json, preview_text, output_seq, host_online, started_at, updated_at, ended_at, exit_code)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		session.ID,
+		session.MachineID,
+		session.UserID,
+		session.Tool,
+		session.Title,
+		session.ProjectPath,
+		session.Status,
+		session.SummaryJSON,
+		session.PreviewText,
+		session.OutputSeq,
+		boolToInt(session.HostOnline),
+		session.StartedAt.Format(time.RFC3339),
+		session.UpdatedAt.Format(time.RFC3339),
+		endedAt,
+		session.ExitCode,
+	)
+	return err
+}
+
+func (r *sessionRepo) UpdateSummary(ctx context.Context, sessionID string, summaryJSON string, status string, updatedAt time.Time) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET summary_json = ?, status = ?, updated_at = ? WHERE id = ?`,
+		summaryJSON,
+		status,
+		updatedAt.Format(time.RFC3339),
+		sessionID,
+	)
+	return err
+}
+
+func (r *sessionRepo) UpdatePreview(ctx context.Context, sessionID string, previewText string, outputSeq int64, updatedAt time.Time) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET preview_text = ?, output_seq = ?, updated_at = ? WHERE id = ?`,
+		previewText,
+		outputSeq,
+		updatedAt.Format(time.RFC3339),
+		sessionID,
+	)
+	return err
+}
+
+func (r *sessionRepo) UpdateHostOnline(ctx context.Context, sessionID string, hostOnline bool, updatedAt time.Time) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET host_online = ?, updated_at = ? WHERE id = ?`,
+		boolToInt(hostOnline),
+		updatedAt.Format(time.RFC3339),
+		sessionID,
+	)
+	return err
+}
+
+func (r *sessionRepo) Close(ctx context.Context, sessionID string, exitCode *int, endedAt time.Time, status string) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET status = ?, ended_at = ?, exit_code = ?, updated_at = ? WHERE id = ?`,
+		status,
+		endedAt.Format(time.RFC3339),
+		exitCode,
+		endedAt.Format(time.RFC3339),
+		sessionID,
+	)
+	return err
+}
+
+func mustParseTime(v string) time.Time {
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}

@@ -1,13 +1,13 @@
 Unicode true
 
 !ifndef INFO_PROJECTNAME
-    !define INFO_PROJECTNAME "AICoder"
+!define INFO_PROJECTNAME "CodeClaw"
 !endif
 !ifndef INFO_COMPANYNAME
     !define INFO_COMPANYNAME "RapidAI"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "AICoder"
+!define INFO_PRODUCTNAME "CodeClaw"
 !endif
 !ifndef INFO_PRODUCTVERSION
     !define INFO_PRODUCTVERSION "4.1.0.9200"
@@ -16,7 +16,7 @@ Unicode true
     !define INFO_COPYRIGHT "Copyright (C) 2026 RapidAI"
 !endif
 !ifndef PRODUCT_EXECUTABLE
-    !define PRODUCT_EXECUTABLE "AICoder.exe"
+!define PRODUCT_EXECUTABLE "CodeClaw.exe"
 !endif
 !ifndef REQUEST_EXECUTION_LEVEL
     !define REQUEST_EXECUTION_LEVEL "admin"
@@ -24,10 +24,10 @@ Unicode true
 
 # Define Wails binaries (passed from command line or hardcoded here for manual build)
 !ifndef ARG_WAILS_AMD64_BINARY
-    !define ARG_WAILS_AMD64_BINARY "..\..\..\dist\AICoder_amd64.exe"
+!define ARG_WAILS_AMD64_BINARY "..\..\..\dist\CodeClaw_amd64.exe"
 !endif
 !ifndef ARG_WAILS_ARM64_BINARY
-    !define ARG_WAILS_ARM64_BINARY "..\..\..\dist\AICoder_arm64.exe"
+!define ARG_WAILS_ARM64_BINARY "..\..\..\dist\CodeClaw_arm64.exe"
 !endif
 
 VIProductVersion "${INFO_PRODUCTVERSION}"

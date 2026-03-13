@@ -1,0 +1,28 @@
+server:
+  listen_host: 0.0.0.0
+  listen_port: 9388
+  public_base_url: https://hubs.rapidai.tech
+
+database:
+  driver: sqlite
+  dsn: ./data/codeclaw-hubcenter.db
+  wal: true
+  busy_timeout_ms: 5000
+  max_read_open_conns: 8
+  max_read_idle_conns: 4
+  max_write_open_conns: 1
+  max_write_idle_conns: 1
+
+mail:
+  enabled: false
+  provider: smtp
+  smtp_host: smtp.example.com
+  smtp_port: 587
+  smtp_username: no-reply@example.com
+  smtp_password: change-me
+  from_name: CodeClaw Hub Center
+  from_email: no-reply@example.com
+
+logging:
+  level: info
+  dir: ./data/logs

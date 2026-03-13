@@ -35,6 +35,7 @@ type App struct {
 	installMutex      sync.Mutex
 	toolInstallLocks  map[string]bool // Track which tools are currently being installed
 	toolLockMutex     sync.Mutex      // Mutex for toolInstallLocks map
+	remoteSessions    *RemoteSessionManager
 }
 
 var OnConfigChanged func(AppConfig)
@@ -125,7 +126,15 @@ type AppConfig struct {
 	DefaultProxyUsername string `json:"default_proxy_username"`
 	DefaultProxyPassword string `json:"default_proxy_password"`
 	// Terminal settings (Windows only)
-	UseWindowsTerminal bool `json:"use_windows_terminal"` // Use Windows Terminal instead of cmd.exe
+	UseWindowsTerminal bool   `json:"use_windows_terminal"` // Use Windows Terminal instead of cmd.exe
+	RemoteEnabled      bool   `json:"remote_enabled"`
+	RemoteHubURL       string `json:"remote_hub_url"`
+	RemoteHubCenterURL string `json:"remote_hubcenter_url"`
+	RemoteEmail        string `json:"remote_email"`
+	RemoteSN           string `json:"remote_sn"`
+	RemoteUserID       string `json:"remote_user_id"`
+	RemoteMachineID    string `json:"remote_machine_id"`
+	RemoteMachineToken string `json:"remote_machine_token"`
 }
 type Skill struct {
 	Name        string `json:"name"`
@@ -189,6 +198,12 @@ func (a *App) startup(ctx context.Context) {
 		if config.Language != "" {
 			a.SetLanguage(config.Language)
 		}
+		if config.RemoteMachineID != "" && config.RemoteMachineToken != "" && config.RemoteHubURL != "" {
+			a.remoteSessions = NewRemoteSessionManager(a)
+			hubClient := NewRemoteHubClient(a, a.remoteSessions)
+			a.remoteSessions.SetHubClient(hubClient)
+			_ = hubClient.Connect()
+		}
 	}
 }
 
@@ -198,6 +213,397 @@ func (a *App) domReady(ctx context.Context) {
 	// IsInitMode and PauseEnvCheck logic is handled inside CheckEnvironment
 	a.CheckEnvironment(false)
 }
+
+func (a *App) resolveProjectProxyURL(config AppConfig, projectDir string) string {
+	var proxyHost, proxyPort, proxyUsername, proxyPassword string
+
+	var targetProj *ProjectConfig
+	for i := range config.Projects {
+		if config.Projects[i].Path == projectDir {
+			targetProj = &config.Projects[i]
+			break
+		}
+	}
+	if targetProj == nil {
+		for i := range config.Projects {
+			if config.Projects[i].Id == config.CurrentProject {
+				targetProj = &config.Projects[i]
+				break
+			}
+		}
+	}
+
+	if targetProj != nil {
+		proxyHost = targetProj.ProxyHost
+		proxyPort = targetProj.ProxyPort
+		proxyUsername = targetProj.ProxyUsername
+		proxyPassword = targetProj.ProxyPassword
+	}
+
+	if proxyHost == "" {
+		proxyHost = config.DefaultProxyHost
+		proxyPort = config.DefaultProxyPort
+		proxyUsername = config.DefaultProxyUsername
+		proxyPassword = config.DefaultProxyPassword
+	}
+
+	if proxyHost == "" || proxyPort == "" {
+		return ""
+	}
+
+	if proxyUsername != "" && proxyPassword != "" {
+		return fmt.Sprintf("http://%s:%s@%s:%s", proxyUsername, proxyPassword, proxyHost, proxyPort)
+	}
+	return fmt.Sprintf("http://%s:%s", proxyHost, proxyPort)
+}
+
+func (a *App) buildClaudeLaunchEnv(
+	config AppConfig,
+	selectedModel *ModelConfig,
+	projectDir string,
+	useProxy bool,
+) (map[string]string, error) {
+	if selectedModel == nil {
+		return nil, fmt.Errorf("selected claude model is nil")
+	}
+
+	env := map[string]string{}
+	env["CLAUDE_CODE_USE_COLORS"] = "true"
+	env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "64000"
+
+	if strings.ToLower(selectedModel.ModelName) != "original" {
+		if selectedModel.ApiKey != "" {
+			env["ANTHROPIC_AUTH_TOKEN"] = selectedModel.ApiKey
+		}
+		if selectedModel.ModelUrl != "" {
+			env["ANTHROPIC_BASE_URL"] = selectedModel.ModelUrl
+		}
+		if selectedModel.ModelId != "" {
+			env["ANTHROPIC_MODEL"] = selectedModel.ModelId
+			env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = selectedModel.ModelId
+			env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = selectedModel.ModelId
+			env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = selectedModel.ModelId
+		}
+	}
+
+	switch strings.ToLower(selectedModel.ModelName) {
+	case "鐧惧害鍗冨竼", "百度千帆", "qianfan":
+		modelID := selectedModel.ModelId
+		if modelID == "" {
+			modelID = "qianfan-code-latest"
+		}
+		env["ANTHROPIC_AUTH_TOKEN"] = selectedModel.ApiKey
+		env["ANTHROPIC_BASE_URL"] = "https://qianfan.baidubce.com/anthropic/coding"
+		env["ANTHROPIC_MODEL"] = modelID
+		env["ANTHROPIC_SMALL_FAST_MODEL"] = modelID
+		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+		env["API_TIMEOUT_MS"] = "600000"
+	}
+
+	for _, proj := range config.Projects {
+		if proj.Path == projectDir || proj.Id == config.CurrentProject {
+			if proj.TeamMode {
+				env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+			}
+			break
+		}
+	}
+
+	if useProxy {
+		proxyURL := a.resolveProjectProxyURL(config, projectDir)
+		if proxyURL != "" {
+			env["HTTP_PROXY"] = proxyURL
+			env["HTTPS_PROXY"] = proxyURL
+			env["http_proxy"] = proxyURL
+			env["https_proxy"] = proxyURL
+		}
+	}
+
+	a.clearClaudeConfig()
+	return env, nil
+}
+
+func (a *App) buildClaudeLaunchSpec(
+	config AppConfig,
+	yoloMode bool,
+	adminMode bool,
+	pythonEnv string,
+	projectDir string,
+	useProxy bool,
+) (LaunchSpec, error) {
+	return a.buildRemoteLaunchSpec("claude", config, yoloMode, adminMode, pythonEnv, projectDir, useProxy)
+}
+
+func (a *App) buildCodexLaunchEnv(
+	config AppConfig,
+	selectedModel *ModelConfig,
+	projectDir string,
+	useProxy bool,
+) (map[string]string, error) {
+	if selectedModel == nil {
+		return nil, fmt.Errorf("selected codex model is nil")
+	}
+
+	env := map[string]string{}
+	if selectedModel.ApiKey != "" {
+		env["OPENAI_API_KEY"] = selectedModel.ApiKey
+	}
+	if selectedModel.ModelUrl != "" {
+		env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
+	}
+	if selectedModel.ModelId != "" {
+		env["OPENAI_MODEL"] = selectedModel.ModelId
+	}
+	wireAPI := strings.TrimSpace(selectedModel.WireApi)
+	if wireAPI == "" {
+		wireAPI = "responses"
+	}
+	env["WIRE_API"] = wireAPI
+
+	if useProxy {
+		proxyURL := a.resolveProjectProxyURL(config, projectDir)
+		if proxyURL != "" {
+			env["HTTP_PROXY"] = proxyURL
+			env["HTTPS_PROXY"] = proxyURL
+			env["http_proxy"] = proxyURL
+			env["https_proxy"] = proxyURL
+		}
+	}
+
+	a.clearCodexConfig()
+	return env, nil
+}
+
+func (a *App) buildOpencodeLaunchEnv(
+	config AppConfig,
+	selectedModel *ModelConfig,
+	projectDir string,
+	useProxy bool,
+) (map[string]string, error) {
+	if selectedModel == nil {
+		return nil, fmt.Errorf("selected opencode model is nil")
+	}
+
+	env := map[string]string{}
+	if selectedModel.ApiKey != "" {
+		env["OPENCODE_API_KEY"] = selectedModel.ApiKey
+	}
+	if selectedModel.ModelUrl != "" {
+		env["OPENCODE_BASE_URL"] = selectedModel.ModelUrl
+	}
+	if selectedModel.ModelId != "" {
+		env["OPENCODE_MODEL"] = selectedModel.ModelId
+	}
+
+	if useProxy {
+		proxyURL := a.resolveProjectProxyURL(config, projectDir)
+		if proxyURL != "" {
+			env["HTTP_PROXY"] = proxyURL
+			env["HTTPS_PROXY"] = proxyURL
+			env["http_proxy"] = proxyURL
+			env["https_proxy"] = proxyURL
+		}
+	}
+
+	return env, nil
+}
+
+func (a *App) buildIFlowLaunchEnv(
+	config AppConfig,
+	selectedModel *ModelConfig,
+	projectDir string,
+	useProxy bool,
+) (map[string]string, error) {
+	if selectedModel == nil {
+		return nil, fmt.Errorf("selected iflow model is nil")
+	}
+
+	env := map[string]string{}
+	if selectedModel.ApiKey != "" {
+		env["OPENAI_API_KEY"] = selectedModel.ApiKey
+		env["IFLOW_API_KEY"] = selectedModel.ApiKey
+	}
+	if selectedModel.ModelUrl != "" {
+		env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
+		env["IFLOW_BASE_URL"] = selectedModel.ModelUrl
+	}
+	if selectedModel.ModelId != "" {
+		env["IFLOW_MODEL"] = selectedModel.ModelId
+	}
+
+	if useProxy {
+		proxyURL := a.resolveProjectProxyURL(config, projectDir)
+		if proxyURL != "" {
+			env["HTTP_PROXY"] = proxyURL
+			env["HTTPS_PROXY"] = proxyURL
+			env["http_proxy"] = proxyURL
+			env["https_proxy"] = proxyURL
+		}
+	}
+
+	return env, nil
+}
+
+func (a *App) buildKiloLaunchEnv(
+	config AppConfig,
+	selectedModel *ModelConfig,
+	projectDir string,
+	useProxy bool,
+) (map[string]string, error) {
+	if selectedModel == nil {
+		return nil, fmt.Errorf("selected kilo model is nil")
+	}
+
+	env := map[string]string{}
+	if selectedModel.ApiKey != "" {
+		env["OPENAI_API_KEY"] = selectedModel.ApiKey
+		env["KILO_API_KEY"] = selectedModel.ApiKey
+	}
+	if selectedModel.ModelUrl != "" {
+		env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
+		env["KILO_BASE_URL"] = selectedModel.ModelUrl
+	}
+	if selectedModel.ModelId != "" {
+		env["KILO_MODEL"] = selectedModel.ModelId
+	}
+
+	if useProxy {
+		proxyURL := a.resolveProjectProxyURL(config, projectDir)
+		if proxyURL != "" {
+			env["HTTP_PROXY"] = proxyURL
+			env["HTTPS_PROXY"] = proxyURL
+			env["http_proxy"] = proxyURL
+			env["https_proxy"] = proxyURL
+		}
+	}
+
+	return env, nil
+}
+
+func (a *App) buildKodeLaunchEnv(
+	config AppConfig,
+	selectedModel *ModelConfig,
+	projectDir string,
+	useProxy bool,
+) (map[string]string, error) {
+	if selectedModel == nil {
+		return nil, fmt.Errorf("selected kode model is nil")
+	}
+
+	env := map[string]string{}
+	if selectedModel.ApiKey != "" {
+		env["OPENAI_API_KEY"] = selectedModel.ApiKey
+	}
+	if selectedModel.ModelUrl != "" {
+		env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
+	}
+
+	if useProxy {
+		proxyURL := a.resolveProjectProxyURL(config, projectDir)
+		if proxyURL != "" {
+			env["HTTP_PROXY"] = proxyURL
+			env["HTTPS_PROXY"] = proxyURL
+			env["http_proxy"] = proxyURL
+			env["https_proxy"] = proxyURL
+		}
+	}
+
+	return env, nil
+}
+
+func (a *App) buildRemoteLaunchEnvForTool(
+	toolName string,
+	config AppConfig,
+	selectedModel *ModelConfig,
+	projectDir string,
+	useProxy bool,
+) (map[string]string, error) {
+	switch normalizeRemoteToolName(toolName) {
+	case "claude":
+		return a.buildClaudeLaunchEnv(config, selectedModel, projectDir, useProxy)
+	case "codex":
+		return a.buildCodexLaunchEnv(config, selectedModel, projectDir, useProxy)
+	case "opencode":
+		return a.buildOpencodeLaunchEnv(config, selectedModel, projectDir, useProxy)
+	case "iflow":
+		return a.buildIFlowLaunchEnv(config, selectedModel, projectDir, useProxy)
+	case "kilo":
+		return a.buildKiloLaunchEnv(config, selectedModel, projectDir, useProxy)
+	case "kode":
+		return a.buildKodeLaunchEnv(config, selectedModel, projectDir, useProxy)
+	default:
+		return nil, fmt.Errorf("remote launch is not supported for tool: %s", toolName)
+	}
+}
+
+func (a *App) buildRemoteLaunchSpec(
+	toolName string,
+	config AppConfig,
+	yoloMode bool,
+	adminMode bool,
+	pythonEnv string,
+	projectDir string,
+	useProxy bool,
+) (LaunchSpec, error) {
+	tool := normalizeRemoteToolName(toolName)
+	meta, err := getRemoteToolMetadata(tool)
+	if err != nil {
+		return LaunchSpec{}, err
+	}
+	toolCfg := meta.ConfigSelector(config)
+	var selectedModel *ModelConfig
+	for _, m := range toolCfg.Models {
+		if m.ModelName == toolCfg.CurrentModel {
+			model := m
+			selectedModel = &model
+			break
+		}
+	}
+	if selectedModel == nil || toolCfg.CurrentModel == "" {
+		return LaunchSpec{}, fmt.Errorf("no %s provider selected", tool)
+	}
+
+	if projectDir == "" {
+		projectDir = a.GetCurrentProjectPath()
+	}
+	projectDir = filepath.Clean(projectDir)
+
+	env, err := a.buildRemoteLaunchEnvForTool(tool, config, selectedModel, projectDir, useProxy)
+	if err != nil {
+		return LaunchSpec{}, err
+	}
+
+	title := filepath.Base(projectDir)
+	if title == "" || title == "." || title == string(filepath.Separator) {
+		title = meta.DefaultTitle
+	}
+
+	teamMode := false
+	if tool == "claude" {
+		for _, proj := range config.Projects {
+			if proj.Path == projectDir || proj.Id == config.CurrentProject {
+				teamMode = proj.TeamMode
+				break
+			}
+		}
+	}
+
+	return LaunchSpec{
+		Tool:        tool,
+		ProjectPath: projectDir,
+		ModelName:   selectedModel.ModelName,
+		ModelID:     selectedModel.ModelId,
+		BinaryName:  meta.BinaryName,
+		Title:       title,
+		YoloMode:    yoloMode,
+		AdminMode:   adminMode,
+		PythonEnv:   pythonEnv,
+		UseProxy:    useProxy,
+		TeamMode:    teamMode,
+		Env:         env,
+	}, nil
+}
+
 func (a *App) startConfigWatcher() {
 	var err error
 	a.watcher, err = fsnotify.NewWatcher()
@@ -1280,6 +1686,10 @@ func (a *App) syncToKodeSettings(config AppConfig, projectDir string, instanceID
 		kodeConfigPath = filepath.Join(home, ".kode.json")
 	}
 
+	if err := os.MkdirAll(filepath.Dir(kodeConfigPath), 0755); err != nil {
+		return err
+	}
+
 	// Create model profile
 	modelProfile := map[string]interface{}{
 		"name":          fmt.Sprintf("Custom OpenAI-Compatible API %s", selectedModel.ModelId),
@@ -1779,6 +2189,27 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 		}
 	}
 
+	if config.RemoteEnabled && (strings.ToLower(toolName) == "claude" || strings.ToLower(toolName) == "codex" || strings.ToLower(toolName) == "opencode" || strings.ToLower(toolName) == "iflow" || strings.ToLower(toolName) == "kilo" || strings.ToLower(toolName) == "kode") {
+		spec, err := a.buildRemoteLaunchSpec(toolName, config, yoloMode, adminMode, pythonEnv, projectDir, useProxy)
+		if err != nil {
+			a.log("build remote launch spec failed: " + err.Error())
+			return
+		}
+
+		if a.remoteSessions == nil {
+			a.remoteSessions = NewRemoteSessionManager(a)
+			hubClient := NewRemoteHubClient(a, a.remoteSessions)
+			a.remoteSessions.SetHubClient(hubClient)
+			_ = hubClient.Connect()
+		}
+
+		_, err = a.remoteSessions.Create(spec)
+		if err != nil {
+			a.log("create remote session failed: " + err.Error())
+		}
+		return
+	}
+
 	// Platform specific launch
 	a.platformLaunch(binaryName, yoloMode, adminMode, pythonEnv, projectDir, env, selectedModel.ModelId)
 }
@@ -1985,17 +2416,25 @@ func (a *App) LoadConfig() (AppConfig, error) {
 							CurrentModel: "ChatFire",
 							Models:       defaultKodeModels,
 						},
-						Projects:       oldConfig.Projects,
-						CurrentProject: oldConfig.CurrentProj,
-						ActiveTool:     "claude",
-						ShowGemini:     true,
-						ShowCodex:      true,
-						ShowOpenCode:   true,
-						ShowKode:       true,
-						ShowCodeBuddy:  true,
-						ShowQoder:      true,
-						ShowIFlow:      true,
-						ShowKilo:       true,
+						Projects:           oldConfig.Projects,
+						CurrentProject:     oldConfig.CurrentProj,
+						ActiveTool:         "claude",
+						ShowGemini:         true,
+						ShowCodex:          true,
+						ShowOpenCode:       true,
+						ShowKode:           true,
+						ShowCodeBuddy:      true,
+						ShowQoder:          true,
+						ShowIFlow:          true,
+						ShowKilo:           true,
+						RemoteEnabled:      false,
+						RemoteHubURL:       "",
+						RemoteHubCenterURL: "http://127.0.0.1:9388",
+						RemoteEmail:        "",
+						RemoteSN:           "",
+						RemoteUserID:       "",
+						RemoteMachineID:    "",
+						RemoteMachineToken: "",
 					}
 					a.SaveConfig(config)
 					// Optional: os.Remove(oldPath)
@@ -2061,19 +2500,28 @@ func (a *App) LoadConfig() (AppConfig, error) {
 			ShowKode:           true,
 			EnvCheckInterval:   7,    // Default to 7 days
 			UseWindowsTerminal: true, // Default to true, will only work if Windows Terminal is installed
+			RemoteEnabled:      false,
+			RemoteHubURL:       "",
+			RemoteHubCenterURL: "http://127.0.0.1:9388",
+			RemoteEmail:        "",
+			RemoteSN:           "",
+			RemoteUserID:       "",
+			RemoteMachineID:    "",
+			RemoteMachineToken: "",
 		}
 		err = a.SaveConfig(defaultConfig)
 		return defaultConfig, err
 	}
 	config := AppConfig{
-		ShowGemini:    true,
-		ShowCodex:     true,
-		ShowOpenCode:  true,
-		ShowCodeBuddy: true,
-		ShowQoder:     true,
-		ShowIFlow:     true,
-		ShowKilo:      true,
-		ShowKode:      true,
+		ShowGemini:         true,
+		ShowCodex:          true,
+		ShowOpenCode:       true,
+		ShowCodeBuddy:      true,
+		ShowQoder:          true,
+		ShowIFlow:          true,
+		ShowKilo:           true,
+		ShowKode:           true,
+		RemoteHubCenterURL: "http://127.0.0.1:9388",
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -2623,14 +3071,14 @@ type UpdateResult struct {
 func (a *App) CheckUpdate(currentVersion string) (UpdateResult, error) {
 	// Use GitHub API instead of web scraping
 	// Updated URL: aicoder instead of cceasy
-	url := "https://api.github.com/repos/RapidAI/aicoder/releases/latest"
+	url := "https://api.github.com/repos/RapidAI/CodeClaw/releases/latest"
 	a.log(a.tr("CheckUpdate: Starting check against %s", url))
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		a.log(a.tr("CheckUpdate: Failed to create request: %v", err))
 		return UpdateResult{LatestVersion: "检查失败", ReleaseUrl: ""}, err
 	}
-	req.Header.Set("User-Agent", "AICoder")
+	req.Header.Set("User-Agent", "CodeClaw")
 	// Add GitHub token for authentication (helps avoid rate limiting)
 	// Priority: 1) GITHUB_TOKEN environment variable, 2) Built-in default token (base64 encoded 3 times)
 	const defaultGitHubTokenEncoded = "V2pKb2QxZ3hjREJPVmtZeVVXNXNUV0ZZVmtOaFZFSktWbXBuTWxsWVNrOVNhbWhYWTI1a1ZsRlVUbXBWZWtaUVlsWk9TR1IzUFQwPQ=="
@@ -2727,9 +3175,9 @@ func (a *App) CheckUpdate(currentVersion string) (UpdateResult, error) {
 	var downloadUrl string
 	var targetFileName string
 	if goruntime.GOOS == "darwin" {
-		targetFileName = "AICoder-Universal.pkg"
+		targetFileName = "CodeClaw-Universal.pkg"
 	} else {
-		targetFileName = "AICoder-Setup.exe"
+		targetFileName = "CodeClaw-Setup.exe"
 	}
 	// Parse assets array from GitHub API response
 	if assets, ok := release["assets"].([]interface{}); ok && len(assets) > 0 {
@@ -2748,7 +3196,7 @@ func (a *App) CheckUpdate(currentVersion string) (UpdateResult, error) {
 	}
 	// Fallback: construct URL manually if not found in assets
 	if downloadUrl == "" {
-		downloadUrl = fmt.Sprintf("https://github.com/RapidAI/aicoder/releases/download/%s/%s", tagName, targetFileName)
+		downloadUrl = fmt.Sprintf("https://github.com/RapidAI/CodeClaw/releases/download/%s/%s", tagName, targetFileName)
 		a.log(a.tr("CheckUpdate: Assets not found, using constructed URL: %s", downloadUrl))
 	}
 	// Keep original version with V prefix for display
@@ -2827,7 +3275,7 @@ func (a *App) DownloadUpdate(url string, fileName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "AICoder-App")
+	req.Header.Set("User-Agent", "CodeClaw-App")
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -3024,7 +3472,7 @@ func (a *App) fetchRemoteMarkdown(repo, file string) (string, error) {
 	}
 	// GitHub API headers - request raw content directly
 	req.Header.Set("Accept", "application/vnd.github.v3.raw")
-	req.Header.Set("User-Agent", "AICoder-App")
+	req.Header.Set("User-Agent", "CodeClaw-App")
 	req.Header.Set("Cache-Control", "no-cache, no-store")
 	req.Header.Set("Pragma", "no-cache")
 	// Add GitHub token for authentication (helps avoid rate limiting)
@@ -3488,7 +3936,7 @@ func (a *App) getOSVersion() string {
 func (a *App) PackLog(logContent string) (string, error) {
 	// Create a temp file for the zip
 	timestamp := time.Now().Format("20060102_150405")
-	fileName := fmt.Sprintf("aicoder_log_%s.zip", timestamp)
+	fileName := fmt.Sprintf("codeclaw_log_%s.zip", timestamp)
 	tempDir := os.TempDir()
 	zipPath := filepath.Join(tempDir, fileName)
 	// Create the zip file

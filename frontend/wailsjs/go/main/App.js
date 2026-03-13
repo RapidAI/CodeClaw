@@ -34,6 +34,14 @@ export function DownloadUpdate(arg1, arg2) {
   return window['go']['main']['App']['DownloadUpdate'](arg1, arg2);
 }
 
+export function ActivateRemote(arg1) {
+  return window['go']['main']['App']['ActivateRemote'](arg1);
+}
+
+export function ClearRemoteActivation() {
+  return window['go']['main']['App']['ClearRemoteActivation']();
+}
+
 export function GetCurrentProjectPath() {
   return window['go']['main']['App']['GetCurrentProjectPath']();
 }
@@ -48,6 +56,46 @@ export function GetEnvCheckInterval() {
 
 export function GetLocalCacheDir() {
   return window['go']['main']['App']['GetLocalCacheDir']();
+}
+
+export function GetRemoteActivationStatus() {
+  return window['go']['main']['App']['GetRemoteActivationStatus']();
+}
+
+export function GetRemoteClaudeReadiness(arg1, arg2) {
+  return window['go']['main']['App']['GetRemoteClaudeReadiness'](arg1, arg2);
+}
+
+export function GetRemoteToolReadiness(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetRemoteToolReadiness'](arg1, arg2, arg3);
+}
+
+export function GetRemoteConnectionStatus() {
+  return window['go']['main']['App']['GetRemoteConnectionStatus']();
+}
+
+export function GetRemoteClaudeLaunchProbe(arg1, arg2) {
+  return window['go']['main']['App']['GetRemoteClaudeLaunchProbe'](arg1, arg2);
+}
+
+export function GetRemoteToolLaunchProbe(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetRemoteToolLaunchProbe'](arg1, arg2, arg3);
+}
+
+export function GetRemotePTYProbe() {
+  return window['go']['main']['App']['GetRemotePTYProbe']();
+}
+
+export function GetLastRemoteSmokeReport() {
+  return window['go']['main']['App']['GetLastRemoteSmokeReport']();
+}
+
+export function StartRemoteClaudeSession(arg1, arg2) {
+  return window['go']['main']['App']['StartRemoteClaudeSession'](arg1, arg2);
+}
+
+export function StartRemoteSession(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartRemoteSession'](arg1, arg2, arg3);
 }
 
 export function GetSkillsDir(arg1) {
@@ -98,6 +146,18 @@ export function ListPythonEnvironments() {
   return window['go']['main']['App']['ListPythonEnvironments']();
 }
 
+export function ListRemoteHubs(arg1, arg2) {
+  return window['go']['main']['App']['ListRemoteHubs'](arg1, arg2);
+}
+
+export function ListRemoteSessions() {
+  return window['go']['main']['App']['ListRemoteSessions']();
+}
+
+export function ListRemoteToolMetadata() {
+  return window['go']['main']['App']['ListRemoteToolMetadata']();
+}
+
 export function ListSkills(arg1) {
   return window['go']['main']['App']['ListSkills'](arg1);
 }
@@ -130,6 +190,18 @@ export function ReadTutorial() {
   return window['go']['main']['App']['ReadTutorial']();
 }
 
+export function ReconnectRemoteHub() {
+  return window['go']['main']['App']['ReconnectRemoteHub']();
+}
+
+export function RunRemoteClaudeSmoke(arg1, arg2) {
+  return window['go']['main']['App']['RunRemoteClaudeSmoke'](arg1, arg2);
+}
+
+export function RunRemoteToolSmoke(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RunRemoteToolSmoke'](arg1, arg2, arg3);
+}
+
 export function RecoverCC() {
   return window['go']['main']['App']['RecoverCC']();
 }
@@ -154,6 +226,10 @@ export function SelectSkillFile() {
   return window['go']['main']['App']['SelectSkillFile']();
 }
 
+export function SendRemoteSessionInput(arg1, arg2) {
+  return window['go']['main']['App']['SendRemoteSessionInput'](arg1, arg2);
+}
+
 export function SetEnvCheckInterval(arg1) {
   return window['go']['main']['App']['SetEnvCheckInterval'](arg1);
 }
@@ -172,6 +248,14 @@ export function ShowItemInFolder(arg1) {
 
 export function ShowMessage(arg1, arg2) {
   return window['go']['main']['App']['ShowMessage'](arg1, arg2);
+}
+
+export function InterruptRemoteSession(arg1) {
+  return window['go']['main']['App']['InterruptRemoteSession'](arg1);
+}
+
+export function KillRemoteSession(arg1) {
+  return window['go']['main']['App']['KillRemoteSession'](arg1);
 }
 
 export function UpdateLastEnvCheckTime() {

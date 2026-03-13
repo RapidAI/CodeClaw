@@ -123,6 +123,14 @@ export namespace main {
 	    default_proxy_username: string;
 	    default_proxy_password: string;
 	    use_windows_terminal: boolean;
+	    remote_enabled: boolean;
+	    remote_hub_url: string;
+	    remote_hubcenter_url: string;
+	    remote_email: string;
+	    remote_sn: string;
+	    remote_user_id: string;
+	    remote_machine_id: string;
+	    remote_machine_token: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -162,6 +170,14 @@ export namespace main {
 	        this.default_proxy_username = source["default_proxy_username"];
 	        this.default_proxy_password = source["default_proxy_password"];
 	        this.use_windows_terminal = source["use_windows_terminal"];
+	        this.remote_enabled = source["remote_enabled"];
+	        this.remote_hub_url = source["remote_hub_url"];
+	        this.remote_hubcenter_url = source["remote_hubcenter_url"];
+	        this.remote_email = source["remote_email"];
+	        this.remote_sn = source["remote_sn"];
+	        this.remote_user_id = source["remote_user_id"];
+	        this.remote_machine_id = source["remote_machine_id"];
+	        this.remote_machine_token = source["remote_machine_token"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -277,4 +293,3 @@ export namespace main {
 	}
 
 }
-

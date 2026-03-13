@@ -1,8 +1,8 @@
-# AICoder
+# CodeClaw
 
 [📖 User Manual](UserManual_EN.md) | [❓ FAQ](faq_en.md) | [English](README_EN.md) | [中文](README.md)
 
-AICoder is a desktop AI programming assistant dashboard built with Wails, Go, and React. It is designed to provide unified configuration management, automated environment deployment, and one-click launch capabilities for multiple AI CLI tools (Anthropic Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode, CodeBuddy, and Qoder CLI).
+CodeClaw is a desktop AI programming assistant dashboard built with Wails, Go, and React. It is designed to provide unified configuration management, automated environment deployment, and one-click launch capabilities for multiple AI CLI tools (Anthropic Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode, CodeBuddy, and Qoder CLI).
 
 This application is deeply integrated with popular AI programming models, supporting rapid API Key configuration and automatic synchronization.
 
@@ -34,10 +34,10 @@ This application is deeply integrated with popular AI programming models, suppor
 ## Quick Start
 
 ### 1. Run the Program
-Run `AICoder.exe` (Windows) or `AICoder.app` (macOS) directly.
+Run `CodeClaw.exe` (Windows) or `CodeClaw.app` (macOS) directly.
 
 ### 2. Environment Detection
-On the first launch, the program performs an environment self-check. If required runtimes (e.g., Node.js) are missing, AICoder will attempt to install them automatically.
+On the first launch, the program performs an environment self-check. If required runtimes (e.g., Node.js) are missing, CodeClaw will attempt to install them automatically.
 
 ### 3. Configure API Key
 Select a provider and enter your API Key in the configuration panel for each tool.
@@ -51,9 +51,9 @@ Select a provider and enter your API Key in the configuration panel for each too
 
 ## About
 
-*   **Version**: V3.5.0.5000
+*   **Version**: V5.0.0.9300
 *   **Author**: Dr. Daniel
-*   **GitHub**: [RapidAI/aicoder](https://github.com/RapidAI/aicoder)
+*   **GitHub**: [RapidAI/CodeClaw](https://github.com/RapidAI/CodeClaw)
 *   **Resources**: [CS146s Chinese Version](https://github.com/BIT-ENGD/cs146s_cn)
 
 ---

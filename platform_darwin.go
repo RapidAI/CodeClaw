@@ -456,7 +456,7 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 		}
 	}
 	
-	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("aicoder_launch_%d.sh", time.Now().UnixNano()))
+	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("codeclaw_launch_%d.sh", time.Now().UnixNano()))
 	scriptContent := "#!/bin/bash\n"
 	scriptContent += fmt.Sprintf("cd \"%s\"\n", projectDir)
 	for k, v := range env {

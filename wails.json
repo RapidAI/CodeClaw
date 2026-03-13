@@ -1,17 +1,17 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "AICoder",
-  "outputfilename": "AICoder",
+  "name": "CodeClaw",
+  "outputfilename": "CodeClaw",
   "frontend:install": "npm install --cache ./.npm_cache",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "info": {
-    "productName": "AICoder",
-    "productVersion": "4.1.0.9200",
+    "productName": "CodeClaw",
+    "productVersion": "5.0.0.9300",
     "companyName": "RapidAI",
     "copyright": "Copyright (C) 2026 RapidAI",
-    "comments": "AICoder - AI Coding Assistant"
+    "comments": "CodeClaw - AI Coding Assistant"
   },
   "author": {
     "name": "mayong",

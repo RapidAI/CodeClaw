@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -87,12 +88,12 @@ func (a *App) platformInitConsole() {
 	allocConsole.Call()
 
 	setConsoleTitle := kernel32.NewProc("SetConsoleTitleW")
-	title, _ := syscall.UTF16PtrFromString("AICoder - Environment Setup")
+	title, _ := syscall.UTF16PtrFromString("CodeClaw - Environment Setup")
 	setConsoleTitle.Call(uintptr(unsafe.Pointer(title)))
 }
 
 // RunEnvironmentCheckCLI runs environment check in command-line mode (synchronous, no GUI events)
-// Installation order: Node.js → Git → VC++ Runtime → AI Tools
+// Installation order: Node.js -Git -VC++ Runtime -AI Tools
 func (a *App) RunEnvironmentCheckCLI() {
 	fmt.Println("\n========================================")
 	fmt.Println("Environment Setup - Step by Step")
@@ -107,11 +108,11 @@ func (a *App) RunEnvironmentCheckCLI() {
 	nodeCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 	if out, err := nodeCmd.Output(); err == nil {
 		nodeVersion = strings.TrimSpace(string(out))
-		fmt.Printf("✓ Node.js is already installed: %s\n", nodeVersion)
+		fmt.Printf("-Node.js is already installed: %s\n", nodeVersion)
 	} else {
 		fmt.Println("Node.js not found. Installing...")
 		if err := a.installNodeJSCLI(); err != nil {
-			fmt.Printf("✗ ERROR: Failed to install Node.js: %v\n", err)
+			fmt.Printf("-ERROR: Failed to install Node.js: %v\n", err)
 			fmt.Println("\nEnvironment setup failed. Please install Node.js manually.")
 			return
 		}
@@ -123,9 +124,9 @@ func (a *App) RunEnvironmentCheckCLI() {
 		nodeCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 		if out, err := nodeCmd.Output(); err == nil {
 			nodeVersion = strings.TrimSpace(string(out))
-			fmt.Printf("✓ Node.js installed and verified successfully: %s\n", nodeVersion)
+			fmt.Printf("-Node.js installed and verified successfully: %s\n", nodeVersion)
 		} else {
-			fmt.Printf("✗ ERROR: Node.js installation verification failed: %v\n", err)
+			fmt.Printf("-ERROR: Node.js installation verification failed: %v\n", err)
 			return
 		}
 	}
@@ -154,7 +155,7 @@ func (a *App) RunEnvironmentCheckCLI() {
 			npmTestCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 			if out, err := npmTestCmd.Output(); err == nil {
 				npmVersion = strings.TrimSpace(string(out))
-				fmt.Printf("✓ npm verified successfully: %s (version: %s)\n", npmExec, npmVersion)
+				fmt.Printf("-npm verified successfully: %s (version: %s)\n", npmExec, npmVersion)
 				npmReady = true
 				break
 			}
@@ -163,7 +164,7 @@ func (a *App) RunEnvironmentCheckCLI() {
 	}
 
 	if !npmReady {
-		fmt.Printf("✗ ERROR: npm not available after %d attempts\n", maxRetries)
+		fmt.Printf("-ERROR: npm not available after %d attempts\n", maxRetries)
 		return
 	}
 
@@ -179,13 +180,13 @@ func (a *App) RunEnvironmentCheckCLI() {
 		gitCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 		if out, err := gitCmd.Output(); err == nil {
 			gitVersion = strings.TrimSpace(string(out))
-			fmt.Printf("✓ Git is already installed: %s\n", gitVersion)
+			fmt.Printf("-Git is already installed: %s\n", gitVersion)
 			gitInstalled = true
 		}
 	} else {
 		if _, err := os.Stat(`C:\Program Files\Git\cmd\git.exe`); err == nil {
 			a.updatePathForGit()
-			fmt.Println("✓ Git found in standard location.")
+			fmt.Println("-Git found in standard location.")
 			gitInstalled = true
 		}
 	}
@@ -193,7 +194,7 @@ func (a *App) RunEnvironmentCheckCLI() {
 	if !gitInstalled {
 		fmt.Println("Git not found. Installing...")
 		if err := a.installGitBashCLI(); err != nil {
-			fmt.Printf("✗ ERROR: Failed to install Git: %v\n", err)
+			fmt.Printf("-ERROR: Failed to install Git: %v\n", err)
 			fmt.Println("Git installation failed. AI tools will be installed, but some features may not work.")
 		} else {
 			fmt.Println("Verifying Git installation...")
@@ -205,12 +206,12 @@ func (a *App) RunEnvironmentCheckCLI() {
 				gitCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 				if out, err := gitCmd.Output(); err == nil {
 					gitVersion = strings.TrimSpace(string(out))
-					fmt.Printf("✓ Git installed and verified successfully: %s\n", gitVersion)
+					fmt.Printf("-Git installed and verified successfully: %s\n", gitVersion)
 					gitInstalled = true
 				}
 			}
 			if !gitInstalled {
-				fmt.Println("✗ WARNING: Git installation verification failed.")
+				fmt.Println("-WARNING: Git installation verification failed.")
 			}
 		}
 	}
@@ -227,14 +228,14 @@ func (a *App) RunEnvironmentCheckCLI() {
 	fmt.Printf("Registry Check Result: %v\n", isInstalled)
 
 	if isInstalled {
-		fmt.Println("✓ Visual C++ Redistributable is already installed")
+		fmt.Println("-Visual C++ Redistributable is already installed")
 	} else {
 		fmt.Println("Visual C++ Redistributable not found. Installing...")
 		if err := a.installVCRedist(); err != nil {
-			fmt.Printf("✗ WARNING: Failed to install VC Redistributable: %v\n", err)
+			fmt.Printf("-WARNING: Failed to install VC Redistributable: %v\n", err)
 			fmt.Println("  Some tools like codex may not work properly without it.")
 		} else {
-			fmt.Println("✓ Visual C++ Redistributable installed successfully")
+			fmt.Println("-Visual C++ Redistributable installed successfully")
 		}
 	}
 
@@ -242,7 +243,7 @@ func (a *App) RunEnvironmentCheckCLI() {
 	fmt.Println("\n[4/4] Step 4: Local Node.js Environment Setup")
 	fmt.Println("--------------------------------------")
 	a.ensureLocalNodeBinary()
-	fmt.Println("✓ Local Node.js environment configured")
+	fmt.Println("-Local Node.js environment configured")
 
 	// Base environment setup complete
 	fmt.Println("\n========================================")
@@ -262,7 +263,7 @@ func (a *App) RunEnvironmentCheckCLI() {
 		a.SaveConfig(cfg)
 	}
 
-	fmt.Println("\n✓ Base environment setup completed!")
+	fmt.Println("\n-Base environment setup completed!")
 	fmt.Println("AI tools will be installed in background when the application starts.")
 }
 
@@ -305,10 +306,10 @@ func (a *App) CheckEnvironment(force bool) {
 			if err := a.installVCRedist(); err != nil {
 				a.log(a.tr("WARNING: Failed to install VC Redistributable: %v", err))
 			} else {
-				a.log(a.tr("✓ Visual C++ Redistributable installed successfully."))
+				a.log(a.tr("-Visual C++ Redistributable installed successfully."))
 			}
 		} else {
-			a.log(a.tr("✓ Visual C++ Redistributable is already installed."))
+			a.log(a.tr("-Visual C++ Redistributable is already installed."))
 		}
 
 		a.log(a.tr("Checking Node.js..."))
@@ -358,7 +359,7 @@ func (a *App) CheckEnvironment(force bool) {
 				nodeInstalled = true
 			}
 		} else {
-			a.log(a.tr("✓ Node.js found: %s", strings.TrimSpace(string(nodeOutput))))
+			a.log(a.tr("-Node.js found: %s", strings.TrimSpace(string(nodeOutput))))
 			nodeInstalled = true
 		}
 
@@ -376,9 +377,9 @@ func (a *App) CheckEnvironment(force bool) {
 			gitCmd := exec.Command(gitPath, "--version")
 			gitCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 			if out, err := gitCmd.Output(); err == nil {
-				a.log(a.tr("✓ Git found: %s", strings.TrimSpace(string(out))))
+				a.log(a.tr("-Git found: %s", strings.TrimSpace(string(out))))
 			} else {
-				a.log(a.tr("✓ Git found at: %s", gitPath))
+				a.log(a.tr("-Git found at: %s", gitPath))
 			}
 		} else {
 			gitFound := false
@@ -388,7 +389,7 @@ func (a *App) CheckEnvironment(force bool) {
 
 			if gitFound {
 				a.updatePathForGit()
-				a.log(a.tr("✓ Git found in standard location."))
+				a.log(a.tr("-Git found in standard location."))
 			} else {
 				a.installMutex.Lock()
 				if a.installingGit {
@@ -406,7 +407,7 @@ func (a *App) CheckEnvironment(force bool) {
 						a.installingGit = false
 						a.installMutex.Unlock()
 					} else {
-						a.log(a.tr("✓ Git installed successfully."))
+						a.log(a.tr("-Git installed successfully."))
 						a.updatePathForGit()
 						a.installMutex.Lock()
 						a.installingGit = false
@@ -418,7 +419,7 @@ func (a *App) CheckEnvironment(force bool) {
 
 		a.ensureLocalNodeBinary()
 
-		a.log(a.tr("✓ Base environment check complete."))
+		a.log(a.tr("-Base environment check complete."))
 
 		// Update config to mark base env check done
 		if cfg, err := a.LoadConfig(); err == nil {
@@ -1083,29 +1084,29 @@ func (a *App) installVCRedist() error {
 		fileName = "vc_redist.x64.exe"
 	}
 
-	fmt.Printf("  → Downloading from: %s\n", downloadURL)
+	fmt.Printf("  -Downloading from: %s\n", downloadURL)
 	a.log(a.tr("Downloading Visual C++ Redistributable..."))
 
 	tempDir := os.TempDir()
 	exePath := filepath.Join(tempDir, fileName)
-	fmt.Printf("  → Download path: %s\n", exePath)
+	fmt.Printf("  -Download path: %s\n", exePath)
 
 	if err := a.downloadFile(exePath, downloadURL); err != nil {
 		errMsg := fmt.Sprintf("failed to download VC Redist: %v", err)
-		fmt.Printf("  ✗ %s\n", errMsg)
-		return fmt.Errorf(errMsg)
+		fmt.Printf("  -%s\n", errMsg)
+		return errors.New(errMsg)
 	}
 
-	fmt.Println("  ✓ Download completed")
+	fmt.Println("  -Download completed")
 	time.Sleep(500 * time.Millisecond)
 
 	if _, err := os.Stat(exePath); os.IsNotExist(err) {
 		errMsg := "downloaded file not found"
-		fmt.Printf("  ✗ %s\n", errMsg)
-		return fmt.Errorf(errMsg)
+		fmt.Printf("  -%s\n", errMsg)
+		return errors.New(errMsg)
 	}
 
-	fmt.Println("  → Starting installation (requires admin privileges)...")
+	fmt.Println("  -Starting installation (requires admin privileges)...")
 	a.log(a.tr("Installing Visual C++ Redistributable..."))
 
 	shell32 := syscall.NewLazyDLL("shell32.dll")
@@ -1127,12 +1128,12 @@ func (a *App) installVCRedist() error {
 
 	if ret <= 32 {
 		errMsg := fmt.Sprintf("failed to launch VC Redist installer with admin privileges (error code: %d)", ret)
-		fmt.Printf("  ✗ %s\n", errMsg)
-		return fmt.Errorf(errMsg)
+		fmt.Printf("  -%s\n", errMsg)
+		return errors.New(errMsg)
 	}
 
-	fmt.Println("  ✓ Installer launched successfully")
-	fmt.Println("  → Waiting for installation to complete...")
+	fmt.Println("  -Installer launched successfully")
+	fmt.Println("  -Waiting for installation to complete...")
 	a.log(a.tr("Waiting for installation to complete..."))
 
 	maxRetries := 10
@@ -1142,13 +1143,13 @@ func (a *App) installVCRedist() error {
 
 		if a.isVCRedistInstalled() {
 			installed = true
-			fmt.Println("  ✓ Installation verified successfully")
-			a.log(a.tr("✓ Visual C++ Redistributable installed and verified successfully."))
+			fmt.Println("  -Installation verified successfully")
+			a.log(a.tr("-Visual C++ Redistributable installed and verified successfully."))
 			break
 		}
 
 		if i < maxRetries-1 {
-			fmt.Printf("  → Still waiting... (%d/%d)\n", i+2, maxRetries)
+			fmt.Printf("  -Still waiting... (%d/%d)\n", i+2, maxRetries)
 		}
 	}
 
@@ -1159,8 +1160,8 @@ func (a *App) installVCRedist() error {
 
 	if !installed {
 		errMsg := fmt.Sprintf("VC Redistributable installation verification failed after %d attempts", maxRetries)
-		fmt.Printf("  ✗ %s\n", errMsg)
-		return fmt.Errorf(errMsg)
+		fmt.Printf("  -%s\n", errMsg)
+		return errors.New(errMsg)
 	}
 
 	return nil
@@ -1576,7 +1577,7 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 	batchContent += "  echo ========================================\r\n"
 	batchContent += ")\r\n"
 
-	tempBatchPath := filepath.Join(os.TempDir(), fmt.Sprintf("aicoder_launch_%d.bat", time.Now().UnixNano()))
+	tempBatchPath := filepath.Join(os.TempDir(), fmt.Sprintf("codeclaw_launch_%d.bat", time.Now().UnixNano()))
 	err := os.WriteFile(tempBatchPath, []byte(batchContent), 0644)
 	if err != nil {
 		a.log("Error creating batch file: " + err.Error())
@@ -1662,7 +1663,7 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 			codexBatchContent += "  echo ========================================\r\n"
 			codexBatchContent += ")\r\n"
 
-			codexBatchPath := filepath.Join(os.TempDir(), fmt.Sprintf("aicoder_codex_%d.bat", time.Now().UnixNano()))
+	codexBatchPath := filepath.Join(os.TempDir(), fmt.Sprintf("codeclaw_codex_%d.bat", time.Now().UnixNano()))
 			if err := os.WriteFile(codexBatchPath, []byte(codexBatchContent), 0644); err != nil {
 				a.log("Error creating codex batch file: " + err.Error())
 				a.ShowMessage("Launch Error", "Failed to create temporary batch file")
@@ -1681,15 +1682,15 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 				wtPath := a.getWindowsTerminalPath()
 				if wtPath == "" {
 					a.log("Windows Terminal path not found, falling back to cmd")
-					cmdLine = fmt.Sprintf(`cmd /c start "AICoder - %s" /d "%s" cmd /k "%s"`,
+		cmdLine = fmt.Sprintf(`cmd /c start "CodeClaw - %s" /d "%s" cmd /k "%s"`,
 						binaryName, projectDir, codexBatchPath)
 				} else {
 					// Use start command to properly handle paths with spaces
-					cmdLine = fmt.Sprintf(`cmd /c start "" "%s" -w new -d "%s" --title "AICoder - %s" cmd /k "%s"`,
+		cmdLine = fmt.Sprintf(`cmd /c start "" "%s" -w new -d "%s" --title "CodeClaw - %s" cmd /k "%s"`,
 						wtPath, projectDir, binaryName, codexBatchPath)
 				}
 			} else {
-				cmdLine = fmt.Sprintf(`cmd /c start "AICoder - %s" /d "%s" cmd /k "%s"`,
+		cmdLine = fmt.Sprintf(`cmd /c start "CodeClaw - %s" /d "%s" cmd /k "%s"`,
 					binaryName, projectDir, codexBatchPath)
 			}
 
@@ -1709,14 +1710,14 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 				wtPath := a.getWindowsTerminalPath()
 				if wtPath == "" {
 					a.log("Windows Terminal path not found, falling back to cmd")
-					cmdLine = fmt.Sprintf(`cmd /c start "AICoder - %s" /d "%s" cmd /k "%s"`, binaryName, projectDir, tempBatchPath)
+	cmdLine = fmt.Sprintf(`cmd /c start "CodeClaw - %s" /d "%s" cmd /k "%s"`, binaryName, projectDir, tempBatchPath)
 				} else {
 					// Use start command to properly handle paths with spaces
-					cmdLine = fmt.Sprintf(`cmd /c start "" "%s" -w new -d "%s" --title "AICoder - %s" cmd /k "%s"`,
+		cmdLine = fmt.Sprintf(`cmd /c start "" "%s" -w new -d "%s" --title "CodeClaw - %s" cmd /k "%s"`,
 						wtPath, projectDir, binaryName, tempBatchPath)
 				}
 			} else {
-				cmdLine = fmt.Sprintf(`cmd /c start "AICoder - %s" /d "%s" cmd /k "%s"`, binaryName, projectDir, tempBatchPath)
+		cmdLine = fmt.Sprintf(`cmd /c start "CodeClaw - %s" /d "%s" cmd /k "%s"`, binaryName, projectDir, tempBatchPath)
 			}
 
 			cmd := exec.Command("cmd")
@@ -1903,3 +1904,4 @@ func (a *App) getWindowsTerminalPath() string {
 func (a *App) IsWindowsTerminalAvailable() bool {
 	return a.isWindowsTerminalAvailable()
 }
+

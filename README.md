@@ -1,8 +1,8 @@
-# AICoder
+# CodeClaw（代码龙虾）
 
 [📖 使用说明书](UserManual_CN.md) | [❓ FAQ](faq.md) | [English](README_EN.md) | [中文](README.md)
 
-AICoder 是一款基于 Wails + Go + React 开发的桌面 AI 编程辅助工具仪表盘。它旨在为多种 AI 命令行工具（Anthropic Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode, CodeBuddy, Qoder CLI）提供统一的配置管理、环境自动部署以及一键启动功能。
+CodeClaw（代码龙虾）是一款基于 Wails + Go + React 开发的桌面 AI 编程辅助工具仪表盘。它旨在为多种 AI 命令行工具（Anthropic Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode, CodeBuddy, Qoder CLI）提供统一的配置管理、环境自动部署以及一键启动功能。
 
 本程序特别针对主流 AI 编程模型进行了深度集成，支持 API Key 的快速配置与自动同步。
 
@@ -35,7 +35,7 @@ AICoder 是一款基于 Wails + Go + React 开发的桌面 AI 编程辅助工具
 ## 快速开始
 
 ### 1. 运行程序
-直接运行 `AICoder.exe` (Windows) 或 `AICoder.app` (macOS)。
+直接运行 `CodeClaw.exe` (Windows) 或 `CodeClaw.app` (macOS)。
 
 ### 2. 环境检测
 程序首次启动会进行环境自检。如果您的电脑未安装所需的运行环境（如 Node.js），程序会尝试自动安装/更新相关组件。
@@ -52,15 +52,10 @@ AICoder 是一款基于 Wails + Go + React 开发的桌面 AI 编程辅助工具
 
 ## 关于
 
-*   **版本**：V3.5.0.5000
+*   **版本**：V5.0.0.9300
 *   **作者**：Dr. Daniel
-*   **GitHub**：[RapidAI/aicoder](https://github.com/RapidAI/aicoder)
+*   **GitHub**：[RapidAI/CodeClaw](https://github.com/RapidAI/CodeClaw)
 *   **资源**：[CS146s 中文版](https://github.com/BIT-ENGD/cs146s_cn)
 
 ---
 *本工具仅作为配置管理辅助，请确保遵守各模型厂商的服务条款。*
-
-
- kilo cli : 
-
- https://github.com/Kilo-Org/kilocode/blob/main/cli/docs/PROVIDER_CONFIGURATION.md
