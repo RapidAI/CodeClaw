@@ -61,7 +61,7 @@ func TestStatusIncludesAdminAndStartupFlags(t *testing.T) {
 	cfg := config.Default()
 	cfg.Center.Enabled = true
 	cfg.Center.RegisterOnStartup = true
-	cfg.Center.BaseURL = "https://hubs.rapidai.tech"
+	cfg.Center.BaseURL = "https://hubs.mypapers.top"
 	cfg.Server.PublicBaseURL = "https://hub.example.com"
 
 	settings := newFakeSettingsRepo()

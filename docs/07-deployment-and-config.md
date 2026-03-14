@@ -15,7 +15,7 @@ Inside this repository:
 
 Default official Hub Center:
 
-- `https://hubs.rapidai.tech`
+- `https://hubs.mypapers.top`
 
 This should be the built-in default for:
 

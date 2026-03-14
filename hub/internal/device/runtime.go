@@ -19,10 +19,12 @@ type MachineRepository interface {
 	ListAll(ctx context.Context) ([]*store.Machine, error)
 	Delete(ctx context.Context, machineID string) error
 	DeleteByUserID(ctx context.Context, userID string) (int64, error)
+	ForceDeleteByUserID(ctx context.Context, userID string) (int64, error)
 	DeleteOffline(ctx context.Context) (int64, error)
 	UpdateMetadata(ctx context.Context, machineID string, metadata store.MachineMetadata) error
 	UpdateStatus(ctx context.Context, machineID string, status string) error
 	UpdateHeartbeat(ctx context.Context, machineID string, at time.Time) error
+	UpdateAlias(ctx context.Context, machineID string, alias string) error
 }
 
 type Runtime struct {
@@ -50,6 +52,7 @@ type MachineRuntimeInfo struct {
 	MachineID            string     `json:"machine_id"`
 	UserID               string     `json:"user_id,omitempty"`
 	Name                 string     `json:"name,omitempty"`
+	Alias                string     `json:"alias,omitempty"`
 	Platform             string     `json:"platform,omitempty"`
 	Hostname             string     `json:"hostname,omitempty"`
 	Arch                 string     `json:"arch,omitempty"`
@@ -284,6 +287,7 @@ func (s *Service) ListMachines(ctx context.Context, userID string) ([]MachineRun
 			MachineID:            item.ID,
 			UserID:               item.UserID,
 			Name:                 item.Name,
+			Alias:                item.Alias,
 			Platform:             item.Platform,
 			Hostname:             item.Hostname,
 			Arch:                 item.Arch,
@@ -344,6 +348,7 @@ func (s *Service) ListAllMachines(ctx context.Context) ([]MachineRuntimeInfo, er
 			MachineID:            item.ID,
 			UserID:               item.UserID,
 			Name:                 item.Name,
+			Alias:                item.Alias,
 			Platform:             item.Platform,
 			Hostname:             item.Hostname,
 			Arch:                 item.Arch,
@@ -395,6 +400,13 @@ func (s *Service) DeleteMachine(ctx context.Context, machineID string) error {
 	return s.repo.Delete(ctx, machineID)
 }
 
+func (s *Service) RenameMachine(ctx context.Context, machineID string, alias string) error {
+	if s.repo == nil {
+		return errors.New("no repository configured")
+	}
+	return s.repo.UpdateAlias(ctx, machineID, alias)
+}
+
 func (s *Service) ClearOfflineMachines(ctx context.Context) (int64, error) {
 	if s.repo == nil {
 		return 0, errors.New("no repository configured")
@@ -407,6 +419,40 @@ func (s *Service) DeleteMachinesByUser(ctx context.Context, userID string) (int6
 		return 0, errors.New("no repository configured")
 	}
 	return s.repo.DeleteByUserID(ctx, userID)
+}
+
+func (s *Service) ForceDeleteMachinesByUser(ctx context.Context, userID string) (int64, error) {
+	if s.repo == nil {
+		return 0, errors.New("no repository configured")
+	}
+
+	// Delete from DB first so subsequent reads won't see these machines
+	count, err := s.repo.ForceDeleteByUserID(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+
+	// Clean up runtime state and close WebSocket connections
+	var connsToClose []*ws.ConnContext
+	s.runtime.mu.Lock()
+	for mid, conn := range s.runtime.desktopsByMachine {
+		if conn != nil && conn.UserID == userID {
+			connsToClose = append(connsToClose, conn)
+			delete(s.runtime.desktopsByMachine, mid)
+			delete(s.runtime.metadataByMachine, mid)
+			delete(s.runtime.lastHeartbeatAt, mid)
+		}
+	}
+	s.runtime.mu.Unlock()
+
+	// Close WebSocket connections outside the lock to prevent reconnect/re-register
+	for _, conn := range connsToClose {
+		if conn.Conn != nil {
+			_ = conn.Conn.Close()
+		}
+	}
+
+	return count, nil
 }
 
 func (s *Service) ListEvents(limit int) []MachineEvent {

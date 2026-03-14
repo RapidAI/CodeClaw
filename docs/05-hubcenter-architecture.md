@@ -5,7 +5,7 @@ CodeClaw Hub Center is the directory and entry service for multiple hubs.
 
 Its default official address is:
 
-- `https://hubs.rapidai.tech`
+- `https://hubs.mypapers.top`
 
 ## 2. Responsibilities
 

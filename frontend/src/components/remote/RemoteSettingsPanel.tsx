@@ -88,7 +88,7 @@ export function RemoteSettingsPanel({
                         value={config?.remote_hubcenter_url || ""}
                         onChange={(e) => saveRemoteConfigField({ remote_hubcenter_url: e.target.value })}
                         onBlur={(e) => saveRemoteConfigField({ remote_hubcenter_url: e.target.value.trim() })}
-                        placeholder="http://hubs.rapidai.tech"
+                        placeholder="http://hubs.mypapers.top:9388"
                         spellCheck={false}
                     />
                 </div>
@@ -149,9 +149,9 @@ export function RemoteSettingsPanel({
                 </div>
             </div>
 
-            {/* Row 3: 邮件 + 注册按钮 */}
-            <div className="remote-activation-row" style={{ marginTop: "10px" }}>
-                <div className="form-group remote-activation-field" style={{ marginBottom: 0 }}>
+            {/* Row 3: 邮件 + 邀请码（同一行） */}
+            <div style={{ display: "grid", gridTemplateColumns: invitationCodeRequired ? "1fr 1fr" : "1fr", gap: "10px", marginTop: "10px" }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="form-label">{translate("remoteBindEmail")}</label>
                     <input
                         className="form-input"
@@ -162,29 +162,31 @@ export function RemoteSettingsPanel({
                         spellCheck={false}
                     />
                 </div>
-                <button className="btn-primary remote-activation-button" disabled={!!remoteBusy} onClick={activateRemoteWithEmail}>
+                {invitationCodeRequired && (
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label">邀请码</label>
+                        <input
+                            className="form-input"
+                            value={invitationCode}
+                            onChange={(e) => setInvitationCode(e.target.value.toUpperCase())}
+                            placeholder="请输入邀请码"
+                            spellCheck={false}
+                            maxLength={10}
+                            style={invitationCodeError ? { borderColor: "#ef4444" } : undefined}
+                        />
+                        {invitationCodeError && (
+                            <div style={{ fontSize: "0.78rem", color: "#ef4444", marginTop: "4px" }}>{invitationCodeError}</div>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {/* Row 4: 注册按钮独立一行 */}
+            <div style={{ marginTop: "10px" }}>
+                <button className="btn-primary remote-activation-button" style={{ width: "100%" }} disabled={!!remoteBusy} onClick={activateRemoteWithEmail}>
                     {remoteBusy === "activate" ? "注册中..." : "注册"}
                 </button>
             </div>
-
-            {/* Row 3.5: 邀请码输入框（动态显示） */}
-            {invitationCodeRequired && (
-                <div className="form-group" style={{ marginTop: "10px", marginBottom: 0 }}>
-                    <label className="form-label">邀请码</label>
-                    <input
-                        className="form-input"
-                        value={invitationCode}
-                        onChange={(e) => setInvitationCode(e.target.value.toUpperCase())}
-                        placeholder="请输入邀请码"
-                        spellCheck={false}
-                        maxLength={10}
-                        style={invitationCodeError ? { borderColor: "#ef4444" } : undefined}
-                    />
-                    {invitationCodeError && (
-                        <div style={{ fontSize: "0.78rem", color: "#ef4444", marginTop: "4px" }}>{invitationCodeError}</div>
-                    )}
-                </div>
-            )}
 
             <div className="info-text" style={{ marginTop: "10px", textAlign: "left" }}>
                 {remoteActivationStatus?.activated

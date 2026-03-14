@@ -11,12 +11,14 @@ if not errorlevel 1 set "OUTPUT_KIND=release"
 
 if exist gradlew.bat (
     call gradlew.bat %TASK%
+    if not !ERRORLEVEL!==0 if not %ERRORLEVEL%==0 goto :build_failed
     goto :after_build
 )
 
 where gradle >nul 2>nul
 if %ERRORLEVEL%==0 (
     call gradle %TASK%
+    if not %ERRORLEVEL%==0 goto :build_failed
     goto :after_build
 )
 
@@ -24,12 +26,11 @@ echo [ERROR] Neither gradlew.bat nor gradle was found.
 echo Install Gradle or open this project in Android Studio first.
 exit /b 1
 
-:after_build
-if not %ERRORLEVEL%==0 (
-    echo [ERROR] Android build failed.
-    exit /b %ERRORLEVEL%
-)
+:build_failed
+echo [ERROR] Android build failed.
+exit /b 1
 
+:after_build
 set "APK_DIR=%CD%\app\build\outputs\apk\%OUTPUT_KIND%"
 set "DIST_DIR=%CD%\..\dist"
 if exist "%APK_DIR%" (

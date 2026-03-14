@@ -11,7 +11,7 @@ import opencodeIcon from './assets/images/opencode.png';
 import kiloIcon from './assets/images/KiloCode.png';
 import kodeIcon from './assets/images/Kodecli.png';
 import qoderIcon from './assets/images/qodercli.png';
-import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, InterruptRemoteSession, KillRemoteSession, ListRemoteHubs } from "../wailsjs/go/main/App";
+import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
 import ReactMarkdown from 'react-markdown';
@@ -591,7 +591,7 @@ const translations: any = {
         "settings": "设置",
         "globalSettings": "全局设置",
         "language": "界面语言",
-        "runnerStatus": "当前环境",
+        "runnerStatus": "环境",
         "yoloModeLabel": "Yolo 模式",
         "adminModeLabel": "管理员权限",
         "rootModeLabel": "Root 权限",
@@ -2090,6 +2090,8 @@ function App() {
         installSelectedRemoteTool,
         saveRemoteConfigField,
         sendRemoteInput,
+        killRemoteSession,
+        interruptRemoteSession,
         clearRemoteActivationState,
         invitationCodeRequired,
         invitationCode,
@@ -3268,14 +3270,8 @@ ${instruction}`;
                                     remoteInputDrafts={remoteInputDrafts}
                                     setRemoteInputDrafts={setRemoteInputDrafts}
                                     sendRemoteInput={sendRemoteInput}
-                                    interruptRemoteSession={async (sessionID: string) => {
-                                        try { await InterruptRemoteSession(sessionID); } catch (err) { console.warn("InterruptRemoteSession error:", err); }
-                                        await refreshRemotePanel();
-                                    }}
-                                    killRemoteSession={async (sessionID: string) => {
-                                        try { await KillRemoteSession(sessionID); } catch (err) { console.warn("KillRemoteSession error:", err); }
-                                        await refreshRemotePanel();
-                                    }}
+                                    interruptRemoteSession={interruptRemoteSession}
+                                    killRemoteSession={killRemoteSession}
                                     showToastMessage={showToastMessage}
                                     translate={translate}
                                     formatText={formatText}
@@ -4209,6 +4205,23 @@ ${instruction}`;
                                         </span>
                                     </label>
                                 )}
+                                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.8rem', color: '#6b7280' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={resolvedLaunchProject?.admin_mode || false}
+                                        onChange={(e) => {
+                                            updateResolvedLaunchProject((project) => {
+                                                const updated = { ...project, admin_mode: e.target.checked };
+                                                if (!isWindows && e.target.checked) {
+                                                    updated.yolo_mode = false;
+                                                }
+                                                return updated;
+                                            });
+                                        }}
+                                        style={{ marginRight: '6px' }}
+                                    />
+                                    <span>{isWindows ? t("adminModeLabel") : t("rootModeLabel")}</span>
+                                </label>
                             </div>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '15px' }}>
@@ -4279,23 +4292,6 @@ ${instruction}`;
                                 <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.8rem', color: '#6b7280' }}>
                                     <input
                                         type="checkbox"
-                                        checked={resolvedLaunchProject?.admin_mode || false}
-                                        onChange={(e) => {
-                                            updateResolvedLaunchProject((project) => {
-                                                const updated = { ...project, admin_mode: e.target.checked };
-                                                if (!isWindows && e.target.checked) {
-                                                    updated.yolo_mode = false;
-                                                }
-                                                return updated;
-                                            });
-                                        }}
-                                        style={{ marginRight: '6px' }}
-                                    />
-                                    <span>{isWindows ? t("adminModeLabel") : t("rootModeLabel")}</span>
-                                </label>
-                                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.8rem', color: '#6b7280' }}>
-                                    <input
-                                        type="checkbox"
                                         checked={resolvedLaunchProject?.python_project || false}
                                         onChange={(e) => updateResolvedLaunchProject((project) => ({ ...project, python_project: e.target.checked }))}
                                         style={{ marginRight: '6px' }}
@@ -4338,7 +4334,7 @@ ${instruction}`;
                                             value={launchProjectKeyword}
                                             onChange={(e) => setLaunchProjectKeyword(e.target.value)}
                                             placeholder={t("projectSearchPlaceholder")}
-                                            style={{ height: '28px', width: '130px', minWidth: '110px', fontSize: '0.76rem', padding: '2px 8px', flexShrink: 0 }}
+                                            style={{ height: '28px', width: '90px', minWidth: '70px', fontSize: '0.76rem', padding: '2px 8px', flexShrink: 1 }}
                                             spellCheck={false}
                                             autoComplete="off"
                                         />
@@ -4353,8 +4349,9 @@ ${instruction}`;
                                                 fontSize: '0.85rem',
                                                 color: '#374151',
                                                 cursor: 'pointer',
-                                                minWidth: '120px',
-                                                maxWidth: '200px'
+                                                minWidth: '80px',
+                                                maxWidth: '160px',
+                                                flexShrink: 1
                                             }}
                                         >
                                             {launchProjectSelectOptions.length > 0 ? launchProjectSelectOptions.map((proj: any) => (
@@ -4407,12 +4404,7 @@ ${instruction}`;
                                         console.log("Launch button clicked. activeTool:", activeTool);
                                         if (config?.remote_enabled && hasActiveRemoteSessionForTool && activeRemoteSessionForTool?.id) {
                                             setLaunchingTool(activeTool);
-                                            try {
-                                                await KillRemoteSession(activeRemoteSessionForTool.id);
-                                            } catch (err) {
-                                                console.warn("KillRemoteSession error (may already be stopped):", err);
-                                            }
-                                            await refreshRemotePanel();
+                                            await killRemoteSession(activeRemoteSessionForTool.id);
                                             setStatus(lang === 'zh-Hans' ? '远程已停止' : lang === 'zh-Hant' ? '遠端已停止' : 'Remote stopped');
                                             setTimeout(() => { setStatus(""); setLaunchingTool(""); }, 2000);
                                             return;

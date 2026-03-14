@@ -14,7 +14,7 @@ import (
 const (
 	defaultMobileShellDir            = "mobile"
 	defaultMobileSharedDir           = "shared"
-	defaultAndroidShellAppName       = "RapidAI Hub Shell"
+	defaultAndroidShellAppName       = "CodeClaw APP"
 	defaultAndroidShellApplicationID = "tech.rapidai.hubshell"
 	defaultAndroidShellStartURL      = "file:///android_asset/bootstrap.html"
 	defaultIOSBundleID               = "tech.rapidai.hubshell"
@@ -1462,7 +1462,7 @@ func buildMobileShellRootReadme(result MobilePWAShellResult) string {
 		"",
 		"## Defaults",
 		"",
-		"Both Android and iOS default to Hub Center `http://hubs.rapidai.tech`.",
+		"Both Android and iOS default to Hub Center `http://hubs.mypapers.top:9388`.",
 		"",
 		"## Entry Points",
 		"",

@@ -28,7 +28,7 @@ Future Android debug builds also land here as:
 
 ## Defaults
 
-Both Android and iOS default to Hub Center `http://hubs.rapidai.tech`.
+Both Android and iOS default to Hub Center `http://hubs.mypapers.top:9388`.
 
 ## Entry Points
 

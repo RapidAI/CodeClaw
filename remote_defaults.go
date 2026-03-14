@@ -1,3 +1,3 @@
 package main
 
-var defaultRemoteHubCenterURL = "http://hubs.rapidai.tech"
+var defaultRemoteHubCenterURL = "http://hubs.mypapers.top:9388"

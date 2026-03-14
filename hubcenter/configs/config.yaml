@@ -1,7 +1,7 @@
 server:
   listen_host: 0.0.0.0
   listen_port: 9388
-  public_base_url: https://hubs.rapidai.tech
+  public_base_url: https://hubs.mypapers.top
 
 database:
   driver: sqlite

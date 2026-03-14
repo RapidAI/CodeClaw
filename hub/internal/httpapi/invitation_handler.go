@@ -3,7 +3,10 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
@@ -57,8 +60,19 @@ func ListInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status := r.URL.Query().Get("status")
 		search := r.URL.Query().Get("search")
+		pageStr := r.URL.Query().Get("page")
+		pageSizeStr := r.URL.Query().Get("page_size")
 
-		codes, err := svc.ListCodes(r.Context(), status, search)
+		page, _ := strconv.Atoi(pageStr)
+		pageSize, _ := strconv.Atoi(pageSizeStr)
+		if page < 1 {
+			page = 1
+		}
+		if pageSize < 1 || pageSize > 200 {
+			pageSize = 20
+		}
+
+		codes, total, err := svc.ListCodesPaged(r.Context(), status, search, page, pageSize)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "LIST_FAILED", err.Error())
 			return
@@ -68,7 +82,12 @@ func ListInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
 		for i, c := range codes {
 			resp[i] = toInvitationCodeResponse(c)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"codes": resp})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"codes":     resp,
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
+		})
 	}
 }
 
@@ -103,6 +122,30 @@ func InvitationCodeStatusHandler(svc *invitation.Service) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"invitation_code_required": required,
 		})
+	}
+}
+
+func ExportInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		status := r.URL.Query().Get("status")
+		search := r.URL.Query().Get("search")
+
+		codes, err := svc.ListCodes(r.Context(), status, search)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "EXPORT_FAILED", err.Error())
+			return
+		}
+
+		var sb strings.Builder
+		for _, c := range codes {
+			sb.WriteString(c.Code)
+			sb.WriteByte('\n')
+		}
+
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=invitation_codes_%s.txt", time.Now().Format("20060102_150405")))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sb.String()))
 	}
 }
 

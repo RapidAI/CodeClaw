@@ -58,6 +58,22 @@ func (m *memInvitationCodeRepo) List(_ context.Context, status string, search st
 	return result, nil
 }
 
+func (m *memInvitationCodeRepo) ListPaged(_ context.Context, status string, search string, offset, limit int) ([]*store.InvitationCode, int, error) {
+	all, err := m.List(context.Background(), status, search)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(all)
+	if offset >= total {
+		return nil, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return all[offset:end], total, nil
+}
+
 func (m *memInvitationCodeRepo) MarkUsed(_ context.Context, id string, email string, usedAt time.Time) error {
 	for _, c := range m.codes {
 		if c.ID == id {

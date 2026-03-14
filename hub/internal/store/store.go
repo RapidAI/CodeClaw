@@ -73,6 +73,7 @@ type Machine struct {
 	UserID           string
 	ClientID         string
 	Name             string
+	Alias            string
 	Platform         string
 	Hostname         string
 	Arch             string
@@ -104,13 +105,14 @@ type ViewerToken struct {
 }
 
 type LoginToken struct {
-	ID         string
-	Email      string
-	TokenHash  string
-	Purpose    string
-	ExpiresAt  time.Time
-	ConsumedAt *time.Time
-	CreatedAt  time.Time
+	ID            string
+	Email         string
+	TokenHash     string
+	PollTokenHash string
+	Purpose       string
+	ExpiresAt     time.Time
+	ConsumedAt    *time.Time
+	CreatedAt     time.Time
 }
 
 type Session struct {
@@ -182,6 +184,7 @@ type InvitationCodeRepository interface {
 	Create(ctx context.Context, item *InvitationCode) error
 	GetByCode(ctx context.Context, code string) (*InvitationCode, error)
 	List(ctx context.Context, status string, search string) ([]*InvitationCode, error)
+	ListPaged(ctx context.Context, status string, search string, offset, limit int) ([]*InvitationCode, int, error)
 	MarkUsed(ctx context.Context, id string, email string, usedAt time.Time) error
 }
 
@@ -193,21 +196,27 @@ type MachineRepository interface {
 	ListAll(ctx context.Context) ([]*Machine, error)
 	Delete(ctx context.Context, machineID string) error
 	DeleteByUserID(ctx context.Context, userID string) (int64, error)
+	ForceDeleteByUserID(ctx context.Context, userID string) (int64, error)
 	DeleteOffline(ctx context.Context) (int64, error)
 	UpdateMetadata(ctx context.Context, machineID string, metadata MachineMetadata) error
 	UpdateStatus(ctx context.Context, machineID string, status string) error
 	UpdateHeartbeat(ctx context.Context, machineID string, at time.Time) error
 	UpdateTokenHash(ctx context.Context, machineID string, tokenHash string) error
+	UpdateAlias(ctx context.Context, machineID string, alias string) error
 }
 
 type ViewerTokenRepository interface {
 	Create(ctx context.Context, token *ViewerToken) error
 	GetByTokenHash(ctx context.Context, tokenHash string) (*ViewerToken, error)
+	ExtendExpiry(ctx context.Context, tokenID string, expiresAt time.Time) error
 }
 
 type LoginTokenRepository interface {
 	Create(ctx context.Context, token *LoginToken) error
 	GetByTokenHash(ctx context.Context, tokenHash string) (*LoginToken, error)
+	GetByPollTokenHash(ctx context.Context, pollTokenHash string) (*LoginToken, error)
+	GetPendingByEmail(ctx context.Context, email string) (*LoginToken, error)
+	RefreshToken(ctx context.Context, tokenID string, tokenHash string, pollTokenHash string) error
 	Consume(ctx context.Context, tokenID string, consumedAt time.Time) error
 }
 

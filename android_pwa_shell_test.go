@@ -13,7 +13,7 @@ func TestGenerateAndroidPWAShell_UsesMobileDirDefaults(t *testing.T) {
 
 	result, err := app.GenerateAndroidPWAShell(AndroidPWAShellRequest{
 		OutputDir: filepath.Join(tempDir, "mobile", "android"),
-		AppName:   "RapidAI Hub Shell",
+		AppName:   "CodeClaw APP",
 	})
 	if err != nil {
 		t.Fatalf("GenerateAndroidPWAShell() error = %v", err)
@@ -129,7 +129,7 @@ func TestGenerateMobilePWAShell_CreatesAndroidAndIOSProjects(t *testing.T) {
 
 	result, err := app.GenerateMobilePWAShell(MobilePWAShellRequest{
 		OutputDir: filepath.Join(tempDir, "mobile"),
-		AppName:   "RapidAI Hub Shell",
+		AppName:   "CodeClaw APP",
 	})
 	if err != nil {
 		t.Fatalf("GenerateMobilePWAShell() error = %v", err)

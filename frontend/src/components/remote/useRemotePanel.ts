@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivateRemote,
     CheckToolsStatus,
@@ -98,6 +98,11 @@ export function useRemotePanel(params: UseRemotePanelParams) {
     const [invitationCode, setInvitationCodeRaw] = useState("");
     const [invitationCodeError, setInvitationCodeError] = useState("");
 
+    // Track session IDs that have been killed locally but may not yet be
+    // reflected by the backend.  refreshRemotePanel will filter these out
+    // so the optimistic removal isn't overwritten by a stale server response.
+    const killedSessionIdsRef = useRef<Set<string>>(new Set());
+
     const setInvitationCode = (code: string) => {
         setInvitationCodeRaw(code);
         if (invitationCodeError) setInvitationCodeError("");
@@ -155,7 +160,21 @@ export function useRemotePanel(params: UseRemotePanelParams) {
             ]);
             setRemoteActivationStatus(activation);
             setRemoteConnectionStatus(connection);
-            setRemoteSessions(Array.isArray(sessions) ? sessions : []);
+            const inactiveStatuses = new Set(["stopped", "finished", "failed", "killed", "exited", "closed", "done"]);
+            const sessionList = Array.isArray(sessions) ? sessions : [];
+            // Remove killed IDs from the tracking set once the backend confirms
+            // they are truly inactive (or gone), so the set doesn't grow forever.
+            for (const id of killedSessionIdsRef.current) {
+                const s = sessionList.find((sess: RemoteSessionView) => sess.id === id);
+                if (!s || inactiveStatuses.has(String(s.status || s.summary?.status || "").toLowerCase())) {
+                    killedSessionIdsRef.current.delete(id);
+                }
+            }
+            // Filter out sessions that were killed locally but the backend
+            // still reports as active (race condition).
+            setRemoteSessions(
+                sessionList.filter((sess: RemoteSessionView) => !killedSessionIdsRef.current.has(sess.id))
+            );
             if (smokeSnapshot?.exists && smokeSnapshot?.report) {
                 setRemoteSmokeReport(smokeSnapshot.report);
             }
@@ -415,6 +434,7 @@ export function useRemotePanel(params: UseRemotePanelParams) {
         } catch (err) {
             console.warn("KillRemoteSession error (may already be stopped):", err);
         }
+        killedSessionIdsRef.current.add(sessionID);
         setRemoteSessions((prev) => prev.filter((session) => session.id !== sessionID));
         setRemoteInputDrafts((prev) => {
             const next = { ...prev };

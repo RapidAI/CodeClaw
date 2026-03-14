@@ -5,7 +5,7 @@ set "ROOT_DIR=%~dp0"
 set "ROOT_DIR_TRIM=%ROOT_DIR:~0,-1%"
 set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "PROMPT_SCRIPT=%ROOT_DIR%prompt_password.ps1"
-set "REMOTE_HOST=hubs.rapidai.tech"
+set "REMOTE_HOST=hubs.mypapers.top"
 set "REMOTE_PORT=22"
 set "REMOTE_USER=root"
 set "REMOTE_HOSTKEY=ssh-ed25519 255 SHA256:i4dErlVhnE3VDG7s6lOJ/cg3wfyqf1bgRXSqIddwuog"
@@ -72,8 +72,8 @@ echo.
 echo [1/5] Preparing connection info
 echo        Host: %REMOTE_USER%@%REMOTE_HOST%:%REMOTE_PORT%
 echo        HostKey: %REMOTE_HOSTKEY%
-echo        Deploy hub       -> %REMOTE_HUB_DIR%
-echo        Deploy hubcenter -> %REMOTE_HUBCENTER_DIR%
+echo        Deploy hub       -^> %REMOTE_HUB_DIR%
+echo        Deploy hubcenter -^> %REMOTE_HUBCENTER_DIR%
 echo.
 
 echo [2/5] Preparing source package...
@@ -167,7 +167,7 @@ if not exist "%PROMPT_SCRIPT%" (
 )
 echo Please enter SSH password for %REMOTE_USER%@%REMOTE_HOST%.
 del /q "%PASSWORD_FILE%" >nul 2>nul
-"%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -File "%PROMPT_SCRIPT%" -Prompt "Password" > "%PASSWORD_FILE%"
+"%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -File "%PROMPT_SCRIPT%" -Prompt "Password" -OutputPath "%PASSWORD_FILE%"
 if exist "%PASSWORD_FILE%" (
   set /p REMOTE_PASS=<"%PASSWORD_FILE%"
   del /q "%PASSWORD_FILE%" >nul 2>nul
@@ -280,5 +280,4 @@ if errorlevel 1 (
 )
 endlocal
 exit /b 0
-
 

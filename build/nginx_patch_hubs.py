@@ -5,13 +5,13 @@ from datetime import datetime
 conf = Path("/soft/nginx/conf/nginx.conf")
 text = conf.read_text()
 
-marker = "server_name hubs.rapidai.tech;"
+marker = "server_name hubs.mypapers.top;"
 if marker not in text:
     block = """
 
     server {
         listen 80;
-        server_name hubs.rapidai.tech;
+        server_name hubs.mypapers.top;
 
         location / {
             proxy_pass http://127.0.0.1:9399;
@@ -27,7 +27,7 @@ if marker not in text:
 
     server {
         listen 443 ssl;
-        server_name hubs.rapidai.tech;
+        server_name hubs.mypapers.top;
 
         ssl_certificate /soft/nginx/conf/crt/alldomain.cert;
         ssl_certificate_key /soft/nginx/conf/crt/alldomain.key;

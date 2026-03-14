@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -170,6 +171,30 @@ func DeleteMachineHandler(devices *device.Service) http.HandlerFunc {
 	}
 }
 
+func RenameMachineHandler(devices *device.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			MachineID string `json:"machine_id"`
+			Alias     string `json:"alias"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request body")
+			return
+		}
+		body.MachineID = strings.TrimSpace(body.MachineID)
+		body.Alias = strings.TrimSpace(body.Alias)
+		if body.MachineID == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "machine_id is required")
+			return
+		}
+		if err := devices.RenameMachine(r.Context(), body.MachineID, body.Alias); err != nil {
+			writeError(w, http.StatusInternalServerError, "RENAME_FAILED", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"renamed": true, "machine_id": body.MachineID, "alias": body.Alias})
+	}
+}
+
 func ClearOfflineMachinesHandler(devices *device.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		count, err := devices.ClearOfflineMachines(r.Context())
@@ -212,6 +237,46 @@ func DeleteMachinesByEmailHandler(devices *device.Service, users machineUserLook
 		var total int64
 		for uid := range userIDs {
 			count, err := devices.DeleteMachinesByUser(r.Context(), uid)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "DELETE_FAILED", err.Error())
+				return
+			}
+			total += count
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": total})
+	}
+}
+
+func ForceDeleteMachinesByEmailHandler(devices *device.Service, users machineUserLookup) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		email := strings.TrimSpace(r.URL.Query().Get("email"))
+		if email == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "email is required")
+			return
+		}
+		if users == nil {
+			writeError(w, http.StatusInternalServerError, "NO_USER_LOOKUP", "user lookup not available")
+			return
+		}
+		items, err := devices.ListAllMachines(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "LIST_FAILED", err.Error())
+			return
+		}
+		enriched := enrichMachineList(r.Context(), items, users)
+		userIDs := map[string]bool{}
+		for _, item := range enriched {
+			if strings.EqualFold(item.UserEmail, email) {
+				userIDs[item.UserID] = true
+			}
+		}
+		if len(userIDs) == 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"deleted": int64(0)})
+			return
+		}
+		var total int64
+		for uid := range userIDs {
+			count, err := devices.ForceDeleteMachinesByUser(r.Context(), uid)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "DELETE_FAILED", err.Error())
 				return

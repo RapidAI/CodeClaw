@@ -89,14 +89,37 @@ type Service struct {
 	mu        sync.RWMutex
 	nextID    int
 	listeners map[int]Listener
+	stopReap  chan struct{}
 }
 
+// terminalStatuses lists session statuses that indicate the session is no
+// longer running.  Sessions in these states are eligible for reaping after
+// the stale-session TTL expires.
+var terminalStatuses = map[string]bool{
+	"stopped":    true,
+	"finished":   true,
+	"failed":     true,
+	"killed":     true,
+	"exited":     true,
+	"closed":     true,
+	"done":       true,
+	"completed":  true,
+	"terminated": true,
+}
+
+// staleSessionTTL is the duration after which a terminal session is removed
+// from the in-memory cache and excluded from list results.
+const staleSessionTTL = 5 * time.Minute
+
 func NewService(cache *Cache, sessions store.SessionRepository) *Service {
-	return &Service{
+	svc := &Service{
 		cache:     cache,
 		sessions:  sessions,
 		listeners: map[int]Listener{},
+		stopReap:  make(chan struct{}),
 	}
+	go svc.reapLoop()
+	return svc
 }
 
 func NewCache() *Cache {
@@ -306,12 +329,18 @@ func (s *Service) GetSnapshot(userID, machineID, sessionID string) (*SessionCach
 func (s *Service) ListByMachine(ctx context.Context, userID, machineID string) ([]*SessionCacheEntry, error) {
 	_ = ctx
 
+	now := time.Now()
 	s.cache.mu.RLock()
 	defer s.cache.mu.RUnlock()
 
 	out := make([]*SessionCacheEntry, 0)
 	for _, entry := range s.cache.sessions {
 		if entry.UserID == userID && entry.MachineID == machineID {
+			// Skip terminal sessions that have been idle longer than the TTL
+			// so the PWA does not show stale closed sessions.
+			if terminalStatuses[strings.ToLower(entry.Summary.Status)] && now.Sub(entry.UpdatedAt) > staleSessionTTL {
+				continue
+			}
 			out = append(out, cloneSessionCacheEntry(entry))
 		}
 	}
@@ -414,5 +443,45 @@ func extractUnixTime(v any, fallback time.Time) time.Time {
 		return time.Unix(int64(val), 0)
 	default:
 		return fallback
+	}
+}
+
+// reapLoop periodically removes terminal sessions that have been idle longer
+// than staleSessionTTL from the in-memory cache.
+func (s *Service) reapLoop() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.reapStaleSessions()
+		case <-s.stopReap:
+			return
+		}
+	}
+}
+
+// reapStaleSessions removes closed/exited sessions from the cache once they
+// exceed the stale-session TTL.
+func (s *Service) reapStaleSessions() {
+	now := time.Now()
+	s.cache.mu.Lock()
+	defer s.cache.mu.Unlock()
+
+	for id, entry := range s.cache.sessions {
+		if terminalStatuses[strings.ToLower(entry.Summary.Status)] && now.Sub(entry.UpdatedAt) > staleSessionTTL {
+			delete(s.cache.sessions, id)
+		}
+	}
+}
+
+// StopReaper stops the background reaper goroutine.  Safe to call multiple
+// times; only the first call has an effect.
+func (s *Service) StopReaper() {
+	select {
+	case <-s.stopReap:
+		// already closed
+	default:
+		close(s.stopReap)
 	}
 }

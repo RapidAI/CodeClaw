@@ -28,6 +28,10 @@ type EmailConfirmLoginRequest struct {
 	Token string `json:"token"`
 }
 
+type EmailPollLoginRequest struct {
+	PollID string `json:"poll_id"`
+}
+
 func EnrollStartHandler(identity *auth.IdentityService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req EnrollStartRequest
@@ -124,11 +128,34 @@ func EmailConfirmLoginHandler(identity *auth.IdentityService) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"access_token": token,
-			"expires_in":   86400,
+			"expires_in":   30 * 86400,
 			"user": map[string]any{
 				"email": user.Email,
 				"sn":    user.SN,
 			},
 		})
+	}
+}
+
+func EmailPollLoginHandler(identity *auth.IdentityService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req EmailPollLoginRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request body")
+			return
+		}
+
+		if req.PollID == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "poll_id is required")
+			return
+		}
+
+		result, err := identity.PollEmailLogin(r.Context(), req.PollID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "POLL_FAILED", err.Error())
+			return
+		}
+
+		writeJSON(w, http.StatusOK, result)
 	}
 }

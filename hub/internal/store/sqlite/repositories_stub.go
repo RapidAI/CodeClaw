@@ -528,7 +528,7 @@ func (r *machineRepo) Create(ctx context.Context, machine *store.Machine) error 
 func (r *machineRepo) GetByID(ctx context.Context, id string) (*store.Machine, error) {
 	row := r.readDB.QueryRowContext(
 		ctx,
-		`SELECT id, user_id, name, platform, hostname, arch, app_version, heartbeat_sec, machine_token_hash, status, last_seen_at, created_at, updated_at
+		`SELECT id, user_id, name, alias, platform, hostname, arch, app_version, heartbeat_sec, machine_token_hash, status, last_seen_at, created_at, updated_at
 		 FROM machines WHERE id = ?`,
 		id,
 	)
@@ -541,6 +541,7 @@ func (r *machineRepo) GetByID(ctx context.Context, id string) (*store.Machine, e
 		&machine.ID,
 		&machine.UserID,
 		&machine.Name,
+		&machine.Alias,
 		&machine.Platform,
 		&machine.Hostname,
 		&machine.Arch,
@@ -574,7 +575,7 @@ func (r *machineRepo) GetByID(ctx context.Context, id string) (*store.Machine, e
 func (r *machineRepo) ListByUserID(ctx context.Context, userID string) ([]*store.Machine, error) {
 	rows, err := r.readDB.QueryContext(
 		ctx,
-		`SELECT id, user_id, name, platform, hostname, arch, app_version, heartbeat_sec, machine_token_hash, status, last_seen_at, created_at, updated_at
+		`SELECT id, user_id, name, alias, platform, hostname, arch, app_version, heartbeat_sec, machine_token_hash, status, last_seen_at, created_at, updated_at
 		 FROM machines WHERE user_id = ? ORDER BY updated_at DESC`,
 		userID,
 	)
@@ -593,6 +594,7 @@ func (r *machineRepo) ListByUserID(ctx context.Context, userID string) ([]*store
 			&machine.ID,
 			&machine.UserID,
 			&machine.Name,
+			&machine.Alias,
 			&machine.Platform,
 			&machine.Hostname,
 			&machine.Arch,
@@ -672,7 +674,7 @@ func (r *machineRepo) UpdateHeartbeat(ctx context.Context, machineID string, at 
 func (r *machineRepo) GetByUserAndClientID(ctx context.Context, userID, clientID string) (*store.Machine, error) {
 	row := r.readDB.QueryRowContext(
 		ctx,
-		`SELECT id, user_id, name, platform, hostname, arch, app_version, heartbeat_sec, machine_token_hash, status, last_seen_at, created_at, updated_at
+		`SELECT id, user_id, name, alias, platform, hostname, arch, app_version, heartbeat_sec, machine_token_hash, status, last_seen_at, created_at, updated_at
 		 FROM machines WHERE user_id = ? AND client_id = ?`,
 		userID, clientID,
 	)
@@ -685,6 +687,7 @@ func (r *machineRepo) GetByUserAndClientID(ctx context.Context, userID, clientID
 		&machine.ID,
 		&machine.UserID,
 		&machine.Name,
+		&machine.Alias,
 		&machine.Platform,
 		&machine.Hostname,
 		&machine.Arch,
@@ -728,10 +731,22 @@ func (r *machineRepo) UpdateTokenHash(ctx context.Context, machineID string, tok
 	)
 }
 
+func (r *machineRepo) UpdateAlias(ctx context.Context, machineID string, alias string) error {
+	return execWrite(
+		ctx,
+		r.batch,
+		r.db,
+		`UPDATE machines SET alias = ?, updated_at = ? WHERE id = ?`,
+		alias,
+		time.Now().Format(time.RFC3339),
+		machineID,
+	)
+}
+
 func (r *machineRepo) ListAll(ctx context.Context) ([]*store.Machine, error) {
 	rows, err := r.readDB.QueryContext(
 		ctx,
-		`SELECT id, user_id, name, platform, hostname, arch, app_version, heartbeat_sec, machine_token_hash, status, last_seen_at, created_at, updated_at
+		`SELECT id, user_id, name, alias, platform, hostname, arch, app_version, heartbeat_sec, machine_token_hash, status, last_seen_at, created_at, updated_at
 		 FROM machines ORDER BY updated_at DESC`,
 	)
 	if err != nil {
@@ -749,6 +764,7 @@ func (r *machineRepo) ListAll(ctx context.Context) ([]*store.Machine, error) {
 			&machine.ID,
 			&machine.UserID,
 			&machine.Name,
+			&machine.Alias,
 			&machine.Platform,
 			&machine.Hostname,
 			&machine.Arch,
@@ -783,6 +799,14 @@ func (r *machineRepo) Delete(ctx context.Context, machineID string) error {
 
 func (r *machineRepo) DeleteByUserID(ctx context.Context, userID string) (int64, error) {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM machines WHERE user_id = ? AND status != 'online'`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (r *machineRepo) ForceDeleteByUserID(ctx context.Context, userID string) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM machines WHERE user_id = ?`, userID)
 	if err != nil {
 		return 0, err
 	}
@@ -855,6 +879,16 @@ func (r *viewerTokenRepo) GetByTokenHash(ctx context.Context, tokenHash string) 
 	return &token, nil
 }
 
+func (r *viewerTokenRepo) ExtendExpiry(ctx context.Context, tokenID string, expiresAt time.Time) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE viewer_tokens SET expires_at = ? WHERE id = ?`,
+		expiresAt.Format(time.RFC3339),
+		tokenID,
+	)
+	return err
+}
+
 func (r *loginTokenRepo) Create(ctx context.Context, token *store.LoginToken) error {
 	var consumedAt any
 	if token.ConsumedAt != nil {
@@ -862,11 +896,12 @@ func (r *loginTokenRepo) Create(ctx context.Context, token *store.LoginToken) er
 	}
 	_, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO login_tokens (id, email, token_hash, purpose, expires_at, consumed_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO login_tokens (id, email, token_hash, poll_token_hash, purpose, expires_at, consumed_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		token.ID,
 		token.Email,
 		token.TokenHash,
+		token.PollTokenHash,
 		token.Purpose,
 		token.ExpiresAt.Format(time.RFC3339),
 		consumedAt,
@@ -878,7 +913,7 @@ func (r *loginTokenRepo) Create(ctx context.Context, token *store.LoginToken) er
 func (r *loginTokenRepo) GetByTokenHash(ctx context.Context, tokenHash string) (*store.LoginToken, error) {
 	row := r.readDB.QueryRowContext(
 		ctx,
-		`SELECT id, email, token_hash, purpose, expires_at, consumed_at, created_at
+		`SELECT id, email, token_hash, poll_token_hash, purpose, expires_at, consumed_at, created_at
 		 FROM login_tokens WHERE token_hash = ?`,
 		tokenHash,
 	)
@@ -891,6 +926,48 @@ func (r *loginTokenRepo) GetByTokenHash(ctx context.Context, tokenHash string) (
 		&token.ID,
 		&token.Email,
 		&token.TokenHash,
+		&token.PollTokenHash,
+		&token.Purpose,
+		&expiresAt,
+		&consumedAt,
+		&createdAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if expiresAt.Valid {
+		token.ExpiresAt = mustParseTime(expiresAt.String)
+	}
+	if consumedAt.Valid {
+		t := mustParseTime(consumedAt.String)
+		token.ConsumedAt = &t
+	}
+	if createdAt.Valid {
+		token.CreatedAt = mustParseTime(createdAt.String)
+	}
+	return &token, nil
+}
+
+func (r *loginTokenRepo) GetByPollTokenHash(ctx context.Context, pollTokenHash string) (*store.LoginToken, error) {
+	row := r.readDB.QueryRowContext(
+		ctx,
+		`SELECT id, email, token_hash, poll_token_hash, purpose, expires_at, consumed_at, created_at
+		 FROM login_tokens WHERE poll_token_hash = ?`,
+		pollTokenHash,
+	)
+
+	var (
+		token                            store.LoginToken
+		expiresAt, consumedAt, createdAt sql.NullString
+	)
+	if err := row.Scan(
+		&token.ID,
+		&token.Email,
+		&token.TokenHash,
+		&token.PollTokenHash,
 		&token.Purpose,
 		&expiresAt,
 		&consumedAt,
@@ -920,6 +997,61 @@ func (r *loginTokenRepo) Consume(ctx context.Context, tokenID string, consumedAt
 		ctx,
 		`UPDATE login_tokens SET consumed_at = ? WHERE id = ?`,
 		consumedAt.Format(time.RFC3339),
+		tokenID,
+	)
+	return err
+}
+
+func (r *loginTokenRepo) GetPendingByEmail(ctx context.Context, email string) (*store.LoginToken, error) {
+	row := r.readDB.QueryRowContext(
+		ctx,
+		`SELECT id, email, token_hash, poll_token_hash, purpose, expires_at, consumed_at, created_at
+		 FROM login_tokens
+		 WHERE email = ? AND consumed_at IS NULL AND expires_at > ?
+		 ORDER BY created_at DESC LIMIT 1`,
+		email,
+		time.Now().Format(time.RFC3339),
+	)
+
+	var (
+		token                            store.LoginToken
+		expiresAt, consumedAt, createdAt sql.NullString
+	)
+	if err := row.Scan(
+		&token.ID,
+		&token.Email,
+		&token.TokenHash,
+		&token.PollTokenHash,
+		&token.Purpose,
+		&expiresAt,
+		&consumedAt,
+		&createdAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if expiresAt.Valid {
+		token.ExpiresAt = mustParseTime(expiresAt.String)
+	}
+	if consumedAt.Valid {
+		t := mustParseTime(consumedAt.String)
+		token.ConsumedAt = &t
+	}
+	if createdAt.Valid {
+		token.CreatedAt = mustParseTime(createdAt.String)
+	}
+	return &token, nil
+}
+
+func (r *loginTokenRepo) RefreshToken(ctx context.Context, tokenID string, tokenHash string, pollTokenHash string) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE login_tokens SET token_hash = ?, poll_token_hash = ? WHERE id = ?`,
+		tokenHash,
+		pollTokenHash,
 		tokenID,
 	)
 	return err
@@ -1087,6 +1219,60 @@ func (r *invitationCodeRepo) List(ctx context.Context, status string, search str
 		items = append(items, &item)
 	}
 	return items, rows.Err()
+}
+
+func (r *invitationCodeRepo) ListPaged(ctx context.Context, status string, search string, offset, limit int) ([]*store.InvitationCode, int, error) {
+	baseWhere := ""
+	var conditions []string
+	var args []any
+
+	if status != "" {
+		conditions = append(conditions, "status = ?")
+		args = append(args, status)
+	}
+	if search != "" {
+		conditions = append(conditions, "code LIKE ?")
+		args = append(args, "%"+search+"%")
+	}
+	if len(conditions) > 0 {
+		baseWhere = " WHERE " + conditions[0]
+		for _, c := range conditions[1:] {
+			baseWhere += " AND " + c
+		}
+	}
+
+	// Count total
+	var total int
+	countQuery := `SELECT COUNT(*) FROM invitation_codes` + baseWhere
+	if err := r.readDB.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	// Fetch page
+	query := `SELECT id, code, status, used_by_email, used_at, created_at FROM invitation_codes` + baseWhere + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	pageArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := r.readDB.QueryContext(ctx, query, pageArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var items []*store.InvitationCode
+	for rows.Next() {
+		var item store.InvitationCode
+		var usedAt sql.NullString
+		var createdAt string
+		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &createdAt); err != nil {
+			return nil, 0, err
+		}
+		if usedAt.Valid {
+			t := mustParseTime(usedAt.String)
+			item.UsedAt = &t
+		}
+		item.CreatedAt = mustParseTime(createdAt)
+		items = append(items, &item)
+	}
+	return items, total, rows.Err()
 }
 
 func (r *invitationCodeRepo) MarkUsed(ctx context.Context, id string, email string, usedAt time.Time) error {

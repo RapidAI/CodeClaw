@@ -48,6 +48,15 @@ type EnrollmentResult struct {
 type EmailLoginRequestResult struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
+	PollID  string `json:"poll_id,omitempty"`
+}
+
+type EmailPollResult struct {
+	Status      string `json:"status"`
+	AccessToken string `json:"access_token,omitempty"`
+	ExpiresIn   int    `json:"expires_in,omitempty"`
+	Email       string `json:"email,omitempty"`
+	SN          string `json:"sn,omitempty"`
 }
 
 type SystemSettingsRepository interface {
@@ -152,8 +161,13 @@ func (s *IdentityService) StartEnrollment(ctx context.Context, email, machineNam
 		return nil, err
 	}
 
-	// Invitation code validation
-	if s.invitationSvc != nil {
+	user, err := s.users.GetByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+
+	// Invitation code validation — only required for new users
+	if user == nil && s.invitationSvc != nil {
 		required, err := s.invitationSvc.IsRequired(ctx)
 		if err != nil {
 			return nil, err
@@ -168,10 +182,6 @@ func (s *IdentityService) StartEnrollment(ctx context.Context, email, machineNam
 		}
 	}
 
-	user, err := s.users.GetByEmail(ctx, email)
-	if err != nil {
-		return nil, err
-	}
 	if user == nil {
 		mode, err := s.enrollmentModeValue(ctx)
 		if err != nil {
@@ -255,16 +265,34 @@ func (s *IdentityService) RequestEmailLogin(ctx context.Context, email string) (
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	if err := s.loginTok.Create(ctx, &store.LoginToken{
-		ID:        newID("lt"),
-		Email:     email,
-		TokenHash: hashToken(rawToken),
-		Purpose:   "login",
-		ExpiresAt: now.Add(15 * time.Minute),
-		CreatedAt: now,
-	}); err != nil {
+	rawPollToken, err := randomToken(32)
+	if err != nil {
 		return nil, err
+	}
+
+	// Reuse existing pending login token if one exists (avoid creating duplicates).
+	existing, err := s.loginTok.GetPendingByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		// Refresh the token hashes so we can send a new confirm URL and return a new poll_id.
+		if err := s.loginTok.RefreshToken(ctx, existing.ID, hashToken(rawToken), hashToken(rawPollToken)); err != nil {
+			return nil, err
+		}
+	} else {
+		now := time.Now()
+		if err := s.loginTok.Create(ctx, &store.LoginToken{
+			ID:            newID("lt"),
+			Email:         email,
+			TokenHash:     hashToken(rawToken),
+			PollTokenHash: hashToken(rawPollToken),
+			Purpose:       "login",
+			ExpiresAt:     now.Add(15 * time.Minute),
+			CreatedAt:     now,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	confirmURL := s.buildConfirmURL(rawToken)
@@ -281,6 +309,7 @@ func (s *IdentityService) RequestEmailLogin(ctx context.Context, email string) (
 	return &EmailLoginRequestResult{
 		Status:  "pending_email_confirmation",
 		Message: message,
+		PollID:  rawPollToken,
 	}, nil
 }
 
@@ -310,7 +339,7 @@ func (s *IdentityService) ConfirmEmailLogin(ctx context.Context, rawToken string
 		ID:        newID("vt"),
 		UserID:    user.ID,
 		TokenHash: hashToken(rawViewerToken),
-		ExpiresAt: now.Add(24 * time.Hour),
+		ExpiresAt: now.Add(30 * 24 * time.Hour),
 		CreatedAt: now,
 	}); err != nil {
 		return "", nil, err
@@ -320,6 +349,59 @@ func (s *IdentityService) ConfirmEmailLogin(ctx context.Context, rawToken string
 	}
 
 	return rawViewerToken, user, nil
+}
+
+// PollEmailLogin checks if the login token identified by rawPollToken has been
+// consumed (i.e. the user clicked the email confirmation link). If consumed,
+// it creates a new viewer token and returns it so the original PWA tab can
+// automatically sign in.
+func (s *IdentityService) PollEmailLogin(ctx context.Context, rawPollToken string) (*EmailPollResult, error) {
+	loginToken, err := s.loginTok.GetByPollTokenHash(ctx, hashToken(rawPollToken))
+	if err != nil {
+		return nil, err
+	}
+	if loginToken == nil {
+		return &EmailPollResult{Status: "invalid"}, nil
+	}
+	if time.Now().After(loginToken.ExpiresAt) {
+		return &EmailPollResult{Status: "expired"}, nil
+	}
+	if loginToken.ConsumedAt == nil {
+		return &EmailPollResult{Status: "pending"}, nil
+	}
+
+	// Token was consumed — the user confirmed via email link.
+	// Issue a viewer token for this polling client too.
+	user, err := s.users.GetByEmail(ctx, loginToken.Email)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil || user.Status != "active" {
+		return &EmailPollResult{Status: "confirmed_but_inactive"}, nil
+	}
+
+	rawViewerToken, err := randomToken(32)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if err := s.viewerTok.Create(ctx, &store.ViewerToken{
+		ID:        newID("vt"),
+		UserID:    user.ID,
+		TokenHash: hashToken(rawViewerToken),
+		ExpiresAt: now.Add(30 * 24 * time.Hour),
+		CreatedAt: now,
+	}); err != nil {
+		return nil, err
+	}
+
+	return &EmailPollResult{
+		Status:      "confirmed",
+		AccessToken: rawViewerToken,
+		ExpiresIn:   30 * 86400,
+		Email:       user.Email,
+		SN:          user.SN,
+	}, nil
 }
 
 func (s *IdentityService) ManualBind(ctx context.Context, email string) (*store.User, error) {
@@ -496,6 +578,12 @@ func (s *IdentityService) AuthenticateViewer(ctx context.Context, rawToken strin
 		return nil, ErrInvalidUserCredentials
 	}
 
+	// Sliding expiration: if less than half the lifetime remains, extend to 30 days from now.
+	remaining := time.Until(viewerToken.ExpiresAt)
+	if remaining < 15*24*time.Hour {
+		_ = s.viewerTok.ExtendExpiry(ctx, viewerToken.ID, time.Now().Add(30*24*time.Hour))
+	}
+
 	return &ViewerPrincipal{UserID: user.ID, Email: user.Email}, nil
 }
 
@@ -514,6 +602,46 @@ func (s *IdentityService) createApprovedUser(ctx context.Context, email string) 
 		return nil, err
 	}
 	return user, nil
+}
+
+// ListPendingEnrollments returns all enrollment requests with status "pending".
+func (s *IdentityService) ListPendingEnrollments(ctx context.Context) ([]*store.UserEnrollment, error) {
+	return s.enrollments.ListPending(ctx)
+}
+
+// ApproveEnrollment approves a pending enrollment and creates an active user.
+func (s *IdentityService) ApproveEnrollment(ctx context.Context, id string) (*store.User, error) {
+	// We need to find the enrollment to get the email — list all pending and find by ID
+	pending, err := s.enrollments.ListPending(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var target *store.UserEnrollment
+	for _, p := range pending {
+		if p.ID == id {
+			target = p
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("enrollment not found or not pending: %s", id)
+	}
+	if err := s.enrollments.Approve(ctx, id, time.Now()); err != nil {
+		return nil, err
+	}
+	// Check if user already exists (e.g. re-approval)
+	existing, _ := s.users.GetByEmail(ctx, target.Email)
+	if existing != nil {
+		existing.EnrollmentStatus = "approved"
+		existing.Status = "active"
+		return existing, nil
+	}
+	return s.createApprovedUser(ctx, target.Email)
+}
+
+// RejectEnrollment rejects a pending enrollment request.
+func (s *IdentityService) RejectEnrollment(ctx context.Context, id string) error {
+	return s.enrollments.Reject(ctx, id, time.Now())
 }
 
 func (s *IdentityService) ensurePendingApproval(ctx context.Context, email string, message string) (*EnrollmentResult, error) {

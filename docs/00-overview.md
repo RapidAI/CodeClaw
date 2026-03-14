@@ -79,7 +79,7 @@ Work Hub:
 ### 3.3 CodeClaw Hub Center
 Official and self-hosted hub directory:
 
-- default official address: `https://hubs.rapidai.tech`
+- default official address: `https://hubs.mypapers.top`
 - resolves entry by email
 - tracks registered hubs
 - provides platform governance

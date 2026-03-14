@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "RapidAI Hub Shell"
+rootProject.name = "CodeClaw APP"
 include(":app")

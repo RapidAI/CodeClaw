@@ -144,6 +144,18 @@ func (s *Service) ListCodes(ctx context.Context, status string, search string) (
 	return s.repo.List(ctx, status, search)
 }
 
+// ListCodesPaged returns a page of invitation codes and the total count.
+func (s *Service) ListCodesPaged(ctx context.Context, status string, search string, page, pageSize int) ([]*store.InvitationCode, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+	return s.repo.ListPaged(ctx, status, search, offset, pageSize)
+}
+
 // generateCode generates a random 10-character code from A-Z0-9 using crypto/rand.
 func generateCode() (string, error) {
 	charsetLen := big.NewInt(int64(len(codeCharset)))
