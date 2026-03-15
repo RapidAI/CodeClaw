@@ -84,6 +84,17 @@ type Notifier struct {
 	// pending email verification for open_id binding (open_id → pendingBind).
 	pendMu  sync.Mutex
 	pending map[string]*pendingBind
+
+	// dedup: track last pushed state per session to avoid re-pushing the same
+	// status after hub restart. Persisted to DB under "feishu_last_push" key.
+	dedupMu    sync.Mutex
+	lastPushed map[string]string // session_id → hash of last pushed content
+
+	// Short aliases for session IDs per user (open_id → {alias→sessionID, sessionID→alias}).
+	aliasMu   sync.RWMutex
+	aliasToID map[string]map[string]string // open_id → (alias → session_id)
+	idToAlias map[string]map[string]string // open_id → (session_id → alias)
+	aliasSeq  map[string]int              // open_id → next alias number
 }
 
 // New creates a Notifier. The notifier is always returned (never nil) so that
@@ -102,6 +113,10 @@ func New(appID, appSecret string, users store.UserRepository, system store.Syste
 		previewBuf:      make(map[string][]string),
 		previewTimers:   make(map[string]*time.Timer),
 		pending:         make(map[string]*pendingBind),
+		lastPushed:      make(map[string]string),
+		aliasToID:       make(map[string]map[string]string),
+		idToAlias:       make(map[string]map[string]string),
+		aliasSeq:        make(map[string]int),
 	}
 	if appID != "" && appSecret != "" {
 		bot := lark.NewChatBot(appID, appSecret)
@@ -110,6 +125,7 @@ func New(appID, appSecret string, users store.UserRepository, system store.Syste
 		log.Printf("[feishu] notifier initialized (app_id=%s)", appID)
 	}
 	n.loadOpenIDMap()
+	n.loadLastPushed()
 	return n
 }
 
@@ -206,11 +222,150 @@ func (n *Notifier) saveOpenIDMap() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Event dedup — avoid re-pushing the same status after hub restart
+// ---------------------------------------------------------------------------
+
+const lastPushedKey = "feishu_last_push"
+
+func (n *Notifier) loadLastPushed() {
+	if n.system == nil {
+		return
+	}
+	raw, err := n.system.Get(context.Background(), lastPushedKey)
+	if err != nil || raw == "" {
+		return
+	}
+	var m map[string]string
+	if json.Unmarshal([]byte(raw), &m) == nil {
+		n.dedupMu.Lock()
+		n.lastPushed = m
+		n.dedupMu.Unlock()
+	}
+}
+
+func (n *Notifier) saveLastPushed() {
+	if n.system == nil {
+		return
+	}
+	n.dedupMu.Lock()
+	// Evict old entries to prevent unbounded growth (keep last 200).
+	if len(n.lastPushed) > 200 {
+		n.lastPushed = make(map[string]string)
+	}
+	data, _ := json.Marshal(n.lastPushed)
+	n.dedupMu.Unlock()
+	if err := n.system.Set(context.Background(), lastPushedKey, string(data)); err != nil {
+		log.Printf("[feishu] failed to save last_push map: %v", err)
+	}
+}
+
+// isDuplicate returns true if the given session+key combination was already
+// pushed with the same content hash. If not a duplicate, it records the hash.
+func (n *Notifier) isDuplicate(sessionID, eventKey, contentHash string) bool {
+	key := sessionID + ":" + eventKey
+	n.dedupMu.Lock()
+	defer n.dedupMu.Unlock()
+	if n.lastPushed[key] == contentHash {
+		return true
+	}
+	n.lastPushed[key] = contentHash
+	return false
+}
+
+// clearDedup removes dedup entries for a session (called on session close).
+func (n *Notifier) clearDedup(sessionID string) {
+	n.dedupMu.Lock()
+	for k := range n.lastPushed {
+		if strings.HasPrefix(k, sessionID+":") {
+			delete(n.lastPushed, k)
+		}
+	}
+	n.dedupMu.Unlock()
+}
+
 // resolveOpenID returns the open_id for an email, if bound.
 func (n *Notifier) resolveOpenID(email string) string {
 	n.oidMu.RLock()
 	defer n.oidMu.RUnlock()
 	return n.oidCache[email]
+}
+
+// ---------------------------------------------------------------------------
+// Session alias helpers — short numeric IDs for Feishu display
+// ---------------------------------------------------------------------------
+
+// getOrCreateAlias returns a short alias (e.g. "1", "2") for a session ID,
+// scoped to a specific open_id user. Creates one if it doesn't exist.
+func (n *Notifier) getOrCreateAlias(openID, sessionID string) string {
+	n.aliasMu.Lock()
+	defer n.aliasMu.Unlock()
+	if m, ok := n.idToAlias[openID]; ok {
+		if alias, ok := m[sessionID]; ok {
+			return alias
+		}
+	}
+	// Create new alias.
+	if n.aliasToID[openID] == nil {
+		n.aliasToID[openID] = make(map[string]string)
+		n.idToAlias[openID] = make(map[string]string)
+	}
+	n.aliasSeq[openID]++
+	alias := fmt.Sprintf("%d", n.aliasSeq[openID])
+	n.aliasToID[openID][alias] = sessionID
+	n.idToAlias[openID][sessionID] = alias
+	return alias
+}
+
+// resolveAlias resolves user input to a real session ID. It checks:
+// 1. If input is a short alias number for this user
+// 2. Otherwise falls through to suffix/prefix matching in findSession
+func (n *Notifier) resolveAlias(openID, input string) string {
+	n.aliasMu.RLock()
+	defer n.aliasMu.RUnlock()
+	if m, ok := n.aliasToID[openID]; ok {
+		if sid, ok := m[input]; ok {
+			return sid
+		}
+	}
+	return input // not an alias, return as-is for suffix matching
+}
+
+// getAlias returns the alias for a session ID if one exists, otherwise returns shortID.
+func (n *Notifier) getAlias(openID, sessionID string) string {
+	n.aliasMu.RLock()
+	defer n.aliasMu.RUnlock()
+	if m, ok := n.idToAlias[openID]; ok {
+		if alias, ok := m[sessionID]; ok {
+			return "#" + alias
+		}
+	}
+	return shortID(sessionID)
+}
+
+// buildAliasesForUser pre-assigns aliases for all sessions visible to a user.
+// Called before listing sessions so that aliases are consistent.
+func (n *Notifier) buildAliasesForUser(openID string) {
+	if n.sessions == nil || n.devices == nil {
+		return
+	}
+	userID := n.resolveUserID(openID)
+	if userID == "" {
+		return
+	}
+	machines, err := n.devices.ListMachines(context.Background(), userID)
+	if err != nil {
+		return
+	}
+	for _, m := range machines {
+		sessions, err := n.sessions.ListByMachine(context.Background(), userID, m.MachineID)
+		if err != nil {
+			continue
+		}
+		for _, s := range sessions {
+			n.getOrCreateAlias(openID, s.SessionID)
+		}
+	}
 }
 
 // HandleEvent is a session.Listener that forwards key events to Feishu.
@@ -291,6 +446,13 @@ func (n *Notifier) onSessionSummary(event session.Event) {
 		return
 	}
 
+	// Dedup: skip if we already pushed the same status+task for this session.
+	hash := fmt.Sprintf("%s|%s|%v|%s", s.Status, s.CurrentTask, s.WaitingForUser, s.SuggestedAction)
+	if n.isDuplicate(event.SessionID, "summary", hash) {
+		return
+	}
+	go n.saveLastPushed()
+
 	fields := []cardField{
 		{"工具", s.Tool},
 		{"状态", statusEmoji(s.Status) + " " + s.Status},
@@ -321,6 +483,13 @@ func (n *Notifier) onImportantEvent(event session.Event) {
 	if sev != "error" && sev != "critical" && sev != "warning" {
 		return
 	}
+
+	// Dedup: skip if we already pushed the same event for this session.
+	hash := fmt.Sprintf("%s|%s|%s|%s", ie.Type, ie.Severity, ie.Title, ie.Summary)
+	if n.isDuplicate(event.SessionID, "important", hash) {
+		return
+	}
+	go n.saveLastPushed()
 	fields := []cardField{
 		{"类型", ie.Type},
 		{"严重性", ie.Severity},
@@ -423,47 +592,31 @@ func (n *Notifier) flushPreview(sid string) {
 		return
 	}
 
-	// Merge consecutive non-empty lines into paragraphs, separated by blank lines.
-	// Terminal output often wraps long lines into multiple short lines — merging
-	// them produces much cleaner output in Feishu.
-	var paragraphs []string
-	var current strings.Builder
+	// Clean lines and collect non-empty ones.
+	var cleaned []string
 	for _, line := range lines {
-		cleaned := stripAnsi(line)
-		if cleaned == "" {
-			// Blank line = paragraph break.
-			if current.Len() > 0 {
-				paragraphs = append(paragraphs, current.String())
-				current.Reset()
-			}
-			continue
+		c := stripAnsi(line)
+		if c != "" {
+			cleaned = append(cleaned, c)
 		}
-		if current.Len() > 0 {
-			current.WriteString(" ")
-		}
-		current.WriteString(cleaned)
 	}
-	if current.Len() > 0 {
-		paragraphs = append(paragraphs, current.String())
-	}
-
-	if len(paragraphs) == 0 {
+	if len(cleaned) == 0 {
 		return
 	}
 
+	alias := n.getAlias(watcherOpenID, sid)
 	var sb strings.Builder
 	sb.WriteString("📺 ")
-	sb.WriteString(shortID(sid))
-	sb.WriteString(":\n\n")
-	for i, p := range paragraphs {
-		sb.WriteString(p)
-		if i < len(paragraphs)-1 {
-			sb.WriteString("\n\n")
-		}
+	sb.WriteString(alias)
+	sb.WriteString("\n```\n")
+	for _, line := range cleaned {
+		sb.WriteString(line)
+		sb.WriteString("\n")
 	}
+	sb.WriteString("```")
 	text := sb.String()
 	if len(text) > 4000 {
-		text = text[:4000] + "\n..."
+		text = text[:4000] + "\n```"
 	}
 	replyText(n, watcherOpenID, text)
 }
@@ -537,14 +690,18 @@ func (n *Notifier) onSessionClosed(event session.Event) {
 
 	// Notify watchers that their active session context was cleared.
 	for _, oid := range watcherOIDs {
-		replyText(n, oid, fmt.Sprintf("⏹ 会话 %s 已结束，已自动退出会话上下文。", shortID(event.SessionID)))
+		replyText(n, oid, fmt.Sprintf("⏹ 会话 %s 已结束，已自动退出会话上下文。", n.getAlias(oid, event.SessionID)))
 	}
 
 	cardJSON := buildCardJSON("✅ 会话已结束", "grey", []cardField{
 		{"状态", statusEmoji(status) + " " + status},
-		{"Session ID", shortID(event.SessionID)},
+		{"Session", shortID(event.SessionID)},
 	})
 	n.sendToUser(event.UserID, cardJSON)
+
+	// Clean up dedup entries for this session.
+	n.clearDedup(event.SessionID)
+	go n.saveLastPushed()
 }
 
 // ---------------------------------------------------------------------------

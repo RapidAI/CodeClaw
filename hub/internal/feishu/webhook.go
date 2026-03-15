@@ -187,17 +187,16 @@ func helpText() string {
 	return "📋 可用命令 / Available Commands:\n\n" +
 		"/info — 查看概览（有会话时显示会话详情）\n" +
 		"/machines — 查看设备列表\n" +
-		"/sessions [machine_id] — 查看会话列表\n" +
-		"/use <会话号> — 切换到会话（之后直接发文本即为命令）\n" +
+		"/sessions — 查看会话列表\n" +
+		"/use <编号> — 切换到会话（之后直接发文本即为命令）\n" +
 		"/exit — 退出当前会话上下文\n" +
-		"/detail <会话号> — 查看会话详情\n" +
-		"/send <会话号> <text> — 发送命令到会话\n" +
-		"/interrupt <会话号> — 中断会话\n" +
-		"/kill <会话号> — 终止会话\n" +
+		"/detail <编号> — 查看会话详情\n" +
+		"/send <编号> <text> — 发送命令到会话\n" +
+		"/interrupt <编号> — 中断会话\n" +
+		"/kill <编号> — 终止会话\n" +
 		"/unbind — 解除飞书绑定\n" +
 		"/help — 显示此帮助\n\n" +
-		"💡 使用 /use 切换会话后，直接发文本就是给远程会话发命令。\n" +
-		"也可以直接发送邮箱地址来绑定账号。"
+		"💡 先 /sessions 查看编号，再 /use 编号 切换会话。"
 }
 
 // resolveUserID returns the Hub userID for the given open_id via the email binding.
@@ -278,7 +277,9 @@ func handleListSessions(n *Notifier, openID string, args []string) {
 		return
 	}
 
-	// If no machine_id specified, list sessions across all machines.
+	// Pre-assign aliases so numbers are stable.
+	n.buildAliasesForUser(openID)
+
 	machines, err := n.devices.ListMachines(context.Background(), userID)
 	if err != nil {
 		replyText(n, openID, fmt.Sprintf("❌ 获取设备列表失败: %v", err))
@@ -302,13 +303,14 @@ func handleListSessions(n *Notifier, openID string, args []string) {
 		}
 		for _, s := range sessions {
 			total++
+			alias := n.getAlias(openID, s.SessionID)
 			status := statusEmoji(s.Summary.Status) + " " + s.Summary.Status
 			title := s.Summary.Title
 			if title == "" {
 				title = s.Summary.Tool
 			}
-			sb.WriteString(fmt.Sprintf("📌 %s\n  工具: %s | 状态: %s\n  ID: %s\n",
-				truncate(title, 40), s.Summary.Tool, status, shortID(s.SessionID)))
+			sb.WriteString(fmt.Sprintf("[%s] %s\n  工具: %s | 状态: %s\n",
+				alias, truncate(title, 40), s.Summary.Tool, status))
 			if s.Summary.CurrentTask != "" {
 				sb.WriteString(fmt.Sprintf("  任务: %s\n", truncate(s.Summary.CurrentTask, 60)))
 			}
@@ -324,7 +326,7 @@ func handleListSessions(n *Notifier, openID string, args []string) {
 		return
 	}
 	header := fmt.Sprintf("📋 会话列表 (%d 个):\n\n", total)
-	replyText(n, openID, header+sb.String()+"命令: /detail <id> 查看详情, /send <id> <text> 发送命令")
+	replyText(n, openID, header+sb.String()+"💡 /use <编号> 切换会话, /detail <编号> 查看详情")
 }
 
 func handleSessionDetail(n *Notifier, openID string, args []string) {
@@ -337,7 +339,7 @@ func handleSessionDetail(n *Notifier, openID string, args []string) {
 		n.activeMu.RUnlock()
 	}
 	if sessionPrefix == "" {
-		replyText(n, openID, "用法: /detail <session_id前8位>  (或先 /use 切换会话)")
+		replyText(n, openID, "用法: /detail <编号>  (或先 /use 切换会话)")
 		return
 	}
 	entry := n.findSession(openID, sessionPrefix)
@@ -371,7 +373,7 @@ func handleSessionDetail(n *Notifier, openID string, args []string) {
 		}
 		sb.WriteString(fmt.Sprintf("⚠️ 等待用户: %s\n", action))
 	}
-	sb.WriteString(fmt.Sprintf("Session ID: %s\n", shortID(entry.SessionID)))
+	sb.WriteString(fmt.Sprintf("编号: %s\n", n.getAlias(openID, entry.SessionID)))
 	sb.WriteString(fmt.Sprintf("Machine ID: %s\n", shortID(entry.MachineID)))
 
 	// Show preview lines if available.
@@ -405,7 +407,7 @@ func handleSessionDetail(n *Notifier, openID string, args []string) {
 
 func handleSendInput(n *Notifier, openID string, args []string) {
 	if len(args) < 2 {
-		replyText(n, openID, "用法: /send <session_id前8位> <命令文本>")
+		replyText(n, openID, "用法: /send <编号> <命令文本>")
 		return
 	}
 	// Always verify the session belongs to the current user.
@@ -419,7 +421,7 @@ func handleSendInput(n *Notifier, openID string, args []string) {
 		replyText(n, openID, fmt.Sprintf("❌ 发送失败: %v", err))
 		return
 	}
-	replyText(n, openID, fmt.Sprintf("✅ 已发送到会话 %s:\n%s", shortID(entry.SessionID), truncate(text, 100)))
+	replyText(n, openID, fmt.Sprintf("✅ 已发送到会话 %s:\n%s", n.getAlias(openID, entry.SessionID), truncate(text, 100)))
 }
 
 func handleInterrupt(n *Notifier, openID string, args []string) {
@@ -432,7 +434,7 @@ func handleInterrupt(n *Notifier, openID string, args []string) {
 		n.activeMu.RUnlock()
 	}
 	if sessionPrefix == "" {
-		replyText(n, openID, "用法: /interrupt <session_id前8位>  (或先 /use 切换会话)")
+		replyText(n, openID, "用法: /interrupt <编号>  (或先 /use 切换会话)")
 		return
 	}
 	entry := n.findSession(openID, sessionPrefix)
@@ -444,7 +446,7 @@ func handleInterrupt(n *Notifier, openID string, args []string) {
 		replyText(n, openID, fmt.Sprintf("❌ 中断失败: %v", err))
 		return
 	}
-	replyText(n, openID, fmt.Sprintf("⏸ 已发送中断信号到会话 %s", shortID(entry.SessionID)))
+	replyText(n, openID, fmt.Sprintf("⏸ 已发送中断信号到会话 %s", n.getAlias(openID, entry.SessionID)))
 }
 
 func handleKill(n *Notifier, openID string, args []string) {
@@ -457,7 +459,7 @@ func handleKill(n *Notifier, openID string, args []string) {
 		n.activeMu.RUnlock()
 	}
 	if sessionPrefix == "" {
-		replyText(n, openID, "用法: /kill <session_id前8位>  (或先 /use 切换会话)")
+		replyText(n, openID, "用法: /kill <编号>  (或先 /use 切换会话)")
 		return
 	}
 	entry := n.findSession(openID, sessionPrefix)
@@ -476,12 +478,12 @@ func handleKill(n *Notifier, openID string, args []string) {
 		delete(n.activeSession, openID)
 	}
 	n.activeMu.Unlock()
-	replyText(n, openID, fmt.Sprintf("⏹ 已发送终止信号到会话 %s", shortID(entry.SessionID)))
+	replyText(n, openID, fmt.Sprintf("⏹ 已发送终止信号到会话 %s", n.getAlias(openID, entry.SessionID)))
 }
 
 func handleUseSession(n *Notifier, openID string, args []string) {
 	if len(args) < 1 {
-		replyText(n, openID, "用法: /use <session_id前8位>")
+		replyText(n, openID, "用法: /use <编号>")
 		return
 	}
 	entry := n.findSession(openID, args[0])
@@ -494,12 +496,13 @@ func handleUseSession(n *Notifier, openID string, args []string) {
 	n.activeSession[openID] = entry.SessionID
 	n.activeMu.Unlock()
 
+	alias := n.getAlias(openID, entry.SessionID)
 	title := entry.Summary.Title
 	if title == "" {
 		title = entry.Summary.Tool
 	}
-	replyText(n, openID, fmt.Sprintf("✅ 已切换到会话: %s (%s)\n\n现在直接发文本就是给这个会话发命令。\n输入 /exit 退出会话上下文。",
-		truncate(title, 40), shortID(entry.SessionID)))
+	replyText(n, openID, fmt.Sprintf("✅ 已切换到会话: %s [%s]\n\n现在直接发文本就是给这个会话发命令。\n输入 /exit 退出会话上下文。",
+		truncate(title, 40), alias))
 }
 
 // handleInfo shows context-dependent info:
@@ -601,7 +604,7 @@ func handleExitSession(n *Notifier, openID string) {
 	if old == "" {
 		replyText(n, openID, "当前没有活跃的会话上下文。")
 	} else {
-		replyText(n, openID, fmt.Sprintf("已退出会话 %s 的上下文。", old))
+		replyText(n, openID, fmt.Sprintf("已退出会话 %s 的上下文。", n.getAlias(openID, old)))
 	}
 }
 
@@ -623,8 +626,7 @@ func handleUnbind(n *Notifier, openID string) {
 	replyText(n, openID, fmt.Sprintf("✅ 已解除 %s 的绑定。", email))
 }
 
-// findSession looks up a session by prefix match across all user's machines.
-// Accepts full IDs ("sess_177"), short suffixes ("177"), or prefixes ("sess_1").
+// findSession looks up a session by alias, suffix, or prefix match across all user's machines.
 func (n *Notifier) findSession(openID, idInput string) *session.SessionCacheEntry {
 	if n.sessions == nil || n.devices == nil {
 		return nil
@@ -633,7 +635,10 @@ func (n *Notifier) findSession(openID, idInput string) *session.SessionCacheEntr
 	if userID == "" {
 		return nil
 	}
-	input := strings.ToLower(strings.TrimSpace(idInput))
+	// Resolve alias first (e.g. "1" → "sess_1750012345678").
+	resolved := n.resolveAlias(openID, strings.TrimSpace(idInput))
+	input := strings.ToLower(resolved)
+
 	machines, err := n.devices.ListMachines(context.Background(), userID)
 	if err != nil {
 		return nil
@@ -812,12 +817,31 @@ func replyText(n *Notifier, openID, text string) {
 	if n == nil || n.bot == nil {
 		return
 	}
-	msg := lark.NewMsgBuffer(lark.MsgText).
+	// Send as an interactive card with markdown so Feishu renders formatting
+	// (bold, code, line breaks) properly. Plain MsgText ignores markdown.
+	cardJSON := buildSimpleCard(text)
+	msg := lark.NewMsgBuffer(lark.MsgInteractive).
 		BindOpenID(openID).
-		Text(text).
+		Card(cardJSON).
 		Build()
 	ctx := context.Background()
 	if _, err := n.bot.PostMessage(ctx, msg); err != nil {
 		log.Printf("[feishu/webhook] reply failed (open_id=%s): %v", openID, err)
 	}
+}
+
+// buildSimpleCard wraps text in a minimal interactive card with a single
+// markdown element. Feishu renders markdown inside cards (bold, code, etc.).
+func buildSimpleCard(text string) string {
+	card := map[string]any{
+		"config": map[string]any{"wide_screen_mode": true},
+		"elements": []any{
+			map[string]any{
+				"tag":     "markdown",
+				"content": text,
+			},
+		},
+	}
+	data, _ := json.Marshal(card)
+	return string(data)
 }
