@@ -20,6 +20,7 @@ if "%CGO_ENABLED%"=="" (
 )
 
 set "BUILD_ROOT=%ROOT_DIR%build\deploy"
+set "STAGE_ROOT=%BUILD_ROOT%\stage"
 set "ARCHIVE_PATH=%BUILD_ROOT%\maclaw-src.tar.gz"
 set "REMOTE_SCRIPT=%BUILD_ROOT%\remote_deploy.sh"
 set "PASSWORD_FILE=%TEMP%\deploy_all_password_%RANDOM%_%RANDOM%.txt"
@@ -79,28 +80,14 @@ echo.
 echo [2/5] Preparing source package...
 if exist "%BUILD_ROOT%" rmdir /s /q "%BUILD_ROOT%"
 mkdir "%BUILD_ROOT%" >nul 2>nul
+mkdir "%STAGE_ROOT%" >nul 2>nul
+
+echo [2/5] Staging source tree...
+call :stage_source_tree
+if errorlevel 1 goto :fail
 
 echo [2/5] Creating source archive...
-"%TAR_EXE%" -czf "%ARCHIVE_PATH%" ^
-  --exclude ".git" ^
-  --exclude ".gocache" ^
-  --exclude ".gomodcache" ^
-  --exclude ".kode" ^
-  --exclude ".vscode" ^
-  --exclude "./build" ^
-  --exclude "./hub/bin" ^
-  --exclude "./hub/package" ^
-  --exclude "./hub/data" ^
-  --exclude "./hub/.gocache" ^
-  --exclude "./hub/.gomodcache" ^
-  --exclude "./hubcenter/bin" ^
-  --exclude "./hubcenter/package" ^
-  --exclude "./hubcenter/data" ^
-  --exclude "./hubcenter/.gocache" ^
-  --exclude "./hubcenter/.gomodcache" ^
-  --exclude "*.exe" ^
-  --exclude "*.exe~" ^
-  -C "%ROOT_DIR_TRIM%" .
+"%TAR_EXE%" -czf "%ARCHIVE_PATH%" -C "%STAGE_ROOT%" .
 if errorlevel 1 (
   echo [ERROR] Failed to create source archive.
   goto :fail
@@ -187,6 +174,26 @@ for /f "delims=" %%I in ('where.exe %~2 2^>nul') do (
 :resolve_tool_done
 if not defined %~1 (
   echo [ERROR] Required tool not found: %~2
+  exit /b 1
+)
+exit /b 0
+
+:stage_source_tree
+if not exist "%POWERSHELL%" (
+  echo [ERROR] PowerShell not found: %POWERSHELL%
+  exit /b 1
+)
+"%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference = 'Stop';" ^
+  "$src = '%ROOT_DIR_TRIM%';" ^
+  "$dst = '%STAGE_ROOT%';" ^
+  "$skipNames = @('.git','.gocache','.gomodcache','.kode','.vscode','build','dist');" ^
+  "Get-ChildItem -Path $src -Force | Where-Object { $skipNames -notcontains $_.Name } | ForEach-Object { Copy-Item -Path $_.FullName -Destination $dst -Recurse -Force };" ^
+  "$removePaths = @('frontend\node_modules','hub\bin','hub\package','hub\data','hub\.gocache','hub\.gomodcache','hubcenter\bin','hubcenter\package','hubcenter\data','hubcenter\.gocache','hubcenter\.gomodcache');" ^
+  "foreach ($rel in $removePaths) { $path = Join-Path $dst $rel; if (Test-Path $path) { Remove-Item -Recurse -Force $path -ErrorAction SilentlyContinue } };" ^
+  "Get-ChildItem -Path $dst -Recurse -File -Include *.exe,*.exe~ -Force | Remove-Item -Force -ErrorAction SilentlyContinue;"
+if errorlevel 1 (
+  echo [ERROR] Failed to stage source tree.
   exit /b 1
 )
 exit /b 0
@@ -280,4 +287,3 @@ if errorlevel 1 (
 )
 endlocal
 exit /b 0
-

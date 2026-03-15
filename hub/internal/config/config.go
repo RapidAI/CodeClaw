@@ -44,6 +44,12 @@ type Config struct {
 		Visibility  string `yaml:"visibility"`
 	} `yaml:"hub"`
 
+	Feishu struct {
+		Enabled   bool   `yaml:"enabled"`
+		AppID     string `yaml:"app_id"`
+		AppSecret string `yaml:"app_secret"`
+	} `yaml:"feishu"`
+
 	Mail struct {
 		Enabled    bool   `yaml:"enabled"`
 		Provider   string `yaml:"provider"`

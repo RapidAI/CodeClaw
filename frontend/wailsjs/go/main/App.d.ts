@@ -118,6 +118,12 @@ export function SelectProjectDir():Promise<string>;
 
 export function SelectSkillFile():Promise<string>;
 
+export function SendRemoteSessionImage(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function CaptureRemoteScreenshot(arg1:string):Promise<void>;
+
+export function CaptureRemoteWindowScreenshot(arg1:string,arg2:string):Promise<void>;
+
 export function SendRemoteSessionInput(arg1:string,arg2:string):Promise<void>;
 
 export function SendRemoteSessionRawInput(arg1:string,arg2:string):Promise<void>;

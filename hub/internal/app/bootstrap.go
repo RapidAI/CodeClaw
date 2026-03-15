@@ -1,10 +1,14 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
+
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
 	"github.com/RapidAI/CodeClaw/hub/internal/center"
 	"github.com/RapidAI/CodeClaw/hub/internal/config"
 	"github.com/RapidAI/CodeClaw/hub/internal/device"
+	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
 	"github.com/RapidAI/CodeClaw/hub/internal/httpapi"
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
@@ -47,6 +51,25 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	gateway := ws.NewGateway(identityService, deviceService, sessionService)
 	sessionService.RegisterListener(gateway.HandleSessionEvent)
 
+	// Feishu notifier: push session events to users via Feishu cards.
+	// Config can come from YAML (cfg.Feishu) or from the admin UI (stored in DB
+	// under the "feishu_config" key). DB settings take precedence when present.
+	feishuAppID, feishuAppSecret := cfg.Feishu.AppID, cfg.Feishu.AppSecret
+	if raw, err := st.System.Get(context.Background(), "feishu_config"); err == nil && raw != "" {
+		var dbCfg struct {
+			Enabled   bool   `json:"enabled"`
+			AppID     string `json:"app_id"`
+			AppSecret string `json:"app_secret"`
+		}
+		if json.Unmarshal([]byte(raw), &dbCfg) == nil && dbCfg.Enabled && dbCfg.AppID != "" && dbCfg.AppSecret != "" {
+			feishuAppID = dbCfg.AppID
+			feishuAppSecret = dbCfg.AppSecret
+		}
+	}
+	feishuNotifier := feishu.New(feishuAppID, feishuAppSecret, st.Users, st.System, mailer)
+	feishuNotifier.SetServices(&feishu.DeviceServiceAdapter{Svc: deviceService}, sessionService)
+	sessionService.RegisterListener(feishuNotifier.HandleEvent)
+
 	router := httpapi.NewRouter(
 		adminService,
 		identityService,
@@ -56,6 +79,8 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		deviceService,
 		sessionService,
 		invitationService,
+		st.System,
+		feishuNotifier,
 		cfg.PWA.StaticDir,
 		cfg.PWA.RoutePrefix,
 	)

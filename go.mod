@@ -13,6 +13,8 @@ require (
 	github.com/UserExistsError/conpty v0.1.4 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/go-lark/card-builder v1.0.0-beta.2 // indirect
+	github.com/go-lark/lark/v2 v2.0.0-beta.6 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

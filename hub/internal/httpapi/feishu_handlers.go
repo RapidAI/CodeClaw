@@ -1,0 +1,140 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
+	"github.com/RapidAI/CodeClaw/hub/internal/store"
+)
+
+const feishuConfigKey = "feishu_config"
+
+type FeishuConfigState struct {
+	Enabled   bool   `json:"enabled"`
+	AppID     string `json:"app_id"`
+	AppSecret string `json:"app_secret"`
+}
+
+func GetFeishuConfigHandler(system store.SystemSettingsRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		raw, err := system.Get(r.Context(), feishuConfigKey)
+		if err != nil || raw == "" {
+			writeJSON(w, http.StatusOK, FeishuConfigState{})
+			return
+		}
+		var cfg FeishuConfigState
+		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+			writeJSON(w, http.StatusOK, FeishuConfigState{})
+			return
+		}
+		// Mask the secret for display.
+		if cfg.AppSecret != "" {
+			cfg.AppSecret = maskSecret(cfg.AppSecret)
+		}
+		writeJSON(w, http.StatusOK, cfg)
+	}
+}
+
+func UpdateFeishuConfigHandler(system store.SystemSettingsRepository, notifier *feishu.Notifier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var cfg FeishuConfigState
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request body")
+			return
+		}
+
+		// If the secret is masked (unchanged from frontend), preserve the old one.
+		if isMasked(cfg.AppSecret) {
+			old := loadFeishuConfig(r, system)
+			cfg.AppSecret = old.AppSecret
+		}
+
+		data, _ := json.Marshal(cfg)
+		if err := system.Set(r.Context(), feishuConfigKey, string(data)); err != nil {
+			writeError(w, http.StatusInternalServerError, "FEISHU_CONFIG_SAVE_FAILED", err.Error())
+			return
+		}
+
+		// Hot-reload: reconfigure the notifier so the new credentials take
+		// effect immediately without restarting the hub.
+		if notifier != nil {
+			if cfg.Enabled {
+				notifier.Reconfigure(cfg.AppID, cfg.AppSecret)
+			} else {
+				notifier.Reconfigure("", "")
+			}
+		}
+
+		// Return masked version.
+		resp := cfg
+		if resp.AppSecret != "" {
+			resp.AppSecret = maskSecret(resp.AppSecret)
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// GetFeishuBindingsHandler returns the current email→open_id bindings.
+func GetFeishuBindingsHandler(notifier *feishu.Notifier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if notifier == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"bindings": []any{}})
+			return
+		}
+		m := notifier.GetOpenIDMap()
+		type binding struct {
+			Email  string `json:"email"`
+			OpenID string `json:"open_id"`
+		}
+		bindings := make([]binding, 0, len(m))
+		for email, oid := range m {
+			bindings = append(bindings, binding{Email: email, OpenID: oid})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"bindings": bindings})
+	}
+}
+
+// DeleteFeishuBindingHandler removes an email→open_id binding.
+func DeleteFeishuBindingHandler(notifier *feishu.Notifier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if notifier == nil {
+			writeError(w, http.StatusServiceUnavailable, "FEISHU_NOT_CONFIGURED", "Feishu notifier is not configured")
+			return
+		}
+		email := r.URL.Query().Get("email")
+		if email == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "email is required")
+			return
+		}
+		notifier.RemoveOpenID(email)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+func loadFeishuConfig(r *http.Request, system store.SystemSettingsRepository) FeishuConfigState {
+	raw, err := system.Get(r.Context(), feishuConfigKey)
+	if err != nil || raw == "" {
+		return FeishuConfigState{}
+	}
+	var cfg FeishuConfigState
+	_ = json.Unmarshal([]byte(raw), &cfg)
+	return cfg
+}
+
+func maskSecret(s string) string {
+	if len(s) <= 6 {
+		return "******"
+	}
+	return s[:3] + "***" + s[len(s)-3:]
+}
+
+func isMasked(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	if s == "******" {
+		return true
+	}
+	return len(s) > 6 && s[3:6] == "***"
+}

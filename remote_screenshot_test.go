@@ -259,6 +259,71 @@ func TestCaptureScreenshot_CommandFailure(t *testing.T) {
 	}
 }
 
+// --- sanitizeWindowTitle tests ---
+
+func TestSanitizeWindowTitle_AllowsSafeCharacters(t *testing.T) {
+	cases := []struct {
+		input, want string
+	}{
+		{"Notepad", "Notepad"},
+		{"My App - v1.0", "My App - v1.0"},
+		{"文件管理器", "文件管理器"},
+		{"test_app (debug)", "test_app (debug)"},
+	}
+	for _, tc := range cases {
+		got := sanitizeWindowTitle(tc.input)
+		if got != tc.want {
+			t.Errorf("sanitizeWindowTitle(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestSanitizeWindowTitle_StripsDangerousCharacters(t *testing.T) {
+	cases := []struct {
+		input string
+	}{
+		{`'; rm -rf /; echo '`},
+		{"`whoami`"},
+		{"$(calc.exe)"},
+		{"test\"; exit 1; \""},
+		{"hello$world"},
+		{"a&b|c"},
+	}
+	for _, tc := range cases {
+		got := sanitizeWindowTitle(tc.input)
+		// Should not contain any of: ' " ` $ ; & | \
+		for _, bad := range []string{"'", "\"", "`", "$", ";", "&", "|", "\\"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("sanitizeWindowTitle(%q) = %q, still contains %q", tc.input, got, bad)
+			}
+		}
+	}
+}
+
+func TestSanitizeWindowTitle_EmptyAfterSanitize(t *testing.T) {
+	got := sanitizeWindowTitle("$$$")
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}
+
+func TestBuildWindowScreenshotCommand_EmptyAfterSanitize(t *testing.T) {
+	cmd := BuildWindowScreenshotCommand("$$$")
+	if cmd != "" {
+		t.Errorf("expected empty command for fully-sanitized title, got: %s", cmd)
+	}
+}
+
+func TestBuildWindowScreenshotCommand_ValidTitle(t *testing.T) {
+	cmd := BuildWindowScreenshotCommand("Notepad")
+	if cmd == "" {
+		t.Fatal("expected non-empty command for valid title")
+	}
+	if !strings.Contains(cmd, "Notepad") {
+		t.Fatalf("expected command to contain window title, got: %s", cmd)
+	}
+}
+
 func TestCaptureScreenshot_LogPrefixInErrors(t *testing.T) {
 	// Verify that error messages from CaptureScreenshot contain expected
 	// content. The [screenshot] prefix is used in log messages (via app.log),

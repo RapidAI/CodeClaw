@@ -525,6 +525,39 @@ func (a *App) InterruptRemoteSession(sessionID string) error {
 	return a.remoteSessions.Interrupt(sessionID)
 }
 
+// SendRemoteSessionImage sends an image to a Claude Code SDK session.
+// The image is injected as a multi-part user message so Claude can see it.
+func (a *App) SendRemoteSessionImage(sessionID, mediaType, base64Data string) error {
+	if a.remoteSessions == nil {
+		return ErrRemoteSessionsUnavailable
+	}
+	a.log(fmt.Sprintf("[remote-image-input] session=%s, media_type=%s, b64_len=%d", sessionID, mediaType, len(base64Data)))
+	img := ImageTransferMessage{
+		SessionID: sessionID,
+		MediaType: mediaType,
+		Data:      base64Data,
+	}
+	return a.remoteSessions.WriteImageInput(sessionID, img)
+}
+
+// CaptureRemoteScreenshot captures a full-screen screenshot and sends it
+// to the PWA via the image transfer pipeline.
+func (a *App) CaptureRemoteScreenshot(sessionID string) error {
+	if a.remoteSessions == nil {
+		return ErrRemoteSessionsUnavailable
+	}
+	return a.remoteSessions.CaptureScreenshot(sessionID)
+}
+
+// CaptureRemoteWindowScreenshot captures a screenshot of a specific window
+// (matched by title substring) and sends it to the PWA.
+func (a *App) CaptureRemoteWindowScreenshot(sessionID, windowTitle string) error {
+	if a.remoteSessions == nil {
+		return ErrRemoteSessionsUnavailable
+	}
+	return a.remoteSessions.CaptureWindowScreenshot(sessionID, windowTitle)
+}
+
 func (a *App) KillRemoteSession(sessionID string) error {
 	if a.remoteSessions == nil {
 		return ErrRemoteSessionsUnavailable

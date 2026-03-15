@@ -45,14 +45,40 @@ type RemoteHubClient struct {
 	reconnectCh    chan struct{}
 	reconnecting   atomic.Bool
 	allowReconnect atomic.Bool
+
+	// Preview delta batching: accumulate lines per session and flush periodically
+	// to reduce WebSocket message frequency for PWA viewers.
+	previewMu      sync.Mutex
+	previewPending map[string]*pendingPreviewDelta // sessionID → accumulated delta
+	previewTicker  *time.Ticker
+	previewStopCh  chan struct{}
+
+	// Summary throttling: avoid sending identical summaries repeatedly.
+	summaryMu   sync.Mutex
+	lastSummary map[string]string // sessionID → JSON of last sent summary
 }
+
+// pendingPreviewDelta accumulates preview lines for a session between flushes.
+type pendingPreviewDelta struct {
+	SessionID string
+	Lines     []string
+	OutputSeq int64
+	UpdatedAt int64
+}
+
+// previewFlushInterval controls how often accumulated preview deltas are sent
+// to the hub. Lower values = more responsive but more network traffic.
+const previewFlushInterval = 150 * time.Millisecond
 
 func NewRemoteHubClient(app *App, manager *RemoteSessionManager) *RemoteHubClient {
 	return &RemoteHubClient{
-		app:         app,
-		manager:     manager,
-		dial:        defaultHubDial,
-		reconnectCh: make(chan struct{}, 1),
+		app:            app,
+		manager:        manager,
+		dial:           defaultHubDial,
+		reconnectCh:    make(chan struct{}, 1),
+		previewPending: make(map[string]*pendingPreviewDelta),
+		previewStopCh:  make(chan struct{}),
+		lastSummary:    make(map[string]string),
 	}
 }
 
@@ -97,6 +123,7 @@ func (c *RemoteHubClient) Connect() error {
 	go c.heartbeatLoop()
 	go c.SyncSessions()
 	go c.SyncLaunchProjects()
+	c.startPreviewFlusher()
 
 	return nil
 }
@@ -119,6 +146,12 @@ func (c *RemoteHubClient) connectLocked() error {
 
 	c.conn = conn
 	c.connected = true
+
+	// Clear summary dedup cache on new connection so re-synced summaries
+	// are always sent to the hub.
+	c.summaryMu.Lock()
+	c.lastSummary = make(map[string]string)
+	c.summaryMu.Unlock()
 
 	if err := c.sendMachineAuthLocked(); err != nil {
 		_ = c.conn.Close()
@@ -240,13 +273,26 @@ func (c *RemoteHubClient) SendSessionCreated(s *RemoteSession) error {
 }
 
 func (c *RemoteHubClient) SendSessionSummary(summary SessionSummary) error {
+	// Throttle: skip if the summary hasn't changed since last send.
+	summary.MachineID = c.machineID
+	data, err := json.Marshal(summary)
+	if err == nil {
+		key := string(data)
+		c.summaryMu.Lock()
+		if c.lastSummary[summary.SessionID] == key {
+			c.summaryMu.Unlock()
+			return nil
+		}
+		c.lastSummary[summary.SessionID] = key
+		c.summaryMu.Unlock()
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.connected || c.conn == nil {
 		return nil
 	}
 
-	summary.MachineID = c.machineID
 	msg := HubEnvelope{
 		Type:      "session.summary",
 		TS:        time.Now().Unix(),
@@ -254,7 +300,7 @@ func (c *RemoteHubClient) SendSessionSummary(summary SessionSummary) error {
 		SessionID: summary.SessionID,
 		Payload:   summary,
 	}
-	err := c.conn.WriteJSON(msg)
+	err = c.conn.WriteJSON(msg)
 	if err == nil {
 		c.app.emitEvent("remote-session-changed", "summary", summary.SessionID)
 	}
@@ -284,24 +330,101 @@ func (c *RemoteHubClient) SendImportantEvent(event ImportantEvent) error {
 }
 
 func (c *RemoteHubClient) SendPreviewDelta(delta SessionPreviewDelta) error {
+	c.previewMu.Lock()
+	pending, ok := c.previewPending[delta.SessionID]
+	if !ok {
+		pending = &pendingPreviewDelta{SessionID: delta.SessionID}
+		c.previewPending[delta.SessionID] = pending
+	}
+	pending.Lines = append(pending.Lines, delta.AppendLines...)
+	pending.OutputSeq = delta.OutputSeq
+	pending.UpdatedAt = delta.UpdatedAt
+	c.previewMu.Unlock()
+	return nil
+}
+
+// startPreviewFlusher starts the background goroutine that periodically
+// flushes accumulated preview deltas to the hub.
+func (c *RemoteHubClient) startPreviewFlusher() {
+	c.previewMu.Lock()
+	// Stop any existing flusher before starting a new one
+	if c.previewTicker != nil {
+		c.previewTicker.Stop()
+		c.previewTicker = nil
+	}
+	// Create a fresh stop channel
+	c.previewStopCh = make(chan struct{}, 1)
+	stopCh := c.previewStopCh
+	c.previewTicker = time.NewTicker(previewFlushInterval)
+	ticker := c.previewTicker
+	c.previewMu.Unlock()
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				c.flushPreviewDeltas()
+			case <-stopCh:
+				ticker.Stop()
+				// Final flush to avoid losing buffered data
+				c.flushPreviewDeltas()
+				return
+			}
+		}
+	}()
+}
+
+// stopPreviewFlusher stops the background flush goroutine.
+func (c *RemoteHubClient) stopPreviewFlusher() {
+	c.previewMu.Lock()
+	if c.previewStopCh != nil {
+		select {
+		case c.previewStopCh <- struct{}{}:
+		default:
+		}
+	}
+	c.previewMu.Unlock()
+}
+
+// flushPreviewDeltas sends all accumulated preview deltas to the hub in one pass.
+func (c *RemoteHubClient) flushPreviewDeltas() {
+	c.previewMu.Lock()
+	if len(c.previewPending) == 0 {
+		c.previewMu.Unlock()
+		return
+	}
+	// Swap out the pending map
+	toSend := c.previewPending
+	c.previewPending = make(map[string]*pendingPreviewDelta)
+	c.previewMu.Unlock()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.connected || c.conn == nil {
-		return nil
+		return
 	}
 
-	msg := HubEnvelope{
-		Type:      "session.preview_delta",
-		TS:        time.Now().Unix(),
-		MachineID: c.machineID,
-		SessionID: delta.SessionID,
-		Payload:   delta,
+	for _, pending := range toSend {
+		if len(pending.Lines) == 0 {
+			continue
+		}
+		delta := SessionPreviewDelta{
+			SessionID:   pending.SessionID,
+			OutputSeq:   pending.OutputSeq,
+			AppendLines: pending.Lines,
+			UpdatedAt:   pending.UpdatedAt,
+		}
+		msg := HubEnvelope{
+			Type:      "session.preview_delta",
+			TS:        time.Now().Unix(),
+			MachineID: c.machineID,
+			SessionID: delta.SessionID,
+			Payload:   delta,
+		}
+		if err := c.conn.WriteJSON(msg); err == nil {
+			c.app.emitEvent("remote-session-changed", "preview_delta", delta.SessionID)
+		}
 	}
-	err := c.conn.WriteJSON(msg)
-	if err == nil {
-		c.app.emitEvent("remote-session-changed", "preview_delta", delta.SessionID)
-	}
-	return err
 }
 
 func (c *RemoteHubClient) SendSessionClosed(s *RemoteSession) error {
@@ -371,6 +494,9 @@ func (c *RemoteHubClient) SyncSessions() {
 			})
 		}
 	}
+	// Flush batched preview deltas immediately after sync so viewers
+	// receive the full initial state without waiting for the next tick.
+	c.flushPreviewDeltas()
 }
 
 func (c *RemoteHubClient) SyncLaunchProjects() {
@@ -452,6 +578,8 @@ func (c *RemoteHubClient) readLoop() {
 			c.handleSessionKill(msg)
 		case "session.image_input":
 			c.handleSessionImageInput(msg)
+		case "session.screenshot":
+			c.handleSessionScreenshot(msg)
 		}
 	}
 }
@@ -552,6 +680,35 @@ func (c *RemoteHubClient) handleSessionImageInput(msg inboundHubEnvelope) {
 		return
 	}
 	c.app.emitEvent("remote-session-changed", "image_input", msg.SessionID)
+}
+
+func (c *RemoteHubClient) handleSessionScreenshot(msg inboundHubEnvelope) {
+	if c.manager == nil || msg.SessionID == "" {
+		return
+	}
+	var payload struct {
+		WindowTitle string `json:"window_title"`
+	}
+	_ = json.Unmarshal(msg.Payload, &payload)
+
+	// Run screenshot capture in a goroutine to avoid blocking the WebSocket
+	// read loop — screenshot commands can take several seconds.
+	sessionID := msg.SessionID
+	windowTitle := payload.WindowTitle
+	go func() {
+		var err error
+		if windowTitle != "" {
+			err = c.manager.CaptureWindowScreenshot(sessionID, windowTitle)
+		} else {
+			err = c.manager.CaptureScreenshot(sessionID)
+		}
+		if err != nil {
+			c.setLastError(err.Error())
+			c.app.log(fmt.Sprintf("[hub-screenshot] session=%s error: %v", sessionID, err))
+			// Send error back to viewers so the PWA can display feedback.
+			_ = c.SendSessionImageError(sessionID, "screenshot failed: "+err.Error())
+		}
+	}()
 }
 
 // SendSessionImageError sends an error response to the Hub when image input injection fails.
@@ -656,6 +813,7 @@ func (c *RemoteHubClient) LastError() string {
 }
 
 func (c *RemoteHubClient) Disconnect() error {
+	c.stopPreviewFlusher()
 	c.mu.Lock()
 	c.allowReconnect.Store(false)
 	c.connected = false
@@ -674,6 +832,7 @@ func (c *RemoteHubClient) Disconnect() error {
 }
 
 func (c *RemoteHubClient) handleConnectionLoss(err error) {
+	c.stopPreviewFlusher()
 	c.mu.Lock()
 	if err != nil {
 		c.lastError = err.Error()

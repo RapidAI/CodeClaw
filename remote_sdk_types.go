@@ -50,6 +50,51 @@ type SDKContentBlock struct {
 
 	// Image fields (type="image")
 	Source *SDKImageSource `json:"source,omitempty"`
+
+	// NestedContent holds image blocks extracted from tool_result content
+	// arrays. When a tool_result's "content" field is a JSON array (e.g.
+	// containing image blocks from Read tool), the standard string Content
+	// field will be empty and images are stored here instead.
+	NestedContent []SDKContentBlock `json:"-"`
+}
+
+// UnmarshalJSON implements custom deserialization for SDKContentBlock.
+// The "content" field in tool_result blocks can be either a string or an
+// array of content blocks (e.g. when Read tool returns an image).
+func (b *SDKContentBlock) UnmarshalJSON(data []byte) error {
+	// Use an alias to avoid infinite recursion
+	type Alias SDKContentBlock
+	type rawBlock struct {
+		Alias
+		RawContent json.RawMessage `json:"content,omitempty"`
+	}
+
+	var raw rawBlock
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	*b = SDKContentBlock(raw.Alias)
+
+	if len(raw.RawContent) == 0 {
+		return nil
+	}
+
+	// Detect whether "content" is a string or an array
+	switch raw.RawContent[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw.RawContent, &s); err == nil {
+			b.Content = s
+		}
+	case '[':
+		var nested []SDKContentBlock
+		if err := json.Unmarshal(raw.RawContent, &nested); err == nil {
+			b.NestedContent = nested
+		}
+	}
+
+	return nil
 }
 
 // SDKImageSource represents the source data for an image content block.
@@ -112,7 +157,9 @@ type SDKControlCancelRequest struct {
 
 // SDKUserInput is sent TO Claude Code via stdin to provide user messages.
 // Matches the format used by the official Claude Code SDK:
-// {"type":"user","message":{"role":"user","content":"..."}}
+//   - Text:  {"type":"user","message":{"role":"user","content":"hello"}}
+//   - Image: {"type":"user","message":{"role":"user","content":[{"type":"text","text":"..."},{"type":"image","source":{...}}]}}
+//
 // Note: session_id and parent_tool_use_id are NOT included — the official
 // SDK (hapi) does not send them, and Claude Code handles session routing
 // internally when using --input-format stream-json.

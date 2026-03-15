@@ -76,6 +76,14 @@ func (a *KodeAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 		return CommandSpec{}, fmt.Errorf("kode session id is required")
 	}
 
+	// Ensure Kode's first-run onboarding wizard is pre-configured
+	// so it doesn't block the remote PTY session with interactive prompts.
+	if err := ensureKodeOnboardingComplete(a.app, spec.ProjectPath); err != nil {
+		if a.app != nil {
+			a.app.log(fmt.Sprintf("[kode-adapter] onboarding pre-check warning: %v", err))
+		}
+	}
+
 	cfg, err := a.app.LoadConfig()
 	if err != nil {
 		return CommandSpec{}, err

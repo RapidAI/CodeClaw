@@ -2321,6 +2321,10 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 		return
 	}
 
+	// Ensure tool onboarding is complete for local launches so the user
+	// doesn't have to confirm theme/trust/setup prompts every time.
+	ensureToolOnboardingComplete(a, strings.ToLower(toolName), projectDir)
+
 	// Platform specific launch
 	a.platformLaunch(binaryName, yoloMode, adminMode, pythonEnv, projectDir, env, selectedModel.ModelId)
 }

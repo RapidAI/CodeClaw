@@ -234,6 +234,18 @@ export function SelectSkillFile() {
   return window['go']['main']['App']['SelectSkillFile']();
 }
 
+export function SendRemoteSessionImage(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SendRemoteSessionImage'](arg1, arg2, arg3);
+}
+
+export function CaptureRemoteScreenshot(arg1) {
+  return window['go']['main']['App']['CaptureRemoteScreenshot'](arg1);
+}
+
+export function CaptureRemoteWindowScreenshot(arg1, arg2) {
+  return window['go']['main']['App']['CaptureRemoteWindowScreenshot'](arg1, arg2);
+}
+
 export function SendRemoteSessionInput(arg1, arg2) {
   return window['go']['main']['App']['SendRemoteSessionInput'](arg1, arg2);
 }

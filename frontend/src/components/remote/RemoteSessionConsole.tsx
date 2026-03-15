@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type Dispatch, type SetStateAction } from "react";
 import type { RemoteSessionView } from "./types";
-import { SendRemoteSessionInput, SendRemoteSessionRawInput, InterruptRemoteSession } from "../../../wailsjs/go/main/App";
+import { SendRemoteSessionInput, SendRemoteSessionRawInput, SendRemoteSessionImage, CaptureRemoteScreenshot, CaptureRemoteWindowScreenshot, InterruptRemoteSession } from "../../../wailsjs/go/main/App";
 
 type Props = {
     session: RemoteSessionView;
@@ -152,16 +152,123 @@ const inputBtnStyle: React.CSSProperties = {
 /** Duration (ms) before the send-status feedback auto-clears. */
 const SEND_INFO_TIMEOUT = 3000;
 
+const SUPPORTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
+
 // ── ANSI stripping (module-level for reuse) ──
 const _ansiRe = /\x1b(?:\[[0-9;?]*[a-zA-Z]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[()][A-Z0-9]|[a-zA-Z])/g;
 function stripAnsi(s: string): string { return s.replace(_ansiRe, ""); }
 
+// ── Lightweight inline markdown → React elements ──
+// Handles: **bold**, *italic*, `code`, [link](url)
+// Also detects line-level patterns: ### heading, - list, > blockquote, ``` code block
+function renderMarkdownLine(text: string, key: string | number): React.ReactNode {
+    const trimmed = text.trimStart();
+
+    // Heading: ### text
+    const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (headingMatch) {
+        const level = headingMatch[1].length;
+        const sizes: Record<number, string> = { 1: "1.2em", 2: "1.1em", 3: "1.0em", 4: "0.95em" };
+        return (
+            <div key={key} style={{ fontSize: sizes[level] || "1em", fontWeight: 700, color: "#569cd6", margin: "0.4em 0 0.2em" }}>
+                {renderInlineMarkdown(headingMatch[2])}
+            </div>
+        );
+    }
+
+    // Blockquote: > text
+    if (/^>\s/.test(trimmed)) {
+        return (
+            <div key={key} style={{ borderLeft: "2px solid #555", paddingLeft: "8px", color: "#9a9a9a", fontStyle: "italic", minHeight: "1.4em" }}>
+                {renderInlineMarkdown(trimmed.slice(2))}
+            </div>
+        );
+    }
+
+    // List item: - text or * text
+    if (/^[-*]\s/.test(trimmed)) {
+        return (
+            <div key={key} style={{ paddingLeft: "1em", textIndent: "-0.7em", minHeight: "1.4em" }}>
+                <span style={{ color: "#808080" }}>•</span>{" "}
+                {renderInlineMarkdown(trimmed.slice(2))}
+            </div>
+        );
+    }
+
+    // Numbered list: 1. text
+    const numMatch = trimmed.match(/^(\d+)[.)]\s+(.+)$/);
+    if (numMatch) {
+        return (
+            <div key={key} style={{ paddingLeft: "1.2em", textIndent: "-1.2em", minHeight: "1.4em" }}>
+                <span style={{ color: "#808080" }}>{numMatch[1]}.</span>{" "}
+                {renderInlineMarkdown(numMatch[2])}
+            </div>
+        );
+    }
+
+    // Regular line with inline markdown
+    return (
+        <div key={key} style={{ minHeight: "1.4em" }}>
+            {renderInlineMarkdown(text) || "\u00A0"}
+        </div>
+    );
+}
+
+// Parse inline markdown: **bold**, *italic*, `code`, [text](url)
+function renderInlineMarkdown(text: string): React.ReactNode[] {
+    if (!text) return ["\u00A0"];
+    const parts: React.ReactNode[] = [];
+    // Regex: code, bold, italic, link — order matters
+    const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^\s*][^*]*?\*)|(\[[^\]]+\]\([^)]+\))/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let idx = 0;
+    while ((match = re.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+            parts.push(text.slice(lastIndex, match.index));
+        }
+        const m = match[0];
+        if (match[1]) {
+            // `code`
+            parts.push(<code key={idx++} style={{ background: "#2a2a2a", color: "#ce9178", padding: "1px 4px", borderRadius: "3px", fontSize: "0.92em" }}>{m.slice(1, -1)}</code>);
+        } else if (match[2]) {
+            // **bold**
+            parts.push(<strong key={idx++} style={{ color: "#e0e0e0", fontWeight: 700 }}>{m.slice(2, -2)}</strong>);
+        } else if (match[3]) {
+            // *italic*
+            parts.push(<em key={idx++} style={{ color: "#c5c5c5" }}>{m.slice(1, -1)}</em>);
+        } else if (match[4]) {
+            // [text](url)
+            const lm = m.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+            if (lm) {
+                parts.push(<a key={idx++} href={lm[2]} target="_blank" rel="noopener noreferrer" style={{ color: "#569cd6", textDecoration: "underline" }}>{lm[1]}</a>);
+            } else {
+                parts.push(m);
+            }
+        }
+        lastIndex = match.index + m.length;
+    }
+    if (lastIndex < text.length) {
+        parts.push(text.slice(lastIndex));
+    }
+    return parts.length > 0 ? parts : ["\u00A0"];
+}
+
 // ── Static Q&A styles ──
+const userDividerStyle: React.CSSProperties = {
+    borderTop: "1px solid #333",
+    margin: "8px 0 4px 0",
+};
 const promptStyleQA: React.CSSProperties = {
     color: "#4ec9b0", fontWeight: 600, padding: "3px 0",
     overflowWrap: "break-word",
 };
-const lineStyleQA: React.CSSProperties = { minHeight: "1.4em" };
+const responseBlockStyle: React.CSSProperties = {
+    padding: "4px 0 4px 8px",
+    borderLeft: "2px solid #333",
+    margin: "2px 0",
+};
 
 export function RemoteSessionConsole(props: Props) {
     const {
@@ -175,7 +282,9 @@ export function RemoteSessionConsole(props: Props) {
 
     const [sending, setSending] = useState(false);
     const [lastSendInfo, setLastSendInfo] = useState("");
+    const [imageUploading, setImageUploading] = useState(false);
     const inputRef = useRef<HTMLInputElement | null>(null);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
     const outputEndRef = useRef<HTMLDivElement | null>(null);
     const outputContainerRef = useRef<HTMLDivElement | null>(null);
     const [composing, setComposing] = useState(false);
@@ -185,13 +294,35 @@ export function RemoteSessionConsole(props: Props) {
     const sendInfoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [clearOffset, setClearOffset] = useState(0);
 
+    // Local line cache: accumulate lines so content never disappears even if
+    // the backend returns fewer lines on a subsequent refresh (e.g. due to
+    // screen-refresh detection in PTY mode replacing the buffer).
+    const lineCacheRef = useRef<string[]>([]);
+    const sessionIdRef = useRef(session.id);
+
     const status = (session.summary?.status || session.status || "unknown").toLowerCase();
     const sessionClosed = TERMINAL_STATUSES.has(status);
     const disabled = sessionClosed || sending;
     const isSDK = session.execution_mode === "sdk";
 
-    const allRawLines = session.raw_output_lines || session.preview?.preview_lines || [];
-    const rawLines = allRawLines.slice(clearOffset);
+    // Merge incoming lines with the local cache — content only grows.
+    const incomingLines = session.raw_output_lines || session.preview?.preview_lines || [];
+    if (sessionIdRef.current !== session.id) {
+        // Different session — reset
+        sessionIdRef.current = session.id;
+        lineCacheRef.current = incomingLines.slice();
+    } else if (incomingLines.length > lineCacheRef.current.length) {
+        // Backend has more lines — take the full snapshot
+        lineCacheRef.current = incomingLines.slice();
+    } else if (incomingLines.length === lineCacheRef.current.length && incomingLines.length > 0) {
+        // Same count — update the last line (streaming accumulator may have changed)
+        lineCacheRef.current[lineCacheRef.current.length - 1] =
+            incomingLines[incomingLines.length - 1];
+    }
+    // When incomingLines.length < cache length, keep the cache as-is.
+    // This is the key fix: prevents content from disappearing.
+
+    const rawLines = lineCacheRef.current.slice(clearOffset);
 
     // Helper: set status feedback with auto-clear
     const showSendInfo = useCallback((msg: string) => {
@@ -207,13 +338,19 @@ export function RemoteSessionConsole(props: Props) {
         };
     }, []);
 
-    // Auto-scroll to bottom when output changes
+    // Auto-scroll to bottom when new output arrives, but only if the user
+    // hasn't scrolled up to read history.
     useEffect(() => {
         const lastLine = rawLines.length > 0 ? rawLines[rawLines.length - 1] : "";
         if (rawLines.length !== prevRawCountRef.current || lastLine !== prevLastLineRef.current) {
             prevRawCountRef.current = rawLines.length;
             prevLastLineRef.current = lastLine;
-            outputEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            const container = outputContainerRef.current;
+            // Auto-scroll when user is near the bottom (within ~2 lines)
+            const threshold = 80;
+            if (!container || container.scrollHeight - container.scrollTop - container.clientHeight < threshold) {
+                outputEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }
         }
     }, [rawLines]);
 
@@ -307,26 +444,250 @@ export function RemoteSessionConsole(props: Props) {
     }, [session.id, killRemoteSession, onClose]);
 
     const handleClear = useCallback(() => {
-        const all = session.raw_output_lines || session.preview?.preview_lines || [];
-        setClearOffset(all.length);
-    }, [session]);
+        setClearOffset(lineCacheRef.current.length);
+    }, []);
+
+    const handleImageFile = useCallback(async (file: File) => {
+        if (!SUPPORTED_IMAGE_TYPES.includes(file.type)) {
+            showSendInfo("✗ 不支持的图片格式，仅支持 PNG/JPEG/GIF/WebP");
+            return;
+        }
+        if (file.size > MAX_IMAGE_SIZE) {
+            showSendInfo("✗ 图片超过 5MB 限制");
+            return;
+        }
+        setImageUploading(true);
+        try {
+            const base64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const result = reader.result as string;
+                    // Strip data URL prefix: "data:image/png;base64,..."
+                    const idx = result.indexOf(",");
+                    resolve(idx >= 0 ? result.slice(idx + 1) : result);
+                };
+                reader.onerror = () => reject(new Error("读取文件失败"));
+                reader.readAsDataURL(file);
+            });
+            await SendRemoteSessionImage(session.id, file.type, base64);
+            showSendInfo(`✓ 📷 图片已发送 (${(file.size / 1024).toFixed(0)}KB)`);
+            setTimeout(() => refreshSessionsOnly(), 200);
+            setTimeout(() => refreshSessionsOnly(), 800);
+            setTimeout(() => refreshSessionsOnly(), 2000);
+        } catch (e) {
+            showSendInfo(`✗ 图片发送失败: ${String(e)}`);
+        }
+        setImageUploading(false);
+    }, [session.id, refreshSessionsOnly, showSendInfo]);
+
+    const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) handleImageFile(file);
+        // Reset so the same file can be selected again
+        e.target.value = "";
+    }, [handleImageFile]);
+
+    const handlePaste = useCallback((e: ClipboardEvent) => {
+        if (!isSDK || sessionClosed) return;
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.startsWith("image/")) {
+                e.preventDefault();
+                const file = items[i].getAsFile();
+                if (file) handleImageFile(file);
+                return;
+            }
+        }
+    }, [isSDK, sessionClosed, handleImageFile]);
+
+    // Listen for paste events on the overlay
+    useEffect(() => {
+        const handler = (e: Event) => handlePaste(e as ClipboardEvent);
+        window.addEventListener("paste", handler);
+        return () => window.removeEventListener("paste", handler);
+    }, [handlePaste]);
+
+    const handleScreenshot = useCallback(async () => {
+        const title = prompt("输入窗口标题（留空截全屏）：");
+        if (title === null) return; // cancelled
+        setImageUploading(true);
+        try {
+            if (title.trim()) {
+                await CaptureRemoteWindowScreenshot(session.id, title.trim());
+                showSendInfo(`✓ 📸 窗口截图已发送: ${title.trim()}`);
+            } else {
+                await CaptureRemoteScreenshot(session.id);
+                showSendInfo("✓ 📸 全屏截图已发送");
+            }
+            setTimeout(() => refreshSessionsOnly(), 500);
+        } catch (e) {
+            showSendInfo(`✗ 截图失败: ${String(e)}`);
+        }
+        setImageUploading(false);
+    }, [session.id, refreshSessionsOnly, showSendInfo]);
 
     const statusColor = status === "running" || status === "busy" ? "#4ec9b0"
         : status === "waiting_input" ? "#dcdcaa" : "#808080";
 
     // ── Build output elements ──
     const outputElements = useMemo((): React.ReactNode[] => {
-        const elements: React.ReactNode[] = [];
+        // Pre-process: merge lines that start with "/" into the previous line
+        // when they look like word fragments from SDK streaming (e.g. "/ON/AC"
+        // split from "OFF/ON/AC"), not actual file paths.
+        const merged: string[] = [];
         for (let i = 0; i < rawLines.length; i++) {
             const cleaned = stripAnsi(rawLines[i]);
-            // Highlight user input lines (echoed by backend with ❯ prefix)
-            const isUserInput = cleaned.startsWith("❯ ");
-            elements.push(
-                <div key={`line-${i}`} style={isUserInput ? promptStyleQA : lineStyleQA}>
-                    {cleaned || "\u00A0"}
+            const prev = merged.length > 0 ? merged[merged.length - 1] : "";
+            if (
+                prev.length > 0 &&
+                cleaned.length > 0 &&
+                cleaned[0] === "/" &&
+                cleaned.length <= 30 &&
+                !/^\/[a-z][\w.\-]*\//.test(cleaned)
+            ) {
+                merged[merged.length - 1] += cleaned;
+            } else {
+                merged.push(cleaned);
+            }
+        }
+
+        const elements: React.ReactNode[] = [];
+        let responseLines: React.ReactNode[] = [];
+        let inCodeBlock = false;
+        let codeBlockLines: string[] = [];
+        let codeBlockLang = "";
+        let plainTextBuf: string[] = [];
+
+        const flushCodeBlock = () => {
+            if (codeBlockLines.length > 0) {
+                responseLines.push(
+                    <pre key={`code-${responseLines.length}`} style={{
+                        background: "#1a1a1a",
+                        border: "1px solid #333",
+                        borderRadius: "4px",
+                        padding: "8px 10px",
+                        margin: "4px 0",
+                        fontSize: "0.9em",
+                        overflowX: "auto",
+                        color: "#ce9178",
+                        lineHeight: 1.5,
+                    }}>
+                        {codeBlockLang && <div style={{ color: "#555", fontSize: "0.85em", marginBottom: "4px" }}>{codeBlockLang}</div>}
+                        <code>{codeBlockLines.join("\n")}</code>
+                    </pre>
+                );
+            }
+            codeBlockLines = [];
+            codeBlockLang = "";
+        };
+
+        const flushResponse = () => {
+            if (responseLines.length > 0) {
+                elements.push(
+                    <div key={`resp-${elements.length}`} style={responseBlockStyle}>
+                        {responseLines}
+                    </div>
+                );
+                responseLines = [];
+            }
+        };
+
+        for (let i = 0; i < merged.length; i++) {
+            const line = merged[i];
+            const isUserInput = line.startsWith("❯ ");
+
+            if (isUserInput) {
+                if (inCodeBlock) { flushCodeBlock(); inCodeBlock = false; }
+                flushResponse();
+                if (elements.length > 0) {
+                    elements.push(<div key={`div-${i}`} style={userDividerStyle} />);
+                }
+                elements.push(
+                    <div key={`line-${i}`} style={promptStyleQA}>
+                        {line}
+                    </div>
+                );
+            } else {
+                // Handle code fences
+                if (/^```/.test(line.trimStart())) {
+                    if (inCodeBlock) {
+                        flushCodeBlock();
+                        inCodeBlock = false;
+                    } else {
+                        inCodeBlock = true;
+                        codeBlockLang = line.trimStart().slice(3).trim();
+                    }
+                    continue;
+                }
+                if (inCodeBlock) {
+                    codeBlockLines.push(line);
+                } else {
+                    // Check if this is a "special" line (heading, list, blockquote, etc.)
+                    const trimmed = line.trimStart();
+                    const isSpecialLine = /^(#{1,4}\s|>\s|[-*]\s|\d+[.)]\s|⚡|✓|✅|✗|⚠|❌|[A-Z]:\\|~\/|\/[a-z][\w.\-]*\/)/.test(trimmed);
+                    if (isSpecialLine) {
+                        // Flush any accumulated plain text first
+                        if (plainTextBuf.length > 0) {
+                            responseLines.push(
+                                <div key={`plain-${i}`} style={{ minHeight: "1.4em" }}>
+                                    {renderInlineMarkdown(plainTextBuf.join(" "))}
+                                </div>
+                            );
+                            plainTextBuf = [];
+                        }
+                        // List items: buffer for continuation merging (SDK streaming
+                        // may split "- Image analysis" into "- Image" + "analysis")
+                        const listMatch = trimmed.match(/^[-*]\s(.*)$/);
+                        const numMatch = !listMatch ? trimmed.match(/^(\d+)[.)]\s+(.+)$/) : null;
+                        if (listMatch || numMatch) {
+                            // Look ahead: merge subsequent plain-text continuation lines
+                            let itemText = listMatch ? listMatch[1] : numMatch![2];
+                            while (i + 1 < merged.length) {
+                                const nextLine = merged[i + 1];
+                                const nextTrimmed = nextLine.trimStart();
+                                if (nextTrimmed === "" || /^(#{1,4}\s|>\s|[-*]\s|\d+[.)]\s|⚡|✓|✅|✗|⚠|❌|[A-Z]:\\|~\/|\/[a-z][\w.\-]*\/|```)/.test(nextTrimmed) || nextLine.startsWith("❯ ")) break;
+                                itemText += " " + nextTrimmed;
+                                i++;
+                            }
+                            if (listMatch) {
+                                responseLines.push(renderMarkdownLine("- " + itemText, `line-${i}`));
+                            } else {
+                                responseLines.push(renderMarkdownLine(numMatch![1] + ". " + itemText, `line-${i}`));
+                            }
+                        } else {
+                            responseLines.push(renderMarkdownLine(line, `line-${i}`));
+                        }
+                    } else if (trimmed === "") {
+                        // Empty line — flush plain buffer as paragraph break
+                        if (plainTextBuf.length > 0) {
+                            responseLines.push(
+                                <div key={`plain-${i}`} style={{ minHeight: "1.4em" }}>
+                                    {renderInlineMarkdown(plainTextBuf.join(" "))}
+                                </div>
+                            );
+                            plainTextBuf = [];
+                        }
+                        responseLines.push(<div key={`empty-${i}`} style={{ height: "0.5em" }} />);
+                    } else {
+                        // Regular text — accumulate for natural word-wrap
+                        plainTextBuf.push(trimmed);
+                    }
+                }
+            }
+        }
+        // Flush remaining plain text
+        if (plainTextBuf.length > 0) {
+            responseLines.push(
+                <div key="plain-final" style={{ minHeight: "1.4em" }}>
+                    {renderInlineMarkdown(plainTextBuf.join(" "))}
                 </div>
             );
+            plainTextBuf = [];
         }
+        if (inCodeBlock) { flushCodeBlock(); }
+        flushResponse();
+
         return elements;
     }, [rawLines]);
 
@@ -433,6 +794,33 @@ export function RemoteSessionConsole(props: Props) {
                         title="逐字符发送 (TUI)">
                         Raw
                     </button>
+                )}
+                {isSDK && (
+                    <>
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/gif,image/webp"
+                            style={{ display: "none" }}
+                            onChange={handleFileInputChange}
+                        />
+                        <button
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={disabled || imageUploading}
+                            style={{ ...inputBtnStyle, color: "#c586c0", borderColor: "#c586c0" }}
+                            title="上传图片 (也可粘贴)"
+                        >
+                            {imageUploading ? "…" : "📷"}
+                        </button>
+                        <button
+                            onClick={handleScreenshot}
+                            disabled={disabled || imageUploading}
+                            style={{ ...inputBtnStyle, color: "#4ec9b0", borderColor: "#4ec9b0" }}
+                            title="截图 (全屏或指定窗口)"
+                        >
+                            🖥
+                        </button>
+                    </>
                 )}
                 <button onClick={handleSend} disabled={disabled}
                     style={{ ...inputBtnStyle, color: "#569cd6", borderColor: "#569cd6" }}

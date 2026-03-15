@@ -107,7 +107,7 @@ func TestRemoteHubClientConnectAndSyncSessions(t *testing.T) {
 	}
 	defer func() { _ = client.Disconnect() }()
 
-	gotTypes := collectMessageTypes(t, messageCh, 7, 5*time.Second)
+	gotTypes := collectMessageTypes(t, messageCh, 8, 5*time.Second)
 	assertContainsType(t, gotTypes, "auth.machine")
 	assertContainsType(t, gotTypes, "machine.hello")
 	assertContainsType(t, gotTypes, "session.created")

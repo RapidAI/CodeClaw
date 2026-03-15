@@ -30,6 +30,7 @@ hubcenter/bin/
 hubcenter.exe
 CodeClaw.exe
 build/deploy/*.tar.gz
+build/deploy/stage/
 build/deploy_last.log
 build/windows/*.tmp
 resource_windows_arm64.syso
@@ -39,6 +40,7 @@ mobile/android/.gradle/
 mobile/android/app/build/
 mobile/dist/
 mobile/android/codeclaw-release.jks
+mobile/android/maclaw-release.jks
 mobile/android/signing.env.cmd
 tmp-hub-admin-check.js
 tmp-hubcenter-admin-check.js
@@ -47,3 +49,4 @@ hub/web/admin/.tmp-check.js
 hub/web/admin/_syntax_check.js
 hubcenter/web/admin/.tmp-check.js
 hubcenter/web/admin/_syntax_check.js
+hub/hub.exe

@@ -290,31 +290,29 @@ func (m *RemoteSessionManager) WriteInput(sessionID, text string) error {
 		err := s.Exec.Write([]byte(text))
 		if err != nil {
 			m.app.log(fmt.Sprintf("[remote-write-sdk] FAILED session=%s: %v", sessionID, err))
-		} else {
-			// Echo user input into the raw output and preview so it appears
-			// in both the desktop terminal and PWA as a Q&A conversation.
-			userText := strings.TrimSpace(text)
-			if userText != "" {
-				echoLine := fmt.Sprintf("❯ %s", userText)
-				s.mu.Lock()
-				s.RawOutputLines = append(s.RawOutputLines, "", echoLine, "")
-				s.Preview.PreviewLines = append(s.Preview.PreviewLines, "", echoLine, "")
-				if len(s.RawOutputLines) > 2000 {
-					s.RawOutputLines = s.RawOutputLines[len(s.RawOutputLines)-2000:]
-				}
-				if len(s.Preview.PreviewLines) > 500 {
-					s.Preview.PreviewLines = s.Preview.PreviewLines[len(s.Preview.PreviewLines)-500:]
-				}
-				s.mu.Unlock()
-				// Send preview delta to Hub so PWA sees the echo
-				if m.hubClient != nil {
-					_ = m.hubClient.SendPreviewDelta(SessionPreviewDelta{
-						SessionID:   sessionID,
-						OutputSeq:   s.Preview.OutputSeq,
-						AppendLines: []string{"", echoLine, ""},
-						UpdatedAt:   s.Preview.UpdatedAt,
-					})
-				}
+		}
+		// Echo user input into the raw output so the console displays it
+		// in a clear Q&A format with a visible separator.
+		displayText := strings.TrimSpace(text)
+		if displayText != "" {
+			echoLine := fmt.Sprintf("❯ %s", displayText)
+			s.mu.Lock()
+			s.RawOutputLines = append(s.RawOutputLines, "", echoLine, "")
+			s.Preview.PreviewLines = append(s.Preview.PreviewLines, "", echoLine, "")
+			if len(s.RawOutputLines) > 2000 {
+				s.RawOutputLines = s.RawOutputLines[len(s.RawOutputLines)-2000:]
+			}
+			if len(s.Preview.PreviewLines) > 500 {
+				s.Preview.PreviewLines = s.Preview.PreviewLines[len(s.Preview.PreviewLines)-500:]
+			}
+			s.mu.Unlock()
+			if m.hubClient != nil {
+				_ = m.hubClient.SendPreviewDelta(SessionPreviewDelta{
+					SessionID:   sessionID,
+					OutputSeq:   s.Preview.OutputSeq,
+					AppendLines: []string{"", echoLine, ""},
+					UpdatedAt:   s.Preview.UpdatedAt,
+				})
 			}
 		}
 		return err
@@ -361,12 +359,18 @@ func (m *RemoteSessionManager) WriteImageInput(sessionID string, img ImageTransf
 		return err
 	}
 
-	// Construct multi-part SDKUserInput with image content block.
+	// Construct multi-part SDKUserInput with text + image content blocks.
+	// The official Claude Code SDK requires a text part alongside the image
+	// (see: docs.claude.com streaming input mode examples).
 	msg := SDKUserInput{
 		Type: "user",
 		Message: SDKUserMessage{
 			Role: "user",
 			Content: []SDKUserContentPart{
+				{
+					Type: "text",
+					Text: "[User uploaded an image]",
+				},
 				{
 					Type: "image",
 					Source: &SDKImageSource{
@@ -379,7 +383,7 @@ func (m *RemoteSessionManager) WriteImageInput(sessionID string, img ImageTransf
 		},
 	}
 
-	m.app.log(fmt.Sprintf("[remote-write-image] session=%s, media_type=%s, b64_len=%d",
+	m.app.log(fmt.Sprintf("[remote-write-image] session=%s, media_type=%s, b64_len=%d, content_parts=2(text+image)",
 		sessionID, img.MediaType, len(img.Data)))
 
 	if err := sdkHandle.WriteUserInput(msg); err != nil {
@@ -449,9 +453,13 @@ func (m *RemoteSessionManager) runOutputLoop(s *RemoteSession) {
 
 		s.mu.Lock()
 		if len(rawLines) > 0 {
-			if rawResult.IsScreenRefresh {
+			if rawResult.IsScreenRefresh && len(rawLines) >= 5 {
 				// TUI screen redraw detected — replace the buffer so we
 				// don't accumulate stale screen frames.
+				// Guard: only replace when the new chunk has >= 5 lines,
+				// avoiding spurious clears from stray cursor-home sequences.
+				m.app.log(fmt.Sprintf("[remote-output] screen-refresh: session=%s, replacing %d lines with %d",
+					s.ID, len(s.RawOutputLines), len(rawLines)))
 				s.RawOutputLines = make([]string, len(rawLines))
 				copy(s.RawOutputLines, rawLines)
 			} else {
@@ -680,27 +688,18 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 							s.Events = appendRecentEvents(s.Events, evt, maxRecentImportantEvents)
 							eventsToSync = append(eventsToSync, evt)
 						}
-						if block.Type == "image" && block.Source != nil {
-							if !IsValidImageMediaType(block.Source.MediaType) {
-								m.app.log(fmt.Sprintf("[sdk-image] session=%s: skipping image with unsupported media_type %q", s.ID, block.Source.MediaType))
-								continue
-							}
-							decoded, err := base64.StdEncoding.DecodeString(block.Source.Data)
-							if err != nil {
-								m.app.log(fmt.Sprintf("[sdk-image] session=%s: skipping image with invalid base64 data: %v", s.ID, err))
-								continue
-							}
-							if len(decoded) > ImageOutputSizeLimit {
-								m.app.log(fmt.Sprintf("[sdk-image] session=%s: skipping image exceeding size limit (%d > %d)", s.ID, len(decoded), ImageOutputSizeLimit))
-								continue
-							}
-							img := NewImageTransferMessage(s.ID, block.Source.MediaType, block.Source.Data)
-							imagesToSync = append(imagesToSync, img)
-						}
 					}
+					imagesToSync = append(imagesToSync, extractImagesFromBlocks(s.ID, msg.Message.Content, "sdk-image", m.app)...)
 				}
 				snap := s.Summary
 				summaryToSync = &snap
+
+			case "user":
+				// Extract images from tool_result content blocks (e.g. screenshots
+				// captured by Claude Code's Bash/Read tools).
+				if msg.Message != nil {
+					imagesToSync = append(imagesToSync, extractImagesFromBlocks(s.ID, msg.Message.Content, "sdk-image-user", m.app)...)
+				}
 
 			case "result":
 				flushStreamAccum()
@@ -849,6 +848,59 @@ func sessionExit(session *RemoteSession) <-chan PTYExit {
 		return nil
 	}
 	return session.Exec.Exit()
+}
+
+// extractImagesFromBlocks collects image transfer messages from a slice of
+// SDK content blocks. It handles both direct image blocks (type="image") and
+// nested content arrays inside tool_result blocks (e.g. when Claude Code's
+// Read tool returns a PNG file as an image content block).
+func extractImagesFromBlocks(sessionID string, blocks []SDKContentBlock, logPrefix string, app *App) []ImageTransferMessage {
+	var images []ImageTransferMessage
+	for _, block := range blocks {
+		// Direct image block
+		if block.Type == "image" && block.Source != nil {
+			if img, ok := validateAndBuildImage(sessionID, block.Source, logPrefix, app); ok {
+				images = append(images, img)
+			}
+		}
+		// tool_result with nested content array (e.g. Read tool returning images)
+		if block.Type == "tool_result" && len(block.NestedContent) > 0 {
+			for _, nested := range block.NestedContent {
+				if nested.Type == "image" && nested.Source != nil {
+					if img, ok := validateAndBuildImage(sessionID, nested.Source, logPrefix+"-nested", app); ok {
+						images = append(images, img)
+					}
+				}
+			}
+		}
+	}
+	return images
+}
+
+func validateAndBuildImage(sessionID string, source *SDKImageSource, logPrefix string, app *App) (ImageTransferMessage, bool) {
+	if !IsValidImageMediaType(source.MediaType) {
+		if app != nil {
+			app.log(fmt.Sprintf("[%s] session=%s: skipping image with unsupported media_type %q", logPrefix, sessionID, source.MediaType))
+		}
+		return ImageTransferMessage{}, false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(source.Data)
+	if err != nil {
+		if app != nil {
+			app.log(fmt.Sprintf("[%s] session=%s: skipping image with invalid base64 data: %v", logPrefix, sessionID, err))
+		}
+		return ImageTransferMessage{}, false
+	}
+	if len(decoded) > ImageOutputSizeLimit {
+		if app != nil {
+			app.log(fmt.Sprintf("[%s] session=%s: skipping image exceeding size limit (%d > %d)", logPrefix, sessionID, len(decoded), ImageOutputSizeLimit))
+		}
+		return ImageTransferMessage{}, false
+	}
+	if app != nil {
+		app.log(fmt.Sprintf("[%s] session=%s: extracted image, media_type=%s, size=%d", logPrefix, sessionID, source.MediaType, len(decoded)))
+	}
+	return NewImageTransferMessage(sessionID, source.MediaType, source.Data), true
 }
 
 // buildSDKToolUseEvent creates an ImportantEvent from an SDK tool_use content block.

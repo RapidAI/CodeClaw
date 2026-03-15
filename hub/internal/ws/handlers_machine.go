@@ -177,6 +177,10 @@ func (g *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 			if err := g.handleSessionImageInput(ctx, msg); err != nil {
 				return
 			}
+		case "session.screenshot":
+			if err := g.handleSessionScreenshot(ctx, msg); err != nil {
+				return
+			}
 		default:
 			_ = writeWSError(conn, "UNKNOWN_MESSAGE", "Unsupported message type")
 		}
@@ -545,7 +549,10 @@ func (g *Gateway) handleSessionPreviewDelta(ctx *ConnContext, msg Envelope) erro
 	if err := g.Sessions.OnSessionPreviewDelta(context.Background(), ctx.MachineID, ctx.UserID, msg.SessionID, payload); err != nil {
 		return writeWSError(ctx.Conn, "INTERNAL_ERROR", err.Error())
 	}
-	return writeAck(ctx.Conn, msg.RequestID)
+	// Skip ack for preview deltas — they are high-frequency fire-and-forget
+	// messages. Omitting the ack reduces round-trip overhead and frees the
+	// WebSocket write buffer for the next incoming delta.
+	return nil
 }
 
 func (g *Gateway) handleSessionImportantEvent(ctx *ConnContext, msg Envelope) error {
@@ -653,6 +660,44 @@ func (g *Gateway) handleSessionImageInput(ctx *ConnContext, msg Envelope) error 
 
 	command := map[string]any{
 		"type":       "session.image_input",
+		"ts":         time.Now().Unix(),
+		"machine_id": payload.MachineID,
+		"session_id": payload.SessionID,
+		"payload":    json.RawMessage(msg.Payload),
+	}
+	if err := g.Devices.SendToMachine(payload.MachineID, command); err != nil {
+		return writeWSError(ctx.Conn, "MACHINE_OFFLINE", err.Error())
+	}
+	return nil
+}
+
+// handleSessionScreenshot handles session.screenshot from a viewer and forwards to the machine.
+// The machine will capture a screenshot and send it back via session.image.
+func (g *Gateway) handleSessionScreenshot(ctx *ConnContext, msg Envelope) error {
+	if ctx.Role != "viewer" {
+		return writeWSError(ctx.Conn, "FORBIDDEN", "Viewer role required")
+	}
+
+	var payload struct {
+		SessionID   string `json:"session_id"`
+		MachineID   string `json:"machine_id"`
+		WindowTitle string `json:"window_title"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return writeWSError(ctx.Conn, "INVALID_MESSAGE", "Invalid session.screenshot payload")
+	}
+	if payload.MachineID == "" {
+		payload.MachineID = msg.MachineID
+	}
+	if payload.SessionID == "" {
+		payload.SessionID = msg.SessionID
+	}
+	if payload.MachineID == "" || payload.SessionID == "" {
+		return writeWSError(ctx.Conn, "INVALID_INPUT", "machine_id and session_id are required")
+	}
+
+	command := map[string]any{
+		"type":       "session.screenshot",
 		"ts":         time.Now().Unix(),
 		"machine_id": payload.MachineID,
 		"session_id": payload.SessionID,

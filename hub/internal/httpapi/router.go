@@ -7,9 +7,11 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/center"
 	"github.com/RapidAI/CodeClaw/hub/internal/device"
 	"github.com/RapidAI/CodeClaw/hub/internal/entry"
+	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
+	"github.com/RapidAI/CodeClaw/hub/internal/store"
 	"github.com/RapidAI/CodeClaw/hub/internal/ws"
 )
 
@@ -22,6 +24,8 @@ func NewRouter(
 	deviceSvc *device.Service,
 	sessionSvc *session.Service,
 	invitationSvc *invitation.Service,
+	system store.SystemSettingsRepository,
+	feishuNotifier *feishu.Notifier,
 	staticDir string,
 	routePrefix string,
 ) http.Handler {
@@ -75,6 +79,11 @@ func NewRouter(
 	mux.HandleFunc("POST /api/admin/mail/config", RequireAdmin(admins, UpdateMailConfigHandler(mailer)))
 	mux.HandleFunc("POST /api/admin/center/register", RequireAdmin(admins, RegisterCenterHandler(centerSvc)))
 	mux.HandleFunc("POST /api/admin/mail/test", RequireAdmin(admins, AdminSendTestMailHandler(mailer)))
+	mux.HandleFunc("GET /api/admin/feishu/config", RequireAdmin(admins, GetFeishuConfigHandler(system)))
+	mux.HandleFunc("POST /api/admin/feishu/config", RequireAdmin(admins, UpdateFeishuConfigHandler(system, feishuNotifier)))
+	mux.HandleFunc("GET /api/admin/feishu/bindings", RequireAdmin(admins, GetFeishuBindingsHandler(feishuNotifier)))
+	mux.HandleFunc("DELETE /api/admin/feishu/bindings", RequireAdmin(admins, DeleteFeishuBindingHandler(feishuNotifier)))
+	mux.HandleFunc("/api/feishu/webhook", feishu.WebhookHandler(feishuNotifier))
 	mux.HandleFunc("POST /api/enroll/start", EnrollStartHandler(identity))
 	mux.HandleFunc("POST /api/auth/email-request", EmailRequestLoginHandler(identity))
 	mux.HandleFunc("POST /api/auth/email-confirm", EmailConfirmLoginHandler(identity))

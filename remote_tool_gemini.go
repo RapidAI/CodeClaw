@@ -30,6 +30,14 @@ func (a *GeminiAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 		return CommandSpec{}, fmt.Errorf("gemini is not installed")
 	}
 
+	// Ensure Gemini CLI's first-run theme selection is pre-configured
+	// so it doesn't block the remote PTY session with interactive prompts.
+	if err := ensureGeminiOnboardingComplete(a.app); err != nil {
+		if a.app != nil {
+			a.app.log(fmt.Sprintf("[gemini-adapter] onboarding pre-check warning: %v", err))
+		}
+	}
+
 	extra := map[string]string{}
 	if spec.ModelID != "" {
 		extra["GEMINI_MODEL"] = spec.ModelID

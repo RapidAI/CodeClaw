@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
 cd /d "%~dp0"
 
@@ -11,14 +11,14 @@ if not errorlevel 1 set "OUTPUT_KIND=release"
 
 if exist gradlew.bat (
     call gradlew.bat %TASK%
-    if not !ERRORLEVEL!==0 if not %ERRORLEVEL%==0 goto :build_failed
+    if !ERRORLEVEL! neq 0 goto :build_failed
     goto :after_build
 )
 
 where gradle >nul 2>nul
 if %ERRORLEVEL%==0 (
     call gradle %TASK%
-    if not %ERRORLEVEL%==0 goto :build_failed
+    if !ERRORLEVEL! neq 0 goto :build_failed
     goto :after_build
 )
 

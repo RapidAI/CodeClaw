@@ -517,3 +517,193 @@ func TestWriteImageInput_NilExec(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// --- Tests for extractImagesFromBlocks ---
+
+func TestExtractImagesFromBlocks_DirectImage(t *testing.T) {
+	validB64 := base64.StdEncoding.EncodeToString([]byte("fake-png"))
+	blocks := []SDKContentBlock{
+		{
+			Type: "image",
+			Source: &SDKImageSource{
+				Type:      "base64",
+				MediaType: "image/png",
+				Data:      validB64,
+			},
+		},
+	}
+
+	images := extractImagesFromBlocks("sess-1", blocks, "test", &App{})
+	if len(images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(images))
+	}
+	if images[0].MediaType != "image/png" {
+		t.Fatalf("expected media_type 'image/png', got %q", images[0].MediaType)
+	}
+	if images[0].SessionID != "sess-1" {
+		t.Fatalf("expected session_id 'sess-1', got %q", images[0].SessionID)
+	}
+}
+
+func TestExtractImagesFromBlocks_NestedToolResultImage(t *testing.T) {
+	validB64 := base64.StdEncoding.EncodeToString([]byte("screenshot-data"))
+	blocks := []SDKContentBlock{
+		{
+			Type:      "tool_result",
+			ToolUseID: "tu_read",
+			NestedContent: []SDKContentBlock{
+				{
+					Type: "image",
+					Source: &SDKImageSource{
+						Type:      "base64",
+						MediaType: "image/png",
+						Data:      validB64,
+					},
+				},
+			},
+		},
+	}
+
+	images := extractImagesFromBlocks("sess-2", blocks, "test", &App{})
+	if len(images) != 1 {
+		t.Fatalf("expected 1 image from nested tool_result, got %d", len(images))
+	}
+	if images[0].MediaType != "image/png" {
+		t.Fatalf("expected media_type 'image/png', got %q", images[0].MediaType)
+	}
+}
+
+func TestExtractImagesFromBlocks_NestedMixedContent(t *testing.T) {
+	validB64 := base64.StdEncoding.EncodeToString([]byte("jpeg-data"))
+	blocks := []SDKContentBlock{
+		{
+			Type:      "tool_result",
+			ToolUseID: "tu_read",
+			NestedContent: []SDKContentBlock{
+				{Type: "text", Text: "File contents"},
+				{
+					Type: "image",
+					Source: &SDKImageSource{
+						Type:      "base64",
+						MediaType: "image/jpeg",
+						Data:      validB64,
+					},
+				},
+				{Type: "text", Text: "More text"},
+			},
+		},
+	}
+
+	images := extractImagesFromBlocks("sess-3", blocks, "test", &App{})
+	if len(images) != 1 {
+		t.Fatalf("expected 1 image from mixed nested content, got %d", len(images))
+	}
+	if images[0].MediaType != "image/jpeg" {
+		t.Fatalf("expected media_type 'image/jpeg', got %q", images[0].MediaType)
+	}
+}
+
+func TestExtractImagesFromBlocks_DirectAndNested(t *testing.T) {
+	b64a := base64.StdEncoding.EncodeToString([]byte("direct-img"))
+	b64b := base64.StdEncoding.EncodeToString([]byte("nested-img"))
+	blocks := []SDKContentBlock{
+		{
+			Type: "image",
+			Source: &SDKImageSource{
+				Type: "base64", MediaType: "image/png", Data: b64a,
+			},
+		},
+		{Type: "text", Text: "some text"},
+		{
+			Type:      "tool_result",
+			ToolUseID: "tu_x",
+			NestedContent: []SDKContentBlock{
+				{
+					Type: "image",
+					Source: &SDKImageSource{
+						Type: "base64", MediaType: "image/jpeg", Data: b64b,
+					},
+				},
+			},
+		},
+	}
+
+	images := extractImagesFromBlocks("sess-4", blocks, "test", &App{})
+	if len(images) != 2 {
+		t.Fatalf("expected 2 images (1 direct + 1 nested), got %d", len(images))
+	}
+	if images[0].MediaType != "image/png" {
+		t.Fatalf("first image: expected 'image/png', got %q", images[0].MediaType)
+	}
+	if images[1].MediaType != "image/jpeg" {
+		t.Fatalf("second image: expected 'image/jpeg', got %q", images[1].MediaType)
+	}
+}
+
+func TestExtractImagesFromBlocks_NestedInvalidMediaType(t *testing.T) {
+	validB64 := base64.StdEncoding.EncodeToString([]byte("bmp-data"))
+	blocks := []SDKContentBlock{
+		{
+			Type:      "tool_result",
+			ToolUseID: "tu_y",
+			NestedContent: []SDKContentBlock{
+				{
+					Type: "image",
+					Source: &SDKImageSource{
+						Type: "base64", MediaType: "image/bmp", Data: validB64,
+					},
+				},
+			},
+		},
+	}
+
+	images := extractImagesFromBlocks("sess-5", blocks, "test", &App{})
+	if len(images) != 0 {
+		t.Fatalf("expected 0 images (invalid media type), got %d", len(images))
+	}
+}
+
+func TestExtractImagesFromBlocks_NestedNilSource(t *testing.T) {
+	blocks := []SDKContentBlock{
+		{
+			Type:      "tool_result",
+			ToolUseID: "tu_z",
+			NestedContent: []SDKContentBlock{
+				{Type: "image", Source: nil},
+			},
+		},
+	}
+
+	images := extractImagesFromBlocks("sess-6", blocks, "test", &App{})
+	if len(images) != 0 {
+		t.Fatalf("expected 0 images (nil source), got %d", len(images))
+	}
+}
+
+func TestExtractImagesFromBlocks_ToolResultStringContent(t *testing.T) {
+	// tool_result with string content (no NestedContent) should yield no images
+	blocks := []SDKContentBlock{
+		{
+			Type:      "tool_result",
+			ToolUseID: "tu_str",
+			Content:   "plain text result",
+		},
+	}
+
+	images := extractImagesFromBlocks("sess-7", blocks, "test", &App{})
+	if len(images) != 0 {
+		t.Fatalf("expected 0 images from string tool_result, got %d", len(images))
+	}
+}
+
+func TestExtractImagesFromBlocks_EmptyBlocks(t *testing.T) {
+	images := extractImagesFromBlocks("sess-8", nil, "test", &App{})
+	if len(images) != 0 {
+		t.Fatalf("expected 0 images from nil blocks, got %d", len(images))
+	}
+
+	images = extractImagesFromBlocks("sess-8", []SDKContentBlock{}, "test", &App{})
+	if len(images) != 0 {
+		t.Fatalf("expected 0 images from empty blocks, got %d", len(images))
+	}
+}

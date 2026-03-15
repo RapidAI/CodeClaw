@@ -91,7 +91,18 @@ type Service struct {
 	nextID    int
 	listeners map[int]Listener
 	stopReap  chan struct{}
+
+	// previewDBThrottle tracks the last DB write time per session to avoid
+	// writing preview text to the database on every delta. The in-memory
+	// cache is always updated immediately; only the DB write is throttled.
+	previewDBMu        sync.Mutex
+	previewDBLastWrite map[string]time.Time
 }
+
+// previewDBWriteInterval is the minimum interval between DB writes for
+// preview text of the same session. Viewers receive real-time updates via
+// WebSocket from the in-memory cache, so the DB is only for persistence.
+const previewDBWriteInterval = 2 * time.Second
 
 // terminalStatuses lists session statuses that indicate the session is no
 // longer running.  Sessions in these states are eligible for reaping after
@@ -119,10 +130,11 @@ const staleSessionTTL = 5 * time.Minute
 
 func NewService(cache *Cache, sessions store.SessionRepository) *Service {
 	svc := &Service{
-		cache:     cache,
-		sessions:  sessions,
-		listeners: map[int]Listener{},
-		stopReap:  make(chan struct{}),
+		cache:              cache,
+		sessions:           sessions,
+		listeners:          map[int]Listener{},
+		stopReap:           make(chan struct{}),
+		previewDBLastWrite: make(map[string]time.Time),
 	}
 	go svc.reapLoop()
 	return svc
@@ -238,9 +250,23 @@ func (s *Service) OnSessionPreviewDelta(ctx context.Context, machineID, userID, 
 	entry.UpdatedAt = time.Now()
 	s.set(sessionID, entry)
 
+	// Throttle DB writes: the in-memory cache is always up-to-date for
+	// real-time WebSocket delivery. The DB write is only for persistence
+	// and can be deferred.
 	if s.sessions != nil {
-		if err := s.sessions.UpdatePreview(ctx, sessionID, strings.Join(entry.Preview.PreviewLines, "\n"), entry.Preview.OutputSeq, time.Now()); err != nil {
-			return err
+		now := time.Now()
+		s.previewDBMu.Lock()
+		lastWrite := s.previewDBLastWrite[sessionID]
+		shouldWrite := now.Sub(lastWrite) >= previewDBWriteInterval
+		if shouldWrite {
+			s.previewDBLastWrite[sessionID] = now
+		}
+		s.previewDBMu.Unlock()
+
+		if shouldWrite {
+			if err := s.sessions.UpdatePreview(ctx, sessionID, strings.Join(entry.Preview.PreviewLines, "\n"), entry.Preview.OutputSeq, now); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -276,10 +302,19 @@ func (s *Service) OnSessionClosed(ctx context.Context, machineID, userID, sessio
 	s.set(sessionID, entry)
 
 	if s.sessions != nil {
+		// Flush any throttled preview data to DB before closing
+		if len(entry.Preview.PreviewLines) > 0 {
+			_ = s.sessions.UpdatePreview(ctx, sessionID, strings.Join(entry.Preview.PreviewLines, "\n"), entry.Preview.OutputSeq, endedAt)
+		}
 		if err := s.sessions.Close(ctx, sessionID, exitCode, endedAt, status); err != nil {
 			return err
 		}
 	}
+
+	// Clean up throttle tracking
+	s.previewDBMu.Lock()
+	delete(s.previewDBLastWrite, sessionID)
+	s.previewDBMu.Unlock()
 
 	s.emit(Event{Type: "session.closed", SessionID: sessionID, MachineID: machineID, UserID: userID, Payload: payload})
 	return nil
