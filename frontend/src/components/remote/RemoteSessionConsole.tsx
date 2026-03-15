@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, type Dispatch, type SetStateAction } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, type Dispatch, type SetStateAction } from "react";
 import type { RemoteSessionView } from "./types";
 import { SendRemoteSessionInput, SendRemoteSessionRawInput, InterruptRemoteSession } from "../../../wailsjs/go/main/App";
 
@@ -344,7 +344,7 @@ export function RemoteSessionConsole(props: Props) {
         : status === "waiting_input" ? "#dcdcaa" : "#808080";
 
     // ── Build Q&A interleaved elements ──
-    const buildQAElements = useCallback((): React.ReactNode[] => {
+    const qaElements = useMemo((): React.ReactNode[] => {
         const prompts = userPromptsRef.current;
         const lines = rawLines;
         const elements: React.ReactNode[] = [];
@@ -441,7 +441,7 @@ export function RemoteSessionConsole(props: Props) {
                 {rawLines.length === 0 && userPromptsRef.current.length === 0 ? (
                     <span style={{ color: "#555" }}>$ _</span>
                 ) : (
-                    buildQAElements()
+                    qaElements
                 )}
                 <div ref={outputEndRef} />
             </div>
