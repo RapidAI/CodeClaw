@@ -423,17 +423,43 @@ func (n *Notifier) flushPreview(sid string) {
 		return
 	}
 
-	var sb strings.Builder
-	sb.WriteString("📺 ")
-	sb.WriteString(shortID(sid))
-	sb.WriteString(":\n")
+	// Merge consecutive non-empty lines into paragraphs, separated by blank lines.
+	// Terminal output often wraps long lines into multiple short lines — merging
+	// them produces much cleaner output in Feishu.
+	var paragraphs []string
+	var current strings.Builder
 	for _, line := range lines {
 		cleaned := stripAnsi(line)
 		if cleaned == "" {
+			// Blank line = paragraph break.
+			if current.Len() > 0 {
+				paragraphs = append(paragraphs, current.String())
+				current.Reset()
+			}
 			continue
 		}
-		sb.WriteString(truncate(cleaned, 120))
-		sb.WriteString("\n")
+		if current.Len() > 0 {
+			current.WriteString(" ")
+		}
+		current.WriteString(cleaned)
+	}
+	if current.Len() > 0 {
+		paragraphs = append(paragraphs, current.String())
+	}
+
+	if len(paragraphs) == 0 {
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📺 ")
+	sb.WriteString(shortID(sid))
+	sb.WriteString(":\n\n")
+	for i, p := range paragraphs {
+		sb.WriteString(p)
+		if i < len(paragraphs)-1 {
+			sb.WriteString("\n\n")
+		}
 	}
 	text := sb.String()
 	if len(text) > 4000 {
@@ -644,6 +670,10 @@ func truncate(s string, max int) string {
 }
 
 func shortID(id string) string {
+	// For IDs like "sess_177", show just the numeric suffix "177".
+	if idx := strings.LastIndex(id, "_"); idx >= 0 && idx < len(id)-1 {
+		return id[idx+1:]
+	}
 	if len(id) > 8 {
 		return id[:8]
 	}

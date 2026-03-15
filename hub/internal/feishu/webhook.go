@@ -172,6 +172,8 @@ func handleCommand(n *Notifier, openID, text string) {
 		handleKill(n, openID, args)
 	case "/use", "/u":
 		handleUseSession(n, openID, args)
+	case "/info":
+		handleInfo(n, openID)
 	case "/exit", "/e", "/quit", "/q":
 		handleExitSession(n, openID)
 	case "/unbind":
@@ -183,14 +185,15 @@ func handleCommand(n *Notifier, openID, text string) {
 
 func helpText() string {
 	return "📋 可用命令 / Available Commands:\n\n" +
+		"/info — 查看概览（有会话时显示会话详情）\n" +
 		"/machines — 查看设备列表\n" +
 		"/sessions [machine_id] — 查看会话列表\n" +
-		"/use <session_id> — 切换到会话（之后直接发文本即为命令）\n" +
+		"/use <会话号> — 切换到会话（之后直接发文本即为命令）\n" +
 		"/exit — 退出当前会话上下文\n" +
-		"/detail <session_id> — 查看会话详情\n" +
-		"/send <session_id> <text> — 发送命令到会话\n" +
-		"/interrupt <session_id> — 中断会话\n" +
-		"/kill <session_id> — 终止会话\n" +
+		"/detail <会话号> — 查看会话详情\n" +
+		"/send <会话号> <text> — 发送命令到会话\n" +
+		"/interrupt <会话号> — 中断会话\n" +
+		"/kill <会话号> — 终止会话\n" +
 		"/unbind — 解除飞书绑定\n" +
 		"/help — 显示此帮助\n\n" +
 		"💡 使用 /use 切换会话后，直接发文本就是给远程会话发命令。\n" +
@@ -499,6 +502,97 @@ func handleUseSession(n *Notifier, openID string, args []string) {
 		truncate(title, 40), shortID(entry.SessionID)))
 }
 
+// handleInfo shows context-dependent info:
+// - If user has an active session: show session detail
+// - Otherwise: show an overview of all machines and their session counts
+func handleInfo(n *Notifier, openID string) {
+	// Check for active session context first.
+	n.activeMu.RLock()
+	activeID := n.activeSession[openID]
+	n.activeMu.RUnlock()
+
+	if activeID != "" {
+		// Show current session detail (reuse handleSessionDetail with no args).
+		handleSessionDetail(n, openID, nil)
+		return
+	}
+
+	// No active session — show overview.
+	if n.devices == nil {
+		replyText(n, openID, "⚠️ 设备服务未配置。")
+		return
+	}
+	userID := n.resolveUserID(openID)
+	if userID == "" {
+		replyText(n, openID, "⚠️ 未绑定账号，请先发送邮箱地址绑定。")
+		return
+	}
+
+	machines, err := n.devices.ListMachines(context.Background(), userID)
+	if err != nil {
+		replyText(n, openID, fmt.Sprintf("❌ 获取设备列表失败: %v", err))
+		return
+	}
+	if len(machines) == 0 {
+		replyText(n, openID, "暂无设备。")
+		return
+	}
+
+	var sb strings.Builder
+	totalSessions := 0
+	onlineCount := 0
+	sb.WriteString(fmt.Sprintf("📊 概览 (%d 台设备)\n\n", len(machines)))
+	for _, m := range machines {
+		status := "🔴 离线"
+		if m.Online {
+			status = "🟢 在线"
+			onlineCount++
+		}
+		name := m.Name
+		if name == "" {
+			name = m.Hostname
+		}
+		if name == "" {
+			name = shortID(m.MachineID)
+		}
+		sb.WriteString(fmt.Sprintf("%s %s [%s]", status, name, m.Platform))
+
+		// Count sessions for this machine.
+		if n.sessions != nil {
+			sessions, err := n.sessions.ListByMachine(context.Background(), userID, m.MachineID)
+			if err == nil && len(sessions) > 0 {
+				active := 0
+				waiting := 0
+				for _, s := range sessions {
+					st := strings.ToLower(s.Summary.Status)
+					if st == "running" || st == "busy" {
+						active++
+					}
+					if s.Summary.WaitingForUser {
+						waiting++
+					}
+				}
+				totalSessions += len(sessions)
+				parts := []string{fmt.Sprintf("%d 个会话", len(sessions))}
+				if active > 0 {
+					parts = append(parts, fmt.Sprintf("%d 运行中", active))
+				}
+				if waiting > 0 {
+					parts = append(parts, fmt.Sprintf("⚠️ %d 等待操作", waiting))
+				}
+				sb.WriteString(" | ")
+				sb.WriteString(strings.Join(parts, ", "))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(fmt.Sprintf("\n在线: %d/%d | 总会话: %d", onlineCount, len(machines), totalSessions))
+	sb.WriteString("\n\n💡 /use <会话号> 切换会话, /sessions 查看详细列表")
+	replyText(n, openID, sb.String())
+}
+
+
 func handleExitSession(n *Notifier, openID string) {
 	n.activeMu.Lock()
 	old := n.activeSession[openID]
@@ -530,7 +624,8 @@ func handleUnbind(n *Notifier, openID string) {
 }
 
 // findSession looks up a session by prefix match across all user's machines.
-func (n *Notifier) findSession(openID, idPrefix string) *session.SessionCacheEntry {
+// Accepts full IDs ("sess_177"), short suffixes ("177"), or prefixes ("sess_1").
+func (n *Notifier) findSession(openID, idInput string) *session.SessionCacheEntry {
 	if n.sessions == nil || n.devices == nil {
 		return nil
 	}
@@ -538,7 +633,7 @@ func (n *Notifier) findSession(openID, idPrefix string) *session.SessionCacheEnt
 	if userID == "" {
 		return nil
 	}
-	prefix := strings.ToLower(idPrefix)
+	input := strings.ToLower(strings.TrimSpace(idInput))
 	machines, err := n.devices.ListMachines(context.Background(), userID)
 	if err != nil {
 		return nil
@@ -549,8 +644,16 @@ func (n *Notifier) findSession(openID, idPrefix string) *session.SessionCacheEnt
 			continue
 		}
 		for _, s := range sessions {
-			if strings.HasPrefix(strings.ToLower(s.SessionID), prefix) {
+			sid := strings.ToLower(s.SessionID)
+			// Match by: exact, prefix, or numeric suffix (e.g. "177" matches "sess_177").
+			if sid == input || strings.HasPrefix(sid, input) {
 				return s
+			}
+			if idx := strings.LastIndex(sid, "_"); idx >= 0 {
+				suffix := sid[idx+1:]
+				if suffix == input {
+					return s
+				}
 			}
 		}
 	}
