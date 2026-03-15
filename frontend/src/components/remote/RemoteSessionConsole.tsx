@@ -196,6 +196,9 @@ export function RemoteSessionConsole(props: Props) {
 
     const allRawLines = session.raw_output_lines || session.preview?.preview_lines || [];
     const rawLines = allRawLines.slice(clearOffset);
+    // Keep a ref to allRawLines so recordPrompt doesn't need it as a dep
+    const allRawLinesRef = useRef(allRawLines);
+    allRawLinesRef.current = allRawLines;
 
     // Helper: set status feedback with auto-clear
     const showSendInfo = useCallback((msg: string) => {
@@ -235,16 +238,16 @@ export function RemoteSessionConsole(props: Props) {
     }, [onClose]);
 
     // ── Record user prompt when send succeeds ──
-    // Uses allRawLines.length at call time (captured via closure over render scope)
     const recordPrompt = useCallback((text: string) => {
-        const currentLen = allRawLines.length;
+        const lines = allRawLinesRef.current;
+        const currentLen = lines.length;
         const prompts = userPromptsRef.current;
         // Snapshot previous prompt's answer
         if (prompts.length > 0) {
             const prev = prompts[prompts.length - 1];
             if (!prev.answerLines) {
                 const from = Math.min(prev.atLine, currentLen);
-                prev.answerLines = allRawLines.slice(from).map(stripAnsi);
+                prev.answerLines = lines.slice(from).map(stripAnsi);
             }
         }
         prompts.push({ text, atLine: currentLen, answerLines: null });
@@ -252,7 +255,7 @@ export function RemoteSessionConsole(props: Props) {
         if (prompts.length > 20) {
             userPromptsRef.current = prompts.slice(-20);
         }
-    }, [allRawLines]);
+    }, []);
 
     const handleSend = useCallback(async () => {
         const text = inputValueRef.current.trim();
@@ -346,12 +349,6 @@ export function RemoteSessionConsole(props: Props) {
         const lines = rawLines;
         const elements: React.ReactNode[] = [];
 
-        const promptStyleQA: React.CSSProperties = {
-            color: "#4ec9b0", fontWeight: 600, padding: "3px 0",
-            overflowWrap: "break-word",
-        };
-        const lineStyleQA: React.CSSProperties = { minHeight: "1.4em" };
-
         const renderOutputLines = (outputLines: string[], keyPrefix: string) => {
             for (let i = 0; i < outputLines.length; i++) {
                 const cleaned = stripAnsi(outputLines[i]);
@@ -380,14 +377,14 @@ export function RemoteSessionConsole(props: Props) {
                     renderOutputLines(p.answerLines, `ans-${pi}`);
                 }
             } else {
-                const absFrom = Math.min(p.atLine, allRawLines.length);
+                const absFrom = Math.min(p.atLine, allRawLinesRef.current.length);
                 const relFrom = Math.max(0, absFrom - clearOffset);
                 const liveLines = lines.slice(relFrom);
                 renderOutputLines(liveLines, `live-${pi}`);
             }
         }
         return elements;
-    }, [rawLines, allRawLines, clearOffset, stripAnsi]);
+    }, [rawLines, clearOffset]);
 
     return (
         <div style={overlayStyle}>
