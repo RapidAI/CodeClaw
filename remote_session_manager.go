@@ -547,6 +547,12 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 	// is the in-progress accumulator (needs updating) vs a committed line.
 	streamAccumActive := false
 
+	// previewAccum accumulates streaming text fragments for the preview
+	// pipeline. Only complete lines (terminated by \n) are sent to the
+	// pipeline so that the PWA receives whole lines instead of tiny
+	// fragments that get incorrectly joined with spaces.
+	previewAccum := ""
+
 	// appendStreamText must be called with s.mu held.
 	appendStreamText := func(text string) {
 		beforeCount := len(s.RawOutputLines)
@@ -595,6 +601,41 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 				s.mu.Lock()
 				flushStreamAccum()
 				s.mu.Unlock()
+				// Flush any remaining preview accumulator
+				if previewAccum != "" {
+					result := pipeline.Consume(s, []byte(previewAccum))
+					previewAccum = ""
+					s.mu.Lock()
+					s.UpdatedAt = time.Now()
+					if result.Summary != nil {
+						s.Summary = *result.Summary
+						s.Status = SessionStatus(result.Summary.Status)
+					}
+					if result.PreviewDelta != nil {
+						s.Preview.SessionID = s.ID
+						s.Preview.OutputSeq = result.PreviewDelta.OutputSeq
+						s.Preview.UpdatedAt = result.PreviewDelta.UpdatedAt
+						s.Preview.PreviewLines = append(s.Preview.PreviewLines, result.PreviewDelta.AppendLines...)
+						if len(s.Preview.PreviewLines) > 500 {
+							s.Preview.PreviewLines = s.Preview.PreviewLines[len(s.Preview.PreviewLines)-500:]
+						}
+					}
+					for _, evt := range result.Events {
+						s.Events = appendRecentEvents(s.Events, evt, maxRecentImportantEvents)
+					}
+					s.mu.Unlock()
+					if result.Summary != nil && m.hubClient != nil {
+						_ = m.hubClient.SendSessionSummary(*result.Summary)
+					}
+					if result.PreviewDelta != nil && m.hubClient != nil {
+						_ = m.hubClient.SendPreviewDelta(*result.PreviewDelta)
+					}
+					for _, evt := range result.Events {
+						if m.hubClient != nil {
+							_ = m.hubClient.SendImportantEvent(evt)
+						}
+					}
+				}
 				if messages == nil {
 					return
 				}
@@ -602,7 +643,33 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			}
 
 			text := string(chunk)
-			result := pipeline.Consume(s, chunk)
+
+			// Accumulate text for RawOutputLines (desktop terminal)
+			s.mu.Lock()
+			appendStreamText(text)
+			s.mu.Unlock()
+
+			// Accumulate text for preview pipeline — only send complete
+			// lines (containing \n) to avoid fragmenting words/characters
+			// into separate preview lines that get joined with spaces.
+			previewAccum += text
+			if !strings.Contains(text, "\n") {
+				// No complete line yet — skip pipeline processing.
+				// Update timestamp and notify UI of raw line changes.
+				s.mu.Lock()
+				s.UpdatedAt = time.Now()
+				s.mu.Unlock()
+				m.app.emitRemoteStateChanged()
+				continue
+			}
+
+			// We have at least one complete line. Send everything up to
+			// the last newline to the pipeline; keep the remainder.
+			lastNL := strings.LastIndex(previewAccum, "\n")
+			toSend := previewAccum[:lastNL+1]
+			previewAccum = previewAccum[lastNL+1:]
+
+			result := pipeline.Consume(s, []byte(toSend))
 
 			s.mu.Lock()
 			appendStreamText(text)
@@ -650,6 +717,27 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 					return
 				}
 				continue
+			}
+
+			// Flush any pending preview accumulator on message boundaries
+			// so the PWA sees complete text before status changes.
+			if previewAccum != "" {
+				pResult := pipeline.Consume(s, []byte(previewAccum))
+				previewAccum = ""
+				s.mu.Lock()
+				if pResult.PreviewDelta != nil {
+					s.Preview.SessionID = s.ID
+					s.Preview.OutputSeq = pResult.PreviewDelta.OutputSeq
+					s.Preview.UpdatedAt = pResult.PreviewDelta.UpdatedAt
+					s.Preview.PreviewLines = append(s.Preview.PreviewLines, pResult.PreviewDelta.AppendLines...)
+					if len(s.Preview.PreviewLines) > 500 {
+						s.Preview.PreviewLines = s.Preview.PreviewLines[len(s.Preview.PreviewLines)-500:]
+					}
+				}
+				s.mu.Unlock()
+				if pResult.PreviewDelta != nil && m.hubClient != nil {
+					_ = m.hubClient.SendPreviewDelta(*pResult.PreviewDelta)
+				}
 			}
 
 			now := time.Now()

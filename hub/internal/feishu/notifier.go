@@ -593,9 +593,10 @@ func (n *Notifier) flushPreview(sid string) {
 	}
 
 	// Clean lines, strip ANSI, and merge short lines into paragraphs.
-	// Terminal output wraps at column width (e.g. 80 cols), splitting Chinese
-	// text into tiny fragments. We merge consecutive non-empty lines into
-	// paragraphs, breaking only at blank lines.
+	// Terminal output wraps at column width (e.g. 80 cols), splitting text
+	// into fragments. We merge consecutive non-empty lines into paragraphs,
+	// breaking only at blank lines. A space is inserted between lines when
+	// the join point involves ASCII characters (to preserve English words).
 	var cleaned []string
 	var current strings.Builder
 	for _, line := range lines {
@@ -606,6 +607,16 @@ func (n *Notifier) flushPreview(sid string) {
 				current.Reset()
 			}
 			continue
+		}
+		if current.Len() > 0 {
+			// Insert space if the boundary involves ASCII letters/digits
+			// to avoid merging English words like "can" + "I" → "canI".
+			prev := current.String()
+			lastChar := prev[len(prev)-1]
+			firstChar := c[0]
+			if isASCIIWordChar(lastChar) || isASCIIWordChar(firstChar) {
+				current.WriteByte(' ')
+			}
 		}
 		current.WriteString(c)
 	}
@@ -630,6 +641,12 @@ func (n *Notifier) flushPreview(sid string) {
 		text = text[:4000] + "\n..."
 	}
 	replyText(n, watcherOpenID, text)
+}
+
+// isASCIIWordChar returns true if c is an ASCII letter, digit, or common
+// punctuation that should have a space before/after when joining lines.
+func isASCIIWordChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // stripAnsi removes ANSI escape sequences from terminal output.
