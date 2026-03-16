@@ -4,10 +4,9 @@
 
 MaClaw（码卡龙）是一款基于 Wails + Go + React 开发的桌面 AI 编程辅助工具仪表盘。它旨在为多种 AI 命令行工具（Anthropic Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode, CodeBuddy, Qoder CLI）提供统一的配置管理、环境自动部署以及一键启动功能。
 
+本工具支持远程编程，随时随地可编，编程流畅就像吃马卡龙。
+
 本程序特别针对主流 AI 编程模型进行了深度集成，支持 API Key 的快速配置与自动同步。
-
-<img width="600" height="390" alt="7d567ca7e9df22ab11c955e213fd40cb" src="https://github.com/user-attachments/assets/f644e856-7e8b-45da-a51d-5ebbd0a1d15f" />
-
 
 
 ## 核心功能
