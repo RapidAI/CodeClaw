@@ -10,7 +10,9 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
+	"github.com/RapidAI/CodeClaw/hub/internal/mcp"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
+	"github.com/RapidAI/CodeClaw/hub/internal/skill"
 	"github.com/RapidAI/CodeClaw/hub/internal/store"
 	"github.com/RapidAI/CodeClaw/hub/internal/ws"
 )
@@ -26,6 +28,9 @@ func NewRouter(
 	invitationSvc *invitation.Service,
 	system store.SystemSettingsRepository,
 	feishuNotifier *feishu.Notifier,
+	skillExec *skill.Executor,
+	skillCryst *skill.Crystallizer,
+	mcpReg *mcp.Registry,
 	staticDir string,
 	routePrefix string,
 ) http.Handler {
@@ -83,6 +88,8 @@ func NewRouter(
 	mux.HandleFunc("POST /api/admin/feishu/config", RequireAdmin(admins, UpdateFeishuConfigHandler(system, feishuNotifier)))
 	mux.HandleFunc("GET /api/admin/feishu/bindings", RequireAdmin(admins, GetFeishuBindingsHandler(feishuNotifier)))
 	mux.HandleFunc("DELETE /api/admin/feishu/bindings", RequireAdmin(admins, DeleteFeishuBindingHandler(feishuNotifier)))
+	mux.HandleFunc("GET /api/admin/settings/openclaw_im", RequireAdmin(admins, GetOpenclawIMConfigHandler(system)))
+	mux.HandleFunc("POST /api/admin/settings/openclaw_im", RequireAdmin(admins, UpdateOpenclawIMConfigHandler(system)))
 	mux.HandleFunc("/api/feishu/webhook", feishu.WebhookHandler(feishuNotifier))
 	mux.HandleFunc("POST /api/enroll/start", EnrollStartHandler(identity))
 	mux.HandleFunc("POST /api/auth/email-request", EmailRequestLoginHandler(identity))
@@ -101,6 +108,21 @@ func NewRouter(
 	mux.HandleFunc("GET /api/debug/sessions", DebugListSessionsHandler(sessionSvc))
 	mux.HandleFunc("GET /api/debug/session", DebugGetSessionHandler(sessionSvc))
 	mux.HandleFunc("/ws", gateway.HandleWS)
+	// NL Skill management routes
+	mux.HandleFunc("GET /api/admin/nl-skills", RequireAdmin(admins, ListNLSkillsHandler(skillExec)))
+	mux.HandleFunc("POST /api/admin/nl-skills", RequireAdmin(admins, CreateNLSkillHandler(skillExec)))
+	mux.HandleFunc("POST /api/admin/nl-skills/update", RequireAdmin(admins, UpdateNLSkillHandler(skillExec)))
+	mux.HandleFunc("DELETE /api/admin/nl-skills/{name}", RequireAdmin(admins, DeleteNLSkillHandler(skillExec)))
+	mux.HandleFunc("GET /api/admin/nl-skills/candidates", RequireAdmin(admins, ListCandidateSkillsHandler(skillCryst)))
+	mux.HandleFunc("POST /api/admin/nl-skills/candidates/confirm", RequireAdmin(admins, ConfirmCandidateSkillHandler(skillCryst)))
+	mux.HandleFunc("POST /api/admin/nl-skills/candidates/ignore", RequireAdmin(admins, IgnoreCandidateSkillHandler(skillCryst)))
+	// MCP Server management routes
+	mux.HandleFunc("GET /api/admin/mcp-servers", RequireAdmin(admins, ListMCPServersHandler(mcpReg)))
+	mux.HandleFunc("POST /api/admin/mcp-servers", RequireAdmin(admins, RegisterMCPServerHandler(mcpReg)))
+	mux.HandleFunc("POST /api/admin/mcp-servers/update", RequireAdmin(admins, UpdateMCPServerHandler(mcpReg)))
+	mux.HandleFunc("DELETE /api/admin/mcp-servers/{id}", RequireAdmin(admins, UnregisterMCPServerHandler(mcpReg)))
+	mux.HandleFunc("GET /api/admin/mcp-servers/{id}/tools", RequireAdmin(admins, GetMCPServerToolsHandler(mcpReg)))
+	mux.HandleFunc("POST /api/admin/mcp-servers/{id}/health", RequireAdmin(admins, CheckMCPServerHealthHandler(mcpReg)))
 	registerPWAStaticRoutes(mux, staticDir, routePrefix)
 	registerAdminStaticRoutes(mux, "./web/admin", "/admin")
 	return mux

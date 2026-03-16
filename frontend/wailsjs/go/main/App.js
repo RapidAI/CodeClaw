@@ -293,3 +293,70 @@ export function UpdateTool(arg1) {
 export function WindowHide() {
   return window['go']['main']['App']['WindowHide']();
 }
+
+// NL Skill management bindings
+export function ListNLSkills() {
+  return window['go']['main']['App']['ListNLSkills']();
+}
+
+export function CreateNLSkill(arg1) {
+  return window['go']['main']['App']['CreateNLSkill'](arg1);
+}
+
+export function UpdateNLSkill(arg1) {
+  return window['go']['main']['App']['UpdateNLSkill'](arg1);
+}
+
+export function DeleteNLSkill(arg1) {
+  return window['go']['main']['App']['DeleteNLSkill'](arg1);
+}
+
+export function ListCandidateSkills() {
+  return window['go']['main']['App']['ListCandidateSkills']();
+}
+
+export function ConfirmCandidateSkill(arg1) {
+  return window['go']['main']['App']['ConfirmCandidateSkill'](arg1);
+}
+
+export function IgnoreCandidateSkill(arg1) {
+  return window['go']['main']['App']['IgnoreCandidateSkill'](arg1);
+}
+
+// MCP management bindings
+export function ListMCPServers() {
+  return window['go']['main']['App']['ListMCPServers']();
+}
+
+export function RegisterMCPServer(arg1) {
+  return window['go']['main']['App']['RegisterMCPServer'](arg1);
+}
+
+export function UpdateMCPServer(arg1) {
+  return window['go']['main']['App']['UpdateMCPServer'](arg1);
+}
+
+export function UnregisterMCPServer(arg1) {
+  return window['go']['main']['App']['UnregisterMCPServer'](arg1);
+}
+
+export function GetMCPServerTools(arg1) {
+  return window['go']['main']['App']['GetMCPServerTools'](arg1);
+}
+
+export function CheckMCPServerHealth(arg1) {
+  return window['go']['main']['App']['CheckMCPServerHealth'](arg1);
+}
+
+// MaClaw LLM configuration bindings
+export function GetMaclawLLMConfig() {
+  return window['go']['main']['App']['GetMaclawLLMConfig']();
+}
+
+export function SaveMaclawLLMConfig(arg1) {
+  return window['go']['main']['App']['SaveMaclawLLMConfig'](arg1);
+}
+
+export function TestMaclawLLM(arg1) {
+  return window['go']['main']['App']['TestMaclawLLM'](arg1);
+}

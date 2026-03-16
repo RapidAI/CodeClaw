@@ -101,6 +101,10 @@ type Notifier struct {
 	aliasToID map[string]map[string]string // open_id → (alias → session_id)
 	idToAlias map[string]map[string]string // open_id → (session_id → alias)
 	aliasSeq  map[string]int              // open_id → next alias number
+
+	// plugin is the optional FeishuPlugin reference. When set, handleBotMessage
+	// will attempt to route messages through the IM Adapter pipeline first.
+	plugin *FeishuPlugin
 }
 
 // New creates a Notifier. The notifier is always returned (never nil) so that
@@ -157,6 +161,12 @@ func (n *Notifier) Reconfigure(appID, appSecret string) {
 func (n *Notifier) SetServices(devices DeviceLister, sessions SessionLister) {
 	n.devices = devices
 	n.sessions = sessions
+}
+
+// SetPlugin wires the FeishuPlugin so that handleBotMessage can route
+// messages through the IM Adapter pipeline when available.
+func (n *Notifier) SetPlugin(p *FeishuPlugin) {
+	n.plugin = p
 }
 
 // Bot returns the underlying lark.Bot for use by the webhook handler.

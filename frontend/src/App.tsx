@@ -21,6 +21,9 @@ import { RemoteSettingsPanel } from './components/remote/RemoteSettingsPanel';
 import { RemoteSessionList } from './components/remote/RemoteSessionList';
 import { useRemotePanel } from './components/remote/useRemotePanel';
 import { TERMINAL_SESSION_STATUSES } from './components/remote/types';
+import { SkillsManagementPanel } from './components/remote/SkillsManagementPanel';
+import { MCPManagementPanel } from './components/remote/MCPManagementPanel';
+import { LLMConfigPanel } from './components/remote/LLMConfigPanel';
 
 const subscriptionUrls: { [key: string]: string } = {
     "GLM": "https://bigmodel.cn/glm-coding",
@@ -1311,7 +1314,7 @@ function App() {
     const [status, setStatus] = useState("");
     const [activeTab, setActiveTab] = useState(0);
     const [tabStartIndex, setTabStartIndex] = useState(0);
-    const [settingsTab, setSettingsTab] = useState<'general' | 'display' | 'remote'>('general');
+    const [settingsTab, setSettingsTab] = useState<'general' | 'display' | 'remote' | 'skills' | 'mcp' | 'llm'>('general');
     const [installLocation, setInstallLocation] = useState<'user' | 'project'>('user');
     const [installProject, setInstallProject] = useState<string>("");
     const [isBatchInstalling, setIsBatchInstalling] = useState(false);
@@ -2771,6 +2774,21 @@ ${instruction}`;
             label: lang === 'zh-Hans' ? '远程控制' : lang === 'zh-Hant' ? '遠端控制' : 'Remote',
             desc: lang === 'zh-Hans' ? '仅配置远程服务器地址' : lang === 'zh-Hant' ? '僅配置遠端伺服器位址' : 'Server addresses only',
         },
+        {
+            id: 'skills' as const,
+            label: lang === 'zh-Hans' ? '技能管理' : lang === 'zh-Hant' ? '技能管理' : 'Skills',
+            desc: lang === 'zh-Hans' ? '查看与管理 Skill 定义' : lang === 'zh-Hant' ? '查看與管理 Skill 定義' : 'View and manage Skill definitions',
+        },
+        {
+            id: 'mcp' as const,
+            label: lang === 'zh-Hans' ? 'MCP 管理' : lang === 'zh-Hant' ? 'MCP 管理' : 'MCP',
+            desc: lang === 'zh-Hans' ? '注册与管理 MCP Server' : lang === 'zh-Hant' ? '註冊與管理 MCP Server' : 'Register and manage MCP Servers',
+        },
+        {
+            id: 'llm' as const,
+            label: lang === 'zh-Hans' ? 'LLM 配置' : lang === 'zh-Hant' ? 'LLM 配置' : 'LLM Config',
+            desc: lang === 'zh-Hans' ? '配置 MaClaw 代理使用的 LLM' : lang === 'zh-Hant' ? '配置 MaClaw 代理使用的 LLM' : 'Configure LLM for MaClaw agent',
+        },
     ];
     const isRemoteCapableActiveTool = remoteToolMetadata.some(
         (meta) => meta.name === activeTool && meta.supports_remote === true
@@ -3821,6 +3839,18 @@ ${instruction}`;
                                     setInvitationCode={setInvitationCode}
                                     invitationCodeError={invitationCodeError}
                                 />
+                            </div>
+
+                            <div className="settings-panel" style={{ display: settingsTab === 'skills' ? 'block' : 'none' }}>
+                                <SkillsManagementPanel translate={translate} />
+                            </div>
+
+                            <div className="settings-panel" style={{ display: settingsTab === 'mcp' ? 'block' : 'none' }}>
+                                <MCPManagementPanel translate={translate} />
+                            </div>
+
+                            <div className="settings-panel" style={{ display: settingsTab === 'llm' ? 'block' : 'none' }}>
+                                <LLMConfigPanel lang={lang} />
                             </div>
 
                             <div className="settings-panel" style={{ display: settingsTab === 'display' ? 'block' : 'none' }}>

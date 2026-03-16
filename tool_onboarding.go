@@ -212,25 +212,32 @@ func ensureClaudeCodeForkOnboarding(app *App, configFileName, logTag, projectPat
 // for corrupt-file recovery in ensureClaudeCodeForkOnboarding.
 const backupSuffix = ".cceasy.bak"
 
-// toolConfigPaths returns the config file paths that onboarding may modify
-// for the given tool.  Returns nil for tools that don't need onboarding.
+// toolConfigFiles maps tool names to their config file basenames (relative
+// to the user's home directory).  This is the single source of truth used
+// by both toolConfigPaths and the onboarding functions.
+var toolConfigFiles = map[string][]string{
+	"claude":    {".claude.json"},
+	"kode":      {".kode.json"},
+	"codebuddy": {".codebuddy.json"},
+	"gemini":    {filepath.Join(".gemini", "settings.json")},
+}
+
+// toolConfigPaths returns the absolute config file paths that onboarding
+// may modify for the given tool.  Returns nil for tools without onboarding.
 func toolConfigPaths(toolName string) []string {
+	files, ok := toolConfigFiles[toolName]
+	if !ok {
+		return nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
-	switch toolName {
-	case "claude":
-		return []string{filepath.Join(home, ".claude.json")}
-	case "kode":
-		return []string{filepath.Join(home, ".kode.json")}
-	case "codebuddy":
-		return []string{filepath.Join(home, ".codebuddy.json")}
-	case "gemini":
-		return []string{filepath.Join(home, ".gemini", "settings.json")}
-	default:
-		return nil
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = filepath.Join(home, f)
 	}
+	return paths
 }
 
 // backupToolConfigs creates backup copies of the tool's config files before

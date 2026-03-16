@@ -1000,6 +1000,15 @@ func appendRecentEvents(events []ImportantEvent, event ImportantEvent, limit int
 }
 
 func (m *RemoteSessionManager) runExitLoop(s *RemoteSession) {
+	// Ensure config cleanup runs even if the exit channel is nil or closed
+	// unexpectedly, so the user's native tool config is always restored.
+	defer func() {
+		if s.configCleanup != nil {
+			s.configCleanup()
+			s.configCleanup = nil
+		}
+	}()
+
 	exitCh := sessionExit(s)
 	if exitCh == nil {
 		return
@@ -1055,10 +1064,6 @@ func (m *RemoteSessionManager) runExitLoop(s *RemoteSession) {
 	if s.workspaceRelease != nil {
 		s.workspaceRelease()
 		s.workspaceRelease = nil
-	}
-	if s.configCleanup != nil {
-		s.configCleanup()
-		s.configCleanup = nil
 	}
 	m.app.refreshPowerOptimizationState()
 	m.app.emitRemoteStateChanged()

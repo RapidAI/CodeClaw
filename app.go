@@ -142,6 +142,10 @@ type AppConfig struct {
 	RemoteHeartbeatSec int    `json:"remote_heartbeat_sec"`
 	RemoteClientID     string `json:"remote_client_id"`
 	DefaultLaunchMode  string `json:"default_launch_mode"` // "local" or "remote", default launch mode for tool area
+	// MaClaw LLM configuration — used by the desktop agent for intent analysis
+	MaclawLLMUrl   string `json:"maclaw_llm_url"`
+	MaclawLLMKey   string `json:"maclaw_llm_key"`
+	MaclawLLMModel string `json:"maclaw_llm_model"`
 }
 type Skill struct {
 	Name        string `json:"name"`

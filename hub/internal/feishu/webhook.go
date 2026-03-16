@@ -114,6 +114,28 @@ func handleBotMessage(n *Notifier, raw json.RawMessage) {
 	}
 
 	text := extractText(event.Message.Content)
+
+	// --- IM Adapter routing ---
+	// If a FeishuPlugin is wired and the IM Adapter is active, convert the
+	// message to IncomingMessage and route through the adapter pipeline.
+	// Legacy flows (email binding, verification codes, slash commands when
+	// no adapter) are preserved as fallback.
+	if n.plugin != nil {
+		// Email binding and verification code flows are always handled by
+		// the legacy path — they are Feishu-specific onboarding flows that
+		// the generic IM Adapter does not handle.
+		if text != "" && !looksLikeEmail(text) && !isVerifyCode(text) {
+			msgType := event.Message.MessageType
+			if msgType == "" {
+				msgType = "text"
+			}
+			if n.plugin.DispatchBotMessage(openID, msgType, text, raw) {
+				return
+			}
+		}
+	}
+
+	// --- Legacy path (backward compatible) ---
 	if text == "" {
 		replyText(n, openID, welcomeOrHelp(n, openID))
 		return

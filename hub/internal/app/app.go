@@ -7,8 +7,15 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/center"
 	"github.com/RapidAI/CodeClaw/hub/internal/config"
 	"github.com/RapidAI/CodeClaw/hub/internal/device"
+	"github.com/RapidAI/CodeClaw/hub/internal/discovery"
+	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
+	"github.com/RapidAI/CodeClaw/hub/internal/im"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
+	"github.com/RapidAI/CodeClaw/hub/internal/mcp"
+	"github.com/RapidAI/CodeClaw/hub/internal/memory"
+	"github.com/RapidAI/CodeClaw/hub/internal/nlrouter"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
+	"github.com/RapidAI/CodeClaw/hub/internal/skill"
 	"github.com/RapidAI/CodeClaw/hub/internal/store/sqlite"
 	"github.com/RapidAI/CodeClaw/hub/internal/ws"
 )
@@ -24,6 +31,17 @@ type App struct {
 	Mailer          mail.Mailer
 	WSGateway       *ws.Gateway
 	HTTPHandler     http.Handler
+
+	// New NL / IM modules
+	MemoryStore       *memory.Store
+	DiscoveryProtocol *discovery.Protocol
+	MCPRegistry       *mcp.Registry
+	SkillExecutor     *skill.Executor
+	SkillCrystallizer *skill.Crystallizer
+	NLRouter          *nlrouter.Router
+	ContextWindowMgr  *nlrouter.ContextWindowManager
+	IMAdapter         *im.Adapter
+	FeishuPlugin      *feishu.FeishuPlugin
 }
 
 func (a *App) StartBackgroundTasks() {

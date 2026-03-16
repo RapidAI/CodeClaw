@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"runtime"
 	"strings"
@@ -428,6 +432,172 @@ func TestCaptureScreenshot_LogPrefixInErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SDK mode") {
 		t.Fatalf("expected 'SDK mode' in error, got: %v", err)
+	}
+}
+
+// --- isBlankImage / isImageBlank tests ---
+
+func TestIsBlankImage_AllBlackPNG(t *testing.T) {
+	// Create a small all-black PNG image.
+	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
+	// All pixels default to (0,0,0,0) — effectively black.
+	// Set alpha to 255 so they're opaque black.
+	for y := 0; y < 10; y++ {
+		for x := 0; x < 10; x++ {
+			img.SetRGBA(x, y, color.RGBA{0, 0, 0, 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("failed to encode PNG: %v", err)
+	}
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	if !isBlankImage(b64) {
+		t.Fatal("expected all-black image to be detected as blank")
+	}
+}
+
+func TestIsBlankImage_ColorfulPNG(t *testing.T) {
+	// Create a small image with non-black pixels.
+	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
+	for y := 0; y < 10; y++ {
+		for x := 0; x < 10; x++ {
+			img.SetRGBA(x, y, color.RGBA{100, 150, 200, 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("failed to encode PNG: %v", err)
+	}
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	if isBlankImage(b64) {
+		t.Fatal("expected colorful image to NOT be detected as blank")
+	}
+}
+
+func TestIsBlankImage_NearBlackPNG(t *testing.T) {
+	// Create an image with very dark but not pure-black pixels (brightness ~2).
+	// This should still be detected as blank since it's below the threshold.
+	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
+	for y := 0; y < 10; y++ {
+		for x := 0; x < 10; x++ {
+			img.SetRGBA(x, y, color.RGBA{2, 2, 3, 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("failed to encode PNG: %v", err)
+	}
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	if !isBlankImage(b64) {
+		t.Fatal("expected near-black image to be detected as blank")
+	}
+}
+
+func TestIsBlankImage_MixedWithBrightPixel(t *testing.T) {
+	// Mostly black but with enough bright pixels to push average above threshold.
+	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
+	for y := 0; y < 10; y++ {
+		for x := 0; x < 10; x++ {
+			img.SetRGBA(x, y, color.RGBA{0, 0, 0, 255})
+		}
+	}
+	// Set ~30% of pixels to white — average should be well above threshold.
+	for y := 0; y < 3; y++ {
+		for x := 0; x < 10; x++ {
+			img.SetRGBA(x, y, color.RGBA{255, 255, 255, 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("failed to encode PNG: %v", err)
+	}
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	if isBlankImage(b64) {
+		t.Fatal("expected image with bright pixels to NOT be detected as blank")
+	}
+}
+
+func TestIsBlankImage_InvalidBase64(t *testing.T) {
+	// Invalid base64 should return false (not blank) — don't discard
+	// potentially valid data due to decode errors.
+	if isBlankImage("not-valid-base64!!!") {
+		t.Fatal("expected invalid base64 to return false (not blank)")
+	}
+}
+
+func TestIsBlankImage_EmptyString(t *testing.T) {
+	if isBlankImage("") {
+		t.Fatal("expected empty string to return false (not blank)")
+	}
+}
+
+func TestIsqrt(t *testing.T) {
+	cases := []struct {
+		input uint64
+		want  uint64
+	}{
+		{0, 0},
+		{1, 1},
+		{4, 2},
+		{9, 3},
+		{10, 3},
+		{100, 10},
+		{10000, 100},
+	}
+	for _, tc := range cases {
+		got := isqrt(tc.input)
+		if got != tc.want {
+			t.Errorf("isqrt(%d) = %d, want %d", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestBuildScreenshotCommand_BlankDetectionKeywords(t *testing.T) {
+	cmd := BuildScreenshotCommand()
+	switch runtime.GOOS {
+	case "windows":
+		// Windows command should include blank detection logic.
+		if !strings.Contains(cmd, "Test-BlankBitmap") {
+			t.Fatal("expected Windows command to include blank image detection")
+		}
+		if !strings.Contains(cmd, "0x40000000") || !strings.Contains(cmd, "BitBlt") {
+			t.Fatal("expected Windows command to include BitBlt fallback with CAPTUREBLT flag")
+		}
+		if !strings.Contains(cmd, "tscon") {
+			t.Fatal("expected Windows command to include tscon reconnect attempt")
+		}
+		if !strings.Contains(cmd, "PrintWindow") {
+			t.Fatal("expected Windows command to include PrintWindow composite fallback")
+		}
+		if !strings.Contains(cmd, "EnumWindows") {
+			t.Fatal("expected Windows command to include window enumeration for composite")
+		}
+	case "darwin":
+		if !strings.Contains(cmd, "is_blank") {
+			t.Fatal("expected macOS command to include blank image detection")
+		}
+	case "linux":
+		if !strings.Contains(cmd, "is_blank") {
+			t.Fatal("expected Linux command to include blank image detection")
+		}
+	}
+}
+
+func TestBuildWindowsWindowScreenshotCommand_PrintWindowFallback(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific test")
+	}
+	cmd := BuildWindowScreenshotCommand("Notepad")
+	if !strings.Contains(cmd, "PrintWindow") {
+		t.Fatal("expected Windows window command to use PrintWindow API")
+	}
+	if !strings.Contains(cmd, "Test-BlankBitmap") {
+		t.Fatal("expected Windows window command to include blank detection")
 	}
 }
 

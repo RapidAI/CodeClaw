@@ -147,3 +147,38 @@ export function UpdateLastEnvCheckTime():Promise<void>;
 export function UpdateTool(arg1:string):Promise<void>;
 
 export function WindowHide():Promise<void>;
+
+// NL Skill management bindings
+export function ListNLSkills():Promise<Array<any>>;
+
+export function CreateNLSkill(arg1:any):Promise<void>;
+
+export function UpdateNLSkill(arg1:any):Promise<void>;
+
+export function DeleteNLSkill(arg1:string):Promise<void>;
+
+export function ListCandidateSkills():Promise<Array<any>>;
+
+export function ConfirmCandidateSkill(arg1:any):Promise<void>;
+
+export function IgnoreCandidateSkill(arg1:string):Promise<void>;
+
+// MCP management bindings
+export function ListMCPServers():Promise<Array<any>>;
+
+export function RegisterMCPServer(arg1:any):Promise<void>;
+
+export function UpdateMCPServer(arg1:any):Promise<void>;
+
+export function UnregisterMCPServer(arg1:string):Promise<void>;
+
+export function GetMCPServerTools(arg1:string):Promise<Array<any>>;
+
+export function CheckMCPServerHealth(arg1:string):Promise<void>;
+
+// MaClaw LLM configuration bindings
+export function GetMaclawLLMConfig():Promise<any>;
+
+export function SaveMaclawLLMConfig(arg1:any):Promise<void>;
+
+export function TestMaclawLLM(arg1:any):Promise<string>;
