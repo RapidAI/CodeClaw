@@ -271,6 +271,18 @@ const (
 	// ExecModePTY launches the tool in a pseudo-terminal (interactive TUI).
 	ExecModePTY ExecutionMode = "pty"
 
-	// ExecModeSDK launches the tool with structured JSON stdin/stdout.
+	// ExecModeSDK launches the tool with structured JSON stdin/stdout (Claude Code stream-json).
 	ExecModeSDK ExecutionMode = "sdk"
+
+	// ExecModeCodexSDK launches the tool via `codex exec --json` (JSONL one-shot protocol).
+	ExecModeCodexSDK ExecutionMode = "codex-sdk"
+
+	// ExecModeIFlowSDK launches iFlow via ACP WebSocket protocol.
+	ExecModeIFlowSDK ExecutionMode = "iflow-sdk"
+
+	// ExecModeOpenCodeSDK launches OpenCode via HTTP server + SSE event stream.
+	ExecModeOpenCodeSDK ExecutionMode = "opencode-sdk"
+
+	// ExecModeKiloSDK launches Kilo via HTTP server + SSE event stream (kilo serve).
+	ExecModeKiloSDK ExecutionMode = "kilo-sdk"
 )

@@ -14,6 +14,7 @@ type RemoteToolMetadata struct {
 	UsesOpenAICompat      bool
 	RequiresSessionConfig bool
 	SupportsProxy         bool
+	SupportsRemote        bool
 	ReadinessHint         string
 	SmokeHint             string
 	ConfigSelector        func(AppConfig) ToolConfig
@@ -28,6 +29,7 @@ type RemoteToolMetadataView struct {
 	UsesOpenAICompat      bool   `json:"uses_openai_compat"`
 	RequiresSessionConfig bool   `json:"requires_session_config"`
 	SupportsProxy         bool   `json:"supports_proxy"`
+	SupportsRemote        bool   `json:"supports_remote"`
 	Visible               bool   `json:"visible"`
 	Installed             bool   `json:"installed"`
 	CanStart              bool   `json:"can_start"`
@@ -44,6 +46,7 @@ var remoteToolCatalog = map[string]RemoteToolMetadata{
 		BinaryName:      "claude",
 		DefaultTitle:    "Claude Session",
 		SupportsProxy:   true,
+		SupportsRemote:  true,
 		ReadinessHint:   "Checks Anthropic-compatible auth, Claude launch command, and SDK stream-json readiness.",
 		SmokeHint:       "Runs registration, launch, real session start, and Hub visibility verification for Claude (SDK mode).",
 		ConfigSelector:  func(cfg AppConfig) ToolConfig { return cfg.Claude },
@@ -56,8 +59,9 @@ var remoteToolCatalog = map[string]RemoteToolMetadata{
 		DefaultTitle:     "Codex Session",
 		UsesOpenAICompat: true,
 		SupportsProxy:    true,
-		ReadinessHint:    "Checks OpenAI-compatible auth, Codex command resolution, and remote PTY readiness.",
-		SmokeHint:        "Runs registration, PTY, launch, real session start, and Hub visibility verification for Codex.",
+		SupportsRemote:   true,
+		ReadinessHint:    "Checks OpenAI-compatible auth, Codex command resolution, and exec --json SDK readiness.",
+		SmokeHint:        "Runs registration, launch, real session start, and Hub visibility verification for Codex (SDK mode).",
 		ConfigSelector:   func(cfg AppConfig) ToolConfig { return cfg.Codex },
 		ProviderFactory:  func(app *App) ProviderAdapter { return NewCodexAdapter(app) },
 	},
@@ -102,7 +106,7 @@ var remoteToolCatalog = map[string]RemoteToolMetadata{
 	},
 	"kode": {
 		Name:                  "kode",
-		DisplayName:           "Kode",
+		DisplayName:           "Kode (Experimental)",
 		BinaryName:            "kode",
 		DefaultTitle:          "Kode Session",
 		UsesOpenAICompat:      true,
@@ -119,8 +123,9 @@ var remoteToolCatalog = map[string]RemoteToolMetadata{
 		BinaryName:     "gemini",
 		DefaultTitle:   "Gemini Session",
 		SupportsProxy:  true,
-		ReadinessHint:  "Checks Gemini CLI installation, API key, and remote PTY readiness.",
-		SmokeHint:      "Runs registration, PTY, launch, real session start, and Hub visibility verification for Gemini.",
+		SupportsRemote: true,
+		ReadinessHint:  "Checks Gemini CLI installation, API key, and SDK stream-json readiness.",
+		SmokeHint:      "Runs registration, launch, real session start, and Hub visibility verification for Gemini (SDK mode).",
 		ConfigSelector: func(cfg AppConfig) ToolConfig { return cfg.Gemini },
 		ProviderFactory: func(app *App) ProviderAdapter { return NewGeminiAdapter(app) },
 	},
@@ -130,10 +135,25 @@ var remoteToolCatalog = map[string]RemoteToolMetadata{
 		BinaryName:     "cursor-agent",
 		DefaultTitle:   "Cursor Session",
 		SupportsProxy:  true,
-		ReadinessHint:  "Checks Cursor Agent CLI installation and remote PTY readiness.",
-		SmokeHint:      "Runs registration, PTY, launch, real session start, and Hub visibility verification for Cursor Agent.",
+		SupportsRemote: true,
+		ReadinessHint:  "Checks Cursor Agent CLI installation, SDK stream-json readiness, and remote capability.",
+		SmokeHint:      "Runs registration, launch, real session start, and Hub visibility verification for Cursor Agent (SDK mode).",
 		ConfigSelector: func(cfg AppConfig) ToolConfig { return cfg.Cursor },
 		ProviderFactory: func(app *App) ProviderAdapter { return NewCursorAdapter(app) },
+	},
+	"codebuddy": {
+		Name:                  "codebuddy",
+		DisplayName:           "CodeBuddy",
+		BinaryName:            "codebuddy",
+		DefaultTitle:          "CodeBuddy Session",
+		UsesOpenAICompat:      true,
+		RequiresSessionConfig: true,
+		SupportsProxy:         true,
+		SupportsRemote:        true,
+		ReadinessHint:         "Checks CodeBuddy CLI installation, SDK stream-json readiness, and remote capability.",
+		SmokeHint:             "Runs registration, launch, real session start, and Hub visibility verification for CodeBuddy (SDK mode).",
+		ConfigSelector:        func(cfg AppConfig) ToolConfig { return cfg.CodeBuddy },
+		ProviderFactory:       func(app *App) ProviderAdapter { return NewCodeBuddyAdapter(app) },
 	},
 }
 
@@ -195,6 +215,17 @@ func listRemoteToolMetadata() []RemoteToolMetadataView {
 	return nil
 }
 
+// remoteToolSupported returns true if the tool supports remote mode.
+// Currently claude, codex, gemini, cursor, and codebuddy are supported;
+// others may be enabled after further investigation.
+func remoteToolSupported(toolName string) bool {
+	meta, ok := lookupRemoteToolMetadata(toolName)
+	if !ok {
+		return false
+	}
+	return meta.SupportsRemote
+}
+
 func remoteToolVisible(cfg AppConfig, toolName string) bool {
 	switch normalizeRemoteToolName(toolName) {
 	case "claude":
@@ -213,24 +244,27 @@ func remoteToolVisible(cfg AppConfig, toolName string) bool {
 		return cfg.ShowGemini
 	case "cursor":
 		return cfg.ShowCursor
+	case "codebuddy":
+		return cfg.ShowCodeBuddy
 	default:
 		return false
 	}
 }
 
 func listRemoteToolMetadataForApp(app *App) []RemoteToolMetadataView {
-	order := []string{"claude", "gemini", "codex", "opencode", "cursor", "iflow", "kilo", "kode"}
+	order := []string{"claude", "gemini", "codex", "opencode", "cursor", "codebuddy", "iflow", "kilo", "kode"}
 	out := make([]RemoteToolMetadataView, 0, len(order))
 	cfg, err := app.LoadConfig()
 	if err != nil {
 		cfg = AppConfig{
-			ShowGemini:   true,
-			ShowCodex:    true,
-			ShowOpenCode: true,
-			ShowCursor:   true,
-			ShowIFlow:    true,
-			ShowKilo:     true,
-			ShowKode:     true,
+			ShowGemini:    true,
+			ShowCodex:     true,
+			ShowOpenCode:  true,
+			ShowCursor:    true,
+			ShowCodeBuddy: true,
+			ShowIFlow:     true,
+			ShowKilo:      true,
+			ShowKode:      true,
 		}
 	}
 	toolManager := NewToolManager(app)
@@ -256,6 +290,7 @@ func listRemoteToolMetadataForApp(app *App) []RemoteToolMetadataView {
 			UsesOpenAICompat:      meta.UsesOpenAICompat,
 			RequiresSessionConfig: meta.RequiresSessionConfig,
 			SupportsProxy:         meta.SupportsProxy,
+			SupportsRemote:        meta.SupportsRemote,
 			Visible:               visible,
 			Installed:             status.Installed,
 			CanStart:              canStart,

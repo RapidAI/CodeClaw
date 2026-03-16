@@ -50,6 +50,7 @@ type RemoteSessionView struct {
 	Preview        SessionPreview   `json:"preview"`
 	Events         []ImportantEvent `json:"events"`
 	RawOutputLines []string         `json:"raw_output_lines"`
+	OutputImages   []SessionOutputImage `json:"output_images,omitempty"`
 }
 
 func toRemoteSessionView(s *RemoteSession) RemoteSessionView {
@@ -58,6 +59,7 @@ func toRemoteSessionView(s *RemoteSession) RemoteSessionView {
 	preview := s.Preview
 	events := append([]ImportantEvent(nil), s.Events...)
 	rawLines := append([]string(nil), s.RawOutputLines...)
+	outputImages := append([]SessionOutputImage(nil), s.OutputImages...)
 	status := s.Status
 	pid := s.PID
 	updatedAt := s.UpdatedAt
@@ -76,6 +78,8 @@ func toRemoteSessionView(s *RemoteSession) RemoteSessionView {
 	execMode := "pty"
 	if _, isSDK := exec.(*SDKExecutionHandle); isSDK {
 		execMode = "sdk"
+	} else if _, isCodex := exec.(*CodexSDKExecutionHandle); isCodex {
+		execMode = "codex-sdk"
 	}
 
 	return RemoteSessionView{
@@ -98,6 +102,7 @@ func toRemoteSessionView(s *RemoteSession) RemoteSessionView {
 		Preview:        preview,
 		Events:         events,
 		RawOutputLines: rawLines,
+		OutputImages:   outputImages,
 	}
 }
 
@@ -511,6 +516,10 @@ func (a *App) SendRemoteSessionRawInput(sessionID, text string) error {
 	// the normal WriteInput path which wraps text in a JSON user message.
 	if _, isSDK := s.Exec.(*SDKExecutionHandle); isSDK {
 		a.log(fmt.Sprintf("[remote-raw-input] session=%s is SDK, routing to WriteInput", sessionID))
+		return a.remoteSessions.WriteInput(sessionID, text)
+	}
+	if _, isCodex := s.Exec.(*CodexSDKExecutionHandle); isCodex {
+		a.log(fmt.Sprintf("[remote-raw-input] session=%s is Codex SDK, routing to WriteInput", sessionID))
 		return a.remoteSessions.WriteInput(sessionID, text)
 	}
 

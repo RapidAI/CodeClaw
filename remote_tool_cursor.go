@@ -5,8 +5,9 @@ import (
 )
 
 // CursorAdapter launches the Cursor Agent CLI (`cursor-agent`).
-// Cursor Agent is a CLI tool from Cursor that runs in PTY mode.
-// It supports --model, --yolo (auto-approve), and other flags.
+// Cursor Agent supports `-p --output-format stream-json`, producing JSONL events
+// compatible with Claude Code's stream-json protocol. It runs in SDK mode
+// reusing the existing SDKExecutionStrategy.
 type CursorAdapter struct {
 	app *App
 }
@@ -20,7 +21,7 @@ func (a *CursorAdapter) ProviderName() string {
 }
 
 func (a *CursorAdapter) ExecutionMode() ExecutionMode {
-	return ExecModePTY
+	return ExecModeSDK
 }
 
 func (a *CursorAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
@@ -32,7 +33,9 @@ func (a *CursorAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 
 	env := buildOpenAICompatibleCommandEnv(spec.Env, nil)
 
-	args := make([]string, 0, 4)
+	args := make([]string, 0, 8)
+	// SDK mode: always include -p for Cursor Agent SDK mode and stream-json output
+	args = append(args, "-p", "--output-format", "stream-json")
 	if spec.ModelID != "" {
 		args = append(args, "--model", spec.ModelID)
 	}
@@ -45,7 +48,5 @@ func (a *CursorAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 		Args:    args,
 		Cwd:     spec.ProjectPath,
 		Env:     env,
-		Cols:    120,
-		Rows:    32,
 	}, nil
 }

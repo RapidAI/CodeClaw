@@ -16,27 +16,79 @@ import (
 var pngMagicBytes = []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
 
 // ParseScreenshotOutput extracts and validates base64-encoded PNG data from
-// the screenshot command's stdout output. It trims whitespace and newlines,
-// validates the base64 encoding, and confirms the decoded data starts with
-// PNG magic bytes.
+// the screenshot command's stdout output. It strips whitespace, BOM markers,
+// null bytes, and other non-base64 characters, then validates the encoding
+// and confirms the decoded data starts with PNG magic bytes.
+//
+// The function tries standard base64 first, then falls back to raw (no-padding)
+// base64 to handle platform differences in the `base64` command output.
 func ParseScreenshotOutput(stdout string) (string, error) {
-	cleaned := strings.TrimSpace(stdout)
+	// Strip UTF-8 BOM if present.
+	cleaned := strings.TrimPrefix(stdout, "\xEF\xBB\xBF")
+	cleaned = strings.TrimSpace(cleaned)
+
+	// Remove all whitespace (newlines, spaces, tabs, carriage returns).
 	cleaned = strings.Join(strings.Fields(cleaned), "")
+
+	// Strip any remaining non-base64 characters (null bytes, zero-width
+	// spaces, control characters, etc.) that shells or terminal emulators
+	// may inject.
+	cleaned = stripNonBase64(cleaned)
 
 	if cleaned == "" {
 		return "", fmt.Errorf("screenshot command produced no output")
 	}
 
+	// Try standard base64 (with padding) first.
 	decoded, err := base64.StdEncoding.DecodeString(cleaned)
 	if err != nil {
-		return "", fmt.Errorf("invalid base64 encoding")
+		// Fallback: try raw base64 (no padding) — some `base64` implementations
+		// omit trailing '=' characters.
+		decoded, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(cleaned, "="))
+		if err != nil {
+			// Provide diagnostic info: show the first 80 chars of the cleaned
+			// output so the log reveals what went wrong.
+			preview := cleaned
+			if len(preview) > 80 {
+				preview = preview[:80] + "..."
+			}
+			return "", fmt.Errorf("invalid base64 encoding (len=%d, preview=%s)", len(cleaned), preview)
+		}
 	}
 
 	if len(decoded) < len(pngMagicBytes) || !bytes.Equal(decoded[:len(pngMagicBytes)], pngMagicBytes) {
-		return "", fmt.Errorf("output is not PNG")
+		return "", fmt.Errorf("output is not PNG (decoded %d bytes, header=%x)", len(decoded), safeHeader(decoded, 8))
 	}
 
-	return cleaned, nil
+	// Re-encode to canonical standard base64 so downstream consumers always
+	// receive a well-formed string regardless of the original encoding.
+	canonical := base64.StdEncoding.EncodeToString(decoded)
+	return canonical, nil
+}
+
+// stripNonBase64 removes any character that is not part of the standard base64
+// alphabet (A-Z, a-z, 0-9, +, /, =). This handles BOM remnants, null bytes,
+// zero-width spaces, and other invisible characters that may be injected by
+// shells, terminal emulators, or PowerShell.
+func stripNonBase64(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+			c == '+' || c == '/' || c == '=' {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// safeHeader returns up to n bytes from data for diagnostic logging.
+func safeHeader(data []byte, n int) []byte {
+	if len(data) < n {
+		return data
+	}
+	return data[:n]
 }
 
 // BuildScreenshotCommand returns a platform-specific shell command string that
@@ -57,9 +109,14 @@ func BuildScreenshotCommand() string {
 }
 
 func buildWindowsScreenshotCommand() string {
-	return `powershell -NoProfile -NonInteractive -Command "` +
-		`Add-Type -AssemblyName System.Drawing; ` +
+	// Returns a pure PowerShell script block (without the powershell.exe prefix).
+	// The caller (captureAndSend) invokes this via powershell -Command directly,
+	// avoiding cmd.exe quote mangling that corrupts base64 output.
+	// SetProcessDPIAware ensures correct coordinates on high-DPI displays.
+	return `Add-Type -AssemblyName System.Drawing; ` +
 		`Add-Type -AssemblyName System.Windows.Forms; ` +
+		`Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class DPI { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }'; ` +
+		`[DPI]::SetProcessDPIAware() | Out-Null; ` +
 		`$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; ` +
 		`$bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height); ` +
 		`$g = [System.Drawing.Graphics]::FromImage($bmp); ` +
@@ -68,15 +125,16 @@ func buildWindowsScreenshotCommand() string {
 		`$ms = New-Object System.IO.MemoryStream; ` +
 		`$bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); ` +
 		`$bmp.Dispose(); ` +
-		`[Convert]::ToBase64String($ms.ToArray()); ` +
-		`$ms.Dispose()"`
+		`$b64 = [Convert]::ToBase64String($ms.ToArray()); ` +
+		`$ms.Dispose(); ` +
+		`[Console]::Out.Write($b64)`
 }
 
 func buildDarwinScreenshotCommand() string {
 	return `tmpfile=$(mktemp /tmp/screenshot_XXXXXX.png); ` +
 		`trap "rm -f \"$tmpfile\"" EXIT; ` +
 		`screencapture -x "$tmpfile" && ` +
-		`base64 < "$tmpfile"`
+		`base64 -i "$tmpfile"`
 }
 
 func buildLinuxScreenshotCommand() string {
@@ -84,12 +142,16 @@ func buildLinuxScreenshotCommand() string {
 		`trap "rm -f \"$tmpfile\"" EXIT; ` +
 		`if command -v scrot >/dev/null 2>&1; then ` +
 		`scrot "$tmpfile"; ` +
+		`elif command -v gnome-screenshot >/dev/null 2>&1; then ` +
+		`gnome-screenshot -f "$tmpfile"; ` +
 		`elif command -v import >/dev/null 2>&1; then ` +
 		`import -window root "$tmpfile"; ` +
+		`elif command -v grim >/dev/null 2>&1; then ` +
+		`grim "$tmpfile"; ` +
 		`else ` +
-		`echo "no screenshot tool found (scrot or import required)" >&2; exit 1; ` +
+		`echo "no screenshot tool found (scrot, gnome-screenshot, import, or grim required)" >&2; exit 1; ` +
 		`fi && ` +
-		`base64 < "$tmpfile"`
+		`base64 -w 0 < "$tmpfile" 2>/dev/null || base64 < "$tmpfile"`
 }
 
 // sanitizeWindowTitle strips characters that could be used for shell injection
@@ -139,47 +201,52 @@ func BuildWindowScreenshotCommand(windowTitle string) string {
 }
 
 func buildWindowsWindowScreenshotCommand(windowTitle string) string {
-	// Use PowerShell to find the window by title, get its bounds, and capture that region.
+	// Returns a pure PowerShell script block (without the powershell.exe prefix).
+	// The caller (captureAndSend) invokes this via powershell -Command directly.
+	// SetProcessDPIAware ensures correct coordinates on high-DPI displays.
 	// Escape single quotes in the title for PowerShell.
 	escaped := strings.ReplaceAll(windowTitle, "'", "''")
-	return fmt.Sprintf(`powershell -NoProfile -NonInteractive -Command "`+
+	return fmt.Sprintf(
 		`Add-Type -AssemblyName System.Drawing; `+
-		`Add-Type -AssemblyName System.Windows.Forms; `+
-		`Add-Type @'`+"\n"+
-		`using System; using System.Runtime.InteropServices; using System.Text;`+"\n"+
-		`public class WinAPI {`+"\n"+
-		`  public struct RECT { public int Left, Top, Right, Bottom; }`+"\n"+
-		`  [DllImport(\"user32.dll\")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);`+"\n"+
-		`  [DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string cls, string title);`+"\n"+
-		`  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);`+"\n"+
-		`  [DllImport(\"user32.dll\")] public static extern bool EnumWindows(EnumWindowsProc proc, IntPtr lParam);`+"\n"+
-		`  [DllImport(\"user32.dll\", CharSet=CharSet.Auto)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int count);`+"\n"+
-		`  [DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr hWnd);`+"\n"+
-		`}`+"\n"+
-		`'@;`+
-		`$target = '%s'; `+
-		`$found = $null; `+
-		`[WinAPI]::EnumWindows({ param($h,$l); `+
-		`if ([WinAPI]::IsWindowVisible($h)) { `+
-		`$sb = New-Object Text.StringBuilder 256; `+
-		`[WinAPI]::GetWindowText($h, $sb, 256) | Out-Null; `+
-		`$t = $sb.ToString(); `+
-		`if ($t -like ('*' + $target + '*')) { $script:found = $h } `+
-		`} return $true }, [IntPtr]::Zero) | Out-Null; `+
-		`if (-not $found) { Write-Error 'Window not found'; exit 1 }; `+
-		`$r = New-Object WinAPI+RECT; `+
-		`[WinAPI]::GetWindowRect($found, [ref]$r) | Out-Null; `+
-		`$w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top; `+
-		`if ($w -le 0 -or $h -le 0) { Write-Error 'Invalid window size'; exit 1 }; `+
-		`$bmp = New-Object Drawing.Bitmap($w, $h); `+
-		`$g = [Drawing.Graphics]::FromImage($bmp); `+
-		`$g.CopyFromScreen($r.Left, $r.Top, 0, 0, (New-Object Drawing.Size($w,$h))); `+
-		`$g.Dispose(); `+
-		`$ms = New-Object IO.MemoryStream; `+
-		`$bmp.Save($ms, [Drawing.Imaging.ImageFormat]::Png); `+
-		`$bmp.Dispose(); `+
-		`[Convert]::ToBase64String($ms.ToArray()); `+
-		`$ms.Dispose()"`, escaped)
+			`Add-Type -AssemblyName System.Windows.Forms; `+
+			`Add-Type @'`+"\n"+
+			`using System; using System.Runtime.InteropServices; using System.Text;`+"\n"+
+			`public class WinAPI {`+"\n"+
+			`  public struct RECT { public int Left, Top, Right, Bottom; }`+"\n"+
+			`  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);`+"\n"+
+			`  [DllImport("user32.dll")] public static extern IntPtr FindWindow(string cls, string title);`+"\n"+
+			`  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);`+"\n"+
+			`  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc proc, IntPtr lParam);`+"\n"+
+			`  [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int count);`+"\n"+
+			`  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);`+"\n"+
+			`  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();`+"\n"+
+			`}`+"\n"+
+			`'@;`+
+			`[WinAPI]::SetProcessDPIAware() | Out-Null; `+
+			`$target = '%s'; `+
+			`$found = $null; `+
+			`[WinAPI]::EnumWindows({ param($h,$l); `+
+			`if ([WinAPI]::IsWindowVisible($h)) { `+
+			`$sb = New-Object Text.StringBuilder 256; `+
+			`[WinAPI]::GetWindowText($h, $sb, 256) | Out-Null; `+
+			`$t = $sb.ToString(); `+
+			`if ($t -like ('*' + $target + '*')) { $script:found = $h } `+
+			`} return $true }, [IntPtr]::Zero) | Out-Null; `+
+			`if (-not $found) { Write-Error 'Window not found'; exit 1 }; `+
+			`$r = New-Object WinAPI+RECT; `+
+			`[WinAPI]::GetWindowRect($found, [ref]$r) | Out-Null; `+
+			`$w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top; `+
+			`if ($w -le 0 -or $h -le 0) { Write-Error 'Invalid window size'; exit 1 }; `+
+			`$bmp = New-Object Drawing.Bitmap($w, $h); `+
+			`$g = [Drawing.Graphics]::FromImage($bmp); `+
+			`$g.CopyFromScreen($r.Left, $r.Top, 0, 0, (New-Object Drawing.Size($w,$h))); `+
+			`$g.Dispose(); `+
+			`$ms = New-Object IO.MemoryStream; `+
+			`$bmp.Save($ms, [Drawing.Imaging.ImageFormat]::Png); `+
+			`$bmp.Dispose(); `+
+			`$b64 = [Convert]::ToBase64String($ms.ToArray()); `+
+			`$ms.Dispose(); `+
+			`[Console]::Out.Write($b64)`, escaped)
 }
 
 func buildDarwinWindowScreenshotCommand(windowTitle string) string {
@@ -190,7 +257,7 @@ func buildDarwinWindowScreenshotCommand(windowTitle string) string {
 		`wid=$(osascript -e 'tell application "System Events" to set wlist to every window of every process whose name of every window contains "%s"' -e 'if (count of wlist) > 0 then return id of item 1 of wlist' 2>/dev/null); `+
 		`if [ -z "$wid" ]; then echo "Window not found" >&2; exit 1; fi; `+
 		`screencapture -x -l "$wid" "$tmpfile" && `+
-		`base64 < "$tmpfile"`, escaped)
+		`base64 -i "$tmpfile"`, escaped)
 }
 
 func buildLinuxWindowScreenshotCommand(windowTitle string) string {
@@ -204,7 +271,7 @@ func buildLinuxWindowScreenshotCommand(windowTitle string) string {
 		`elif command -v scrot >/dev/null 2>&1; then `+
 		`scrot -u "$tmpfile"; `+
 		`else echo "no screenshot tool found" >&2; exit 1; fi && `+
-		`base64 < "$tmpfile"`, escaped)
+		`base64 -w 0 < "$tmpfile" 2>/dev/null || base64 < "$tmpfile"`, escaped)
 }
 
 // DetectDisplayServer checks whether a graphical display environment is
@@ -274,19 +341,23 @@ func (m *RemoteSessionManager) captureAndSend(sessionID, label, cmdStr string) e
 		return fmt.Errorf("screenshot requires a graphical display environment: %s", reason)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	var shellName, shellFlag string
+	var shellName string
+	var shellArgs []string
 	if runtime.GOOS == "windows" {
-		shellName = "cmd"
-		shellFlag = "/c"
+		// Use PowerShell directly to avoid cmd.exe quote mangling that
+		// corrupts base64 output. The Windows screenshot commands return
+		// pure PowerShell script blocks (no powershell.exe prefix).
+		shellName = "powershell"
+		shellArgs = []string{"-NoProfile", "-NonInteractive", "-Command", cmdStr}
 	} else {
 		shellName = "bash"
-		shellFlag = "-c"
+		shellArgs = []string{"-c", cmdStr}
 	}
 
-	cmd := exec.CommandContext(ctx, shellName, shellFlag, cmdStr)
+	cmd := exec.CommandContext(ctx, shellName, shellArgs...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -299,15 +370,23 @@ func (m *RemoteSessionManager) captureAndSend(sessionID, label, cmdStr string) e
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("screenshot command timed out after 10s")
+			return fmt.Errorf("screenshot command timed out after 30s")
 		}
 		m.app.log(fmt.Sprintf("[screenshot] capture failed for session=%s: %v, stderr: %s", sessionID, err, stderr.String()))
 		return fmt.Errorf("screenshot command failed: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
 	}
 
-	base64Data, err := ParseScreenshotOutput(stdout.String())
+	rawOut := stdout.String()
+	base64Data, err := ParseScreenshotOutput(rawOut)
 	if err != nil {
-		m.app.log(fmt.Sprintf("[screenshot] failed to parse output for session=%s: %v", sessionID, err))
+		// Log diagnostic info: raw output length and first 120 chars to help
+		// identify what the screenshot command actually produced.
+		preview := rawOut
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		m.app.log(fmt.Sprintf("[screenshot] failed to parse output for session=%s: %v (stdout_len=%d, stderr=%q, preview=%q)",
+			sessionID, err, len(rawOut), strings.TrimSpace(stderr.String()), preview))
 		return fmt.Errorf("screenshot output parse error: %w", err)
 	}
 

@@ -38,7 +38,9 @@ func main() {
 		for _, arg := range args[1:] {
 			if arg == "init" {
 				app.IsInitMode = true
-				break
+			}
+			if arg == "autostart" {
+				app.IsAutoStart = true
 			}
 		}
 	}
@@ -48,13 +50,14 @@ func main() {
 
 	// Create application with options
 	appOptions := &options.App{
-		Title:      "MaClaw",
-		Frameless:  true,
-		Width:      510,
-		Height:     259,
-		OnStartup:  app.startup,
-		OnDomReady: app.domReady,
-		OnShutdown: app.shutdown,
+		Title:       "MaClaw",
+		Frameless:   true,
+		Width:       510,
+		Height:      259,
+		StartHidden: app.IsAutoStart,
+		OnStartup:   app.startup,
+		OnDomReady:  app.domReady,
+		OnShutdown:  app.shutdown,
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "maclaw-lock",
 			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
@@ -62,12 +65,20 @@ func main() {
 					return
 				}
 
+				shouldShowWindow := true
+
 				// Check if init argument was passed to the second instance
 				for _, arg := range secondInstanceData.Args {
 					if arg == "init" {
 						go app.CheckEnvironment(true)
-						break
 					}
+					if arg == "autostart" {
+						shouldShowWindow = false
+					}
+				}
+
+				if !shouldShowWindow {
+					return
 				}
 
 				go func() {

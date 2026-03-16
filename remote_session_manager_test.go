@@ -250,18 +250,6 @@ func TestRemoteSessionManagerCreateUsesFactoriesAndStoresSession(t *testing.T) {
 	}
 }
 
-func TestRemoteSessionManagerDefaultProviderFactorySupportsCodex(t *testing.T) {
-	manager := NewRemoteSessionManager(&App{})
-
-	provider, err := manager.providerFactory("codex")
-	if err != nil {
-		t.Fatalf("providerFactory(codex) error = %v", err)
-	}
-	if provider.ProviderName() != "codex" {
-		t.Fatalf("provider.ProviderName() = %q, want %q", provider.ProviderName(), "codex")
-	}
-}
-
 func TestRemoteSessionManagerDefaultProviderFactorySupportsOpencode(t *testing.T) {
 	manager := NewRemoteSessionManager(&App{})
 
@@ -320,8 +308,8 @@ func TestRemoteSessionManagerDefaultProviderFactorySupportsGemini(t *testing.T) 
 	if provider.ProviderName() != "gemini" {
 		t.Fatalf("provider.ProviderName() = %q, want %q", provider.ProviderName(), "gemini")
 	}
-	if provider.ExecutionMode() != ExecModePTY {
-		t.Fatalf("provider.ExecutionMode() = %q, want %q", provider.ExecutionMode(), ExecModePTY)
+	if provider.ExecutionMode() != ExecModeSDK {
+		t.Fatalf("provider.ExecutionMode() = %q, want %q", provider.ExecutionMode(), ExecModeSDK)
 	}
 }
 
@@ -350,8 +338,8 @@ func TestRemoteSessionManagerDefaultProviderFactorySupportsCursor(t *testing.T) 
 	if provider.ProviderName() != "cursor" {
 		t.Fatalf("provider.ProviderName() = %q, want %q", provider.ProviderName(), "cursor")
 	}
-	if provider.ExecutionMode() != ExecModePTY {
-		t.Fatalf("provider.ExecutionMode() = %q, want %q", provider.ExecutionMode(), ExecModePTY)
+	if provider.ExecutionMode() != ExecModeSDK {
+		t.Fatalf("provider.ExecutionMode() = %q, want %q", provider.ExecutionMode(), ExecModeSDK)
 	}
 }
 
@@ -381,6 +369,12 @@ func TestCodexAdapterBuildCommand(t *testing.T) {
 	}
 
 	adapter := NewCodexAdapter(&App{})
+
+	// Verify SDK execution mode
+	if adapter.ExecutionMode() != ExecModeCodexSDK {
+		t.Fatalf("ExecutionMode() = %q, want %q", adapter.ExecutionMode(), ExecModeCodexSDK)
+	}
+
 	cmd, err := adapter.BuildCommand(LaunchSpec{
 		Tool:        "codex",
 		ProjectPath: projectDir,
@@ -396,6 +390,17 @@ func TestCodexAdapterBuildCommand(t *testing.T) {
 	if cmd.Cwd != projectDir {
 		t.Fatalf("cmd.Cwd = %q, want %q", cmd.Cwd, projectDir)
 	}
+	// Verify exec --json args are present
+	argsStr := strings.Join(cmd.Args, " ")
+	if !strings.Contains(argsStr, "exec") {
+		t.Fatalf("Args = %v, want 'exec' sub-command", cmd.Args)
+	}
+	if !strings.Contains(argsStr, "--json") {
+		t.Fatalf("Args = %v, want '--json' flag", cmd.Args)
+	}
+	if !strings.Contains(argsStr, "--model") {
+		t.Fatalf("Args = %v, want '--model' flag", cmd.Args)
+	}
 	if cmd.Env["OPENAI_MODEL"] != "gpt-5.2-codex" {
 		t.Fatalf("OPENAI_MODEL = %q, want %q", cmd.Env["OPENAI_MODEL"], "gpt-5.2-codex")
 	}
@@ -404,6 +409,110 @@ func TestCodexAdapterBuildCommand(t *testing.T) {
 	}
 	if !strings.Contains(cmd.Env["PATH"], toolsDir) {
 		t.Fatalf("PATH = %q, want it to contain %q", cmd.Env["PATH"], toolsDir)
+	}
+}
+
+func TestCodexAdapterBuildCommandYoloMode(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("USERPROFILE", tempHome)
+	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
+
+	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
+	}
+
+	binaryName := "codex"
+	if runtime.GOOS == "windows" {
+		binaryName = "codex.cmd"
+	}
+	binaryPath := filepath.Join(toolsDir, binaryName)
+	if err := os.WriteFile(binaryPath, []byte("stub"), 0o644); err != nil {
+		t.Fatalf("WriteFile(codex) error = %v", err)
+	}
+
+	projectDir := filepath.Join(tempHome, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(projectDir) error = %v", err)
+	}
+
+	adapter := NewCodexAdapter(&App{})
+	cmd, err := adapter.BuildCommand(LaunchSpec{
+		Tool:        "codex",
+		ProjectPath: projectDir,
+		ModelID:     "gpt-5.2-codex",
+		YoloMode:    true,
+		Env:         map[string]string{"OPENAI_API_KEY": "test-key"},
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	argsStr := strings.Join(cmd.Args, " ")
+	if !strings.Contains(argsStr, "--full-auto") {
+		t.Fatalf("Args = %v, want '--full-auto' flag in yolo mode", cmd.Args)
+	}
+}
+
+func TestCodexAdapterBuildCommandOriginalMode(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("USERPROFILE", tempHome)
+	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
+
+	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
+	}
+
+	binaryName := "codex"
+	if runtime.GOOS == "windows" {
+		binaryName = "codex.cmd"
+	}
+	binaryPath := filepath.Join(toolsDir, binaryName)
+	if err := os.WriteFile(binaryPath, []byte("stub"), 0o644); err != nil {
+		t.Fatalf("WriteFile(codex) error = %v", err)
+	}
+
+	projectDir := filepath.Join(tempHome, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(projectDir) error = %v", err)
+	}
+
+	adapter := NewCodexAdapter(&App{})
+	cmd, err := adapter.BuildCommand(LaunchSpec{
+		Tool:        "codex",
+		ProjectPath: projectDir,
+		ModelName:   "original",
+		ModelID:     "gpt-5.2-codex",
+		Env:         map[string]string{"OPENAI_API_KEY": "test-key"},
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	// In original mode, --model should NOT be in args
+	argsStr := strings.Join(cmd.Args, " ")
+	if strings.Contains(argsStr, "--model") {
+		t.Fatalf("Args = %v, should NOT contain '--model' in original mode", cmd.Args)
+	}
+	// OPENAI_MODEL should NOT be set in original mode
+	if cmd.Env["OPENAI_MODEL"] != "" {
+		t.Fatalf("OPENAI_MODEL = %q, want empty in original mode", cmd.Env["OPENAI_MODEL"])
+	}
+}
+
+func TestRemoteSessionManagerDefaultProviderFactorySupportsCodexSDK(t *testing.T) {
+	manager := NewRemoteSessionManager(&App{})
+
+	provider, err := manager.providerFactory("codex")
+	if err != nil {
+		t.Fatalf("providerFactory(codex) error = %v", err)
+	}
+	if provider.ProviderName() != "codex" {
+		t.Fatalf("provider.ProviderName() = %q, want %q", provider.ProviderName(), "codex")
+	}
+	if provider.ExecutionMode() != ExecModeCodexSDK {
+		t.Fatalf("provider.ExecutionMode() = %q, want %q", provider.ExecutionMode(), ExecModeCodexSDK)
 	}
 }
 

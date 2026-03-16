@@ -1,13 +1,19 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/jpeg" // register JPEG decoder for image.Decode
+	_ "image/png"  // register PNG decoder for image.Decode
 	"log"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
 	"github.com/RapidAI/CodeClaw/hub/internal/store"
@@ -395,6 +401,8 @@ func (n *Notifier) HandleEvent(event session.Event) {
 		n.onSessionClosed(event)
 	case "session.preview_delta":
 		n.onPreviewDelta(event)
+	case "session.image":
+		n.onSessionImage(event)
 	}
 }
 
@@ -592,36 +600,26 @@ func (n *Notifier) flushPreview(sid string) {
 		return
 	}
 
-	// Clean lines, strip ANSI, and merge short lines into paragraphs.
-	// Terminal output wraps at column width (e.g. 80 cols), splitting text
-	// into fragments. We merge consecutive non-empty lines into paragraphs,
-	// breaking only at blank lines. A space is inserted between lines when
-	// the join point involves ASCII characters (to preserve English words).
+	// Clean lines: strip ANSI escape sequences, split on embedded \r\n or \r.
+	// Preserve blank lines so that paragraph breaks in the original output
+	// are kept intact when rendered in Feishu.
 	var cleaned []string
-	var current strings.Builder
 	for _, line := range lines {
 		c := stripAnsi(line)
-		if c == "" {
-			if current.Len() > 0 {
-				cleaned = append(cleaned, current.String())
-				current.Reset()
-			}
-			continue
+		// A single "line" from the preview delta may contain embedded \r\n
+		// or \r (terminal carriage returns). Split them into real lines.
+		subLines := strings.Split(c, "\n")
+		for _, sl := range subLines {
+			sl = strings.TrimRight(sl, " \t")
+			cleaned = append(cleaned, sl)
 		}
-		if current.Len() > 0 {
-			// Insert space if the boundary involves ASCII letters/digits
-			// to avoid merging English words like "can" + "I" → "canI".
-			prev := current.String()
-			lastChar := prev[len(prev)-1]
-			firstChar := c[0]
-			if isASCIIWordChar(lastChar) || isASCIIWordChar(firstChar) {
-				current.WriteByte(' ')
-			}
-		}
-		current.WriteString(c)
 	}
-	if current.Len() > 0 {
-		cleaned = append(cleaned, current.String())
+	// Trim leading/trailing blank lines but keep internal ones.
+	for len(cleaned) > 0 && cleaned[0] == "" {
+		cleaned = cleaned[1:]
+	}
+	for len(cleaned) > 0 && cleaned[len(cleaned)-1] == "" {
+		cleaned = cleaned[:len(cleaned)-1]
 	}
 	if len(cleaned) == 0 {
 		return
@@ -632,25 +630,28 @@ func (n *Notifier) flushPreview(sid string) {
 	sb.WriteString("📺 ")
 	sb.WriteString(alias)
 	sb.WriteString("\n")
-	for _, para := range cleaned {
-		sb.WriteString(para)
+	for _, line := range cleaned {
+		sb.WriteString(line)
 		sb.WriteString("\n")
 	}
 	text := sb.String()
-	if len(text) > 4000 {
-		text = text[:4000] + "\n..."
+	// Truncate at a rune-safe line boundary to avoid cutting multi-byte
+	// characters (Chinese, emoji, etc.) in the middle.
+	const maxBytes = 4000
+	if len(text) > maxBytes {
+		text = truncateAtLine(text, maxBytes)
 	}
 	replyText(n, watcherOpenID, text)
 }
 
-// isASCIIWordChar returns true if c is an ASCII letter, digit, or common
-// punctuation that should have a space before/after when joining lines.
-func isASCIIWordChar(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-}
-
-// stripAnsi removes ANSI escape sequences from terminal output.
+// stripAnsi removes ANSI escape sequences from terminal output and normalises
+// line endings. \r\n → \n, bare \r → \n, other control chars (except \n, \t)
+// are dropped. The result is NOT trimmed so that embedded newlines survive.
 func stripAnsi(s string) string {
+	// Normalise line endings first so the byte-level loop only sees \n.
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+
 	var out strings.Builder
 	i := 0
 	for i < len(s) {
@@ -678,7 +679,7 @@ func stripAnsi(s string) string {
 			i = j
 			continue
 		}
-		// Skip non-printable control chars except newline/tab.
+		// Skip non-printable control chars except newline and tab.
 		if s[i] < 0x20 && s[i] != '\n' && s[i] != '\t' {
 			i++
 			continue
@@ -686,7 +687,96 @@ func stripAnsi(s string) string {
 		out.WriteByte(s[i])
 		i++
 	}
-	return strings.TrimSpace(out.String())
+	return out.String()
+}
+
+// onSessionImage uploads a base64-encoded image to Feishu and sends it to
+// the user watching the session. If no watcher is active, the image is sent
+// to the session owner. Runs the heavy I/O (decode + upload) in a goroutine
+// to avoid blocking the event dispatch loop.
+func (n *Notifier) onSessionImage(event session.Event) {
+	if event.ImageData == nil || event.ImageData.Data == "" {
+		return
+	}
+
+	// Determine recipient: prefer the active watcher, fall back to session owner.
+	watcherOpenID := n.findWatcher(event.SessionID)
+	var targetOpenID string
+	if watcherOpenID != "" {
+		targetOpenID = watcherOpenID
+	} else {
+		email := n.resolveEmail(event.UserID)
+		if email != "" {
+			targetOpenID = n.resolveOpenID(email)
+		}
+	}
+	if targetOpenID == "" {
+		return
+	}
+
+	// Capture values for the goroutine.
+	imgData := event.ImageData
+	sessionID := event.SessionID
+	openID := targetOpenID
+
+	go func() {
+		// Decode base64 image data.
+		imgBytes, err := base64.StdEncoding.DecodeString(imgData.Data)
+		if err != nil {
+			log.Printf("[feishu] image decode failed (session=%s): %v", sessionID, err)
+			return
+		}
+
+		// Decode into image.Image using the standard library's format
+		// registry (png and jpeg are imported for side-effect registration).
+		img, format, err := image.Decode(bytes.NewReader(imgBytes))
+		if err != nil {
+			log.Printf("[feishu] image parse failed (session=%s, media_type=%s): %v", sessionID, imgData.MediaType, err)
+			return
+		}
+		_ = format
+
+		// Upload to Feishu.
+		resp, err := n.bot.UploadImageObject(context.Background(), img)
+		if err != nil {
+			log.Printf("[feishu] image upload failed (session=%s): %v", sessionID, err)
+			return
+		}
+		imageKey := resp.Data.ImageKey
+		if imageKey == "" {
+			log.Printf("[feishu] image upload returned empty key (session=%s)", sessionID)
+			return
+		}
+
+		// Send the image as a post message with a caption.
+		alias := n.getAlias(openID, sessionID)
+		caption := fmt.Sprintf("📷 %s", alias)
+		sendImagePost(n, openID, imageKey, caption)
+	}()
+}
+
+// sendImagePost sends an image as a Feishu post (rich text) message with a
+// text caption line followed by the image.
+func sendImagePost(n *Notifier, openID, imageKey, caption string) {
+	if n == nil || n.bot == nil {
+		return
+	}
+	captionText := caption
+	rows := [][]lark.PostElem{
+		{{Tag: "text", Text: &captionText}},
+		{{Tag: "img", ImageKey: &imageKey}},
+	}
+	pc := lark.PostContent{
+		"zh_cn": {Content: rows},
+	}
+	msg := lark.NewMsgBuffer(lark.MsgPost).
+		BindOpenID(openID).
+		Post(&pc).
+		Build()
+	ctx := context.Background()
+	if _, err := n.bot.PostMessage(ctx, msg); err != nil {
+		log.Printf("[feishu/image] send failed (open_id=%s): %v", openID, err)
+	}
 }
 
 func (n *Notifier) onSessionClosed(event session.Event) {
@@ -852,6 +942,29 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return string(runes[:max]) + "…"
+}
+
+// truncateAtLine truncates text to fit within maxBytes by cutting at the last
+// complete line boundary. This avoids splitting multi-byte UTF-8 characters
+// (Chinese, emoji, etc.) and ensures no partial lines are sent.
+func truncateAtLine(text string, maxBytes int) string {
+	if len(text) <= maxBytes {
+		return text
+	}
+	// Find the last newline within the byte budget.
+	cut := strings.LastIndex(text[:maxBytes], "\n")
+	if cut <= 0 {
+		// No newline found — fall back to rune-safe truncation.
+		byteLen := 0
+		for i, r := range text {
+			byteLen += utf8.RuneLen(r)
+			if byteLen > maxBytes {
+				return text[:i] + "\n…"
+			}
+		}
+		return text
+	}
+	return text[:cut] + "\n…"
 }
 
 func shortID(id string) string {

@@ -52,6 +52,7 @@ type SessionService interface {
 	OnSessionPreviewDelta(ctx context.Context, machineID, userID, sessionID string, delta session.SessionPreviewDelta) error
 	OnSessionImportantEvent(ctx context.Context, machineID, userID, sessionID string, event session.ImportantEvent) error
 	OnSessionClosed(ctx context.Context, machineID, userID, sessionID string, payload map[string]any) error
+	OnSessionImage(ctx context.Context, machineID, userID, sessionID string, img session.SessionImage)
 	MarkMachineOffline(ctx context.Context, machineID string) error
 	GetSnapshot(userID, machineID, sessionID string) (*session.SessionCacheEntry, bool)
 	ListByMachine(ctx context.Context, userID, machineID string) ([]*session.SessionCacheEntry, error)
@@ -603,6 +604,14 @@ func (g *Gateway) handleSessionImage(ctx *ConnContext, msg Envelope) error {
 	for _, watcher := range watchers {
 		_ = writeWSJSON(watcher.Conn, fwd)
 	}
+
+	// Dispatch to session listeners (e.g. Feishu notifier) so they can
+	// forward the image to users who are watching via chat.
+	var imgPayload session.SessionImage
+	if err := json.Unmarshal(msg.Payload, &imgPayload); err == nil && imgPayload.Data != "" {
+		g.Sessions.OnSessionImage(context.Background(), ctx.MachineID, ctx.UserID, msg.SessionID, imgPayload)
+	}
+
 	return nil
 }
 

@@ -520,7 +520,7 @@ func (a *App) installToolsInBackground() {
 	a.log(a.tr("npm verified successfully: %s", npmExec))
 
 	tm := NewToolManager(a)
-	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "qoder", "kode", "iflow"}
+	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "kode", "iflow"}
 	home, _ := os.UserHomeDir()
 	expectedPrefix := filepath.Join(home, ".cceasy", "tools")
 
@@ -1495,8 +1495,6 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 			flag = ""
 		case "kode":
 			flag = "--dangerously-skip-permissions"
-		case "qodercli", "qoder":
-			flag = "--yolo"
 		}
 		if flag != "" {
 			cmdArgs += " " + flag

@@ -115,11 +115,11 @@ func handleBotMessage(n *Notifier, raw json.RawMessage) {
 
 	text := extractText(event.Message.Content)
 	if text == "" {
-		replyText(n, openID, helpText())
+		replyText(n, openID, welcomeOrHelp(n, openID))
 		return
 	}
 
-	// Command routing: /help, /machines, /sessions, /detail, /send, /interrupt, /kill, /use, /exit
+	// Command routing: /help, /machines, /sessions, /detail, /send, /interrupt, /kill, /use, /exit, /screenshot
 	if strings.HasPrefix(text, "/") {
 		handleCommand(n, openID, text)
 		return
@@ -146,7 +146,7 @@ func handleBotMessage(n *Notifier, raw json.RawMessage) {
 		return
 	}
 
-	replyText(n, openID, helpText())
+	replyText(n, openID, welcomeOrHelp(n, openID))
 }
 
 // handleCommand dispatches slash commands.
@@ -157,7 +157,7 @@ func handleCommand(n *Notifier, openID, text string) {
 
 	switch cmd {
 	case "/help", "/h":
-		replyText(n, openID, helpText())
+		replyText(n, openID, welcomeOrHelp(n, openID))
 	case "/machines", "/m":
 		handleListMachines(n, openID)
 	case "/sessions", "/s":
@@ -174,6 +174,8 @@ func handleCommand(n *Notifier, openID, text string) {
 		handleUseSession(n, openID, args)
 	case "/info":
 		handleInfo(n, openID)
+	case "/screenshot", "/sc":
+		handleScreenshot(n, openID, args)
 	case "/exit", "/e", "/quit", "/q":
 		handleExitSession(n, openID)
 	case "/unbind":
@@ -192,11 +194,32 @@ func helpText() string {
 		"/exit — 退出当前会话上下文\n" +
 		"/detail <编号> — 查看会话详情\n" +
 		"/send <编号> <text> — 发送命令到会话\n" +
+		"/screenshot <编号> [窗口标题] — 截屏并发送到此对话\n" +
 		"/interrupt <编号> — 中断会话\n" +
 		"/kill <编号> — 终止会话\n" +
 		"/unbind — 解除飞书绑定\n" +
 		"/help — 显示此帮助\n\n" +
 		"💡 先 /sessions 查看编号，再 /use 编号 切换会话。"
+}
+
+// bindingGuide returns onboarding text for users who haven't bound their email yet.
+func bindingGuide() string {
+	return "👋 欢迎使用 MaClaw Hub 飞书机器人！\n\n" +
+		"使用前需要先绑定您的 Hub 账号。步骤很简单：\n\n" +
+		"1️⃣ 直接发送您的 Hub 注册邮箱（例如: you@example.com）\n" +
+		"2️⃣ 系统会向该邮箱发送 6 位验证码\n" +
+		"3️⃣ 在此对话中回复验证码即可完成绑定\n\n" +
+		"绑定后即可通过飞书查看设备、管理会话、接收通知。\n\n" +
+		"Welcome! Please send your Hub email to get started."
+}
+
+// welcomeOrHelp returns the binding guide for unbound users, or the command
+// help text for users who have already bound their email.
+func welcomeOrHelp(n *Notifier, openID string) string {
+	if n.resolveUserID(openID) == "" {
+		return bindingGuide()
+	}
+	return helpText()
 }
 
 // resolveUserID returns the Hub userID for the given open_id via the email binding.
@@ -228,7 +251,7 @@ func handleListMachines(n *Notifier, openID string) {
 	}
 	userID := n.resolveUserID(openID)
 	if userID == "" {
-		replyText(n, openID, "⚠️ 未绑定账号，请先发送邮箱地址绑定。")
+		replyText(n, openID, bindingGuide())
 		return
 	}
 
@@ -273,7 +296,7 @@ func handleListSessions(n *Notifier, openID string, args []string) {
 	}
 	userID := n.resolveUserID(openID)
 	if userID == "" {
-		replyText(n, openID, "⚠️ 未绑定账号，请先发送邮箱地址绑定。")
+		replyText(n, openID, bindingGuide())
 		return
 	}
 
@@ -527,7 +550,7 @@ func handleInfo(n *Notifier, openID string) {
 	}
 	userID := n.resolveUserID(openID)
 	if userID == "" {
-		replyText(n, openID, "⚠️ 未绑定账号，请先发送邮箱地址绑定。")
+		replyText(n, openID, bindingGuide())
 		return
 	}
 
@@ -595,6 +618,54 @@ func handleInfo(n *Notifier, openID string) {
 	replyText(n, openID, sb.String())
 }
 
+
+func handleScreenshot(n *Notifier, openID string, args []string) {
+	// Determine which session to screenshot.
+	// If user has an active session context, the first arg (if any) is treated
+	// as an optional window title rather than a session prefix.
+	n.activeMu.RLock()
+	activeID := n.activeSession[openID]
+	n.activeMu.RUnlock()
+
+	var sessionPrefix, windowTitle string
+	if activeID != "" {
+		// Active session context — all args are window title.
+		sessionPrefix = activeID
+		if len(args) >= 1 {
+			windowTitle = strings.Join(args, " ")
+		}
+	} else {
+		// No active session — first arg is session prefix, rest is window title.
+		if len(args) < 1 {
+			replyText(n, openID, "用法: /screenshot <编号> [窗口标题]  (或先 /use 切换会话)\nUsage: /screenshot <id> [window title]  (or /use a session first)")
+			return
+		}
+		sessionPrefix = args[0]
+		if len(args) >= 2 {
+			windowTitle = strings.Join(args[1:], " ")
+		}
+	}
+
+	entry := n.findSession(openID, sessionPrefix)
+	if entry == nil {
+		replyText(n, openID, "❌ 未找到该会话（仅可操作自己的会话）。")
+		return
+	}
+
+	payload := map[string]any{
+		"machine_id": entry.MachineID,
+		"session_id": entry.SessionID,
+	}
+	if windowTitle != "" {
+		payload["window_title"] = windowTitle
+	}
+
+	if err := n.sendSessionCommand(entry, "session.screenshot", payload); err != nil {
+		replyText(n, openID, fmt.Sprintf("❌ 截屏命令发送失败: %v", err))
+		return
+	}
+	replyText(n, openID, fmt.Sprintf("📸 已向会话 %s 发送截屏请求，稍后图片将发送到此对话。", n.getAlias(openID, entry.SessionID)))
+}
 
 func handleExitSession(n *Notifier, openID string) {
 	n.activeMu.Lock()

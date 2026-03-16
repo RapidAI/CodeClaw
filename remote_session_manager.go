@@ -83,18 +83,33 @@ func (m *RemoteSessionManager) Create(spec LaunchSpec) (*RemoteSession, error) {
 		return session, err
 	}
 
-	// Choose execution strategy based on provider mode
+	// Choose execution strategy based on provider mode.
+	// executionFactory is used for PTY mode (and can be overridden in tests).
+	// For SDK modes, we use the factory if it has been overridden (test scenario),
+	// otherwise we create the appropriate strategy directly.
 	var strategy ExecutionStrategy
-	if provider.ExecutionMode() == ExecModeSDK {
-		strategy = NewSDKExecutionStrategy()
-	} else {
-		var err2 error
-		strategy, err2 = m.executionFactory(spec)
-		if err2 != nil {
-			session := m.newFailedSession(sessionID, spec, provider, now, err2)
-			m.storeSession(session)
-			m.syncFailedSession(session)
-			return session, err2
+	strategy, err = m.executionFactory(spec)
+	if err != nil {
+		session := m.newFailedSession(sessionID, spec, provider, now, err)
+		m.storeSession(session)
+		m.syncFailedSession(session)
+		return session, err
+	}
+	// If the factory returned a PTY strategy but the provider needs a different mode,
+	// create the correct SDK strategy. When executionFactory is overridden in tests,
+	// it returns a fake strategy which is not *LocalPTYExecutionStrategy, so we keep it.
+	if _, isPTY := strategy.(*LocalPTYExecutionStrategy); isPTY {
+		switch provider.ExecutionMode() {
+		case ExecModeCodexSDK:
+			strategy = NewCodexSDKExecutionStrategy()
+		case ExecModeSDK:
+			strategy = NewSDKExecutionStrategy()
+		case ExecModeIFlowSDK:
+			strategy = NewIFlowSDKExecutionStrategy()
+		case ExecModeOpenCodeSDK:
+			strategy = NewOpenCodeSDKExecutionStrategy()
+		case ExecModeKiloSDK:
+			strategy = NewKiloSDKExecutionStrategy()
 		}
 	}
 
@@ -149,9 +164,13 @@ func (m *RemoteSessionManager) Create(spec LaunchSpec) (*RemoteSession, error) {
 		_ = m.hubClient.SendImportantEvent(initEvent)
 	}
 
-	// SDK sessions get a dedicated output loop that handles structured messages
+	// SDK sessions get a dedicated output loop that handles structured messages.
+	// iFlow/OpenCode/Kilo emit pre-formatted text on Output(), so the generic
+	// runOutputLoop (which reads from Output() and feeds the pipeline) works.
 	if _, isSDK := session.Exec.(*SDKExecutionHandle); isSDK {
 		go m.runSDKOutputLoop(session)
+	} else if _, isCodex := session.Exec.(*CodexSDKExecutionHandle); isCodex {
+		go m.runCodexSDKOutputLoop(session)
 	} else {
 		go m.runOutputLoop(session)
 	}
@@ -285,37 +304,12 @@ func (m *RemoteSessionManager) WriteInput(sessionID, text string) error {
 
 	// SDK handles accept JSON messages — skip PTY line-ending normalization.
 	if _, isSDK := s.Exec.(*SDKExecutionHandle); isSDK {
-		m.app.log(fmt.Sprintf("[remote-write-sdk] session=%s, len=%d, text=%q",
-			sessionID, len(text), text))
-		err := s.Exec.Write([]byte(text))
-		if err != nil {
-			m.app.log(fmt.Sprintf("[remote-write-sdk] FAILED session=%s: %v", sessionID, err))
-		}
-		// Echo user input into the raw output so the console displays it
-		// in a clear Q&A format with a visible separator.
-		displayText := strings.TrimSpace(text)
-		if displayText != "" {
-			echoLine := fmt.Sprintf("❯ %s", displayText)
-			s.mu.Lock()
-			s.RawOutputLines = append(s.RawOutputLines, "", echoLine, "")
-			s.Preview.PreviewLines = append(s.Preview.PreviewLines, "", echoLine, "")
-			if len(s.RawOutputLines) > 2000 {
-				s.RawOutputLines = s.RawOutputLines[len(s.RawOutputLines)-2000:]
-			}
-			if len(s.Preview.PreviewLines) > 500 {
-				s.Preview.PreviewLines = s.Preview.PreviewLines[len(s.Preview.PreviewLines)-500:]
-			}
-			s.mu.Unlock()
-			if m.hubClient != nil {
-				_ = m.hubClient.SendPreviewDelta(SessionPreviewDelta{
-					SessionID:   sessionID,
-					OutputSeq:   s.Preview.OutputSeq,
-					AppendLines: []string{"", echoLine, ""},
-					UpdatedAt:   s.Preview.UpdatedAt,
-				})
-			}
-		}
-		return err
+		return m.writeSDKInput(s, sessionID, text, "sdk")
+	}
+
+	// Codex SDK sessions — write prompt text directly, echo to output.
+	if _, isCodex := s.Exec.(*CodexSDKExecutionHandle); isCodex {
+		return m.writeSDKInput(s, sessionID, text, "codex")
 	}
 
 	// ConPTY on Windows requires "\r\n" (or "\r") to simulate pressing Enter.
@@ -332,6 +326,40 @@ func (m *RemoteSessionManager) WriteInput(sessionID, text string) error {
 		m.app.log(fmt.Sprintf("[remote-write] FAILED session=%s: %v", sessionID, err))
 	} else {
 		m.app.log(fmt.Sprintf("[remote-write] OK session=%s", sessionID))
+	}
+	return err
+}
+
+// writeSDKInput writes text to an SDK-mode session (Claude or Codex) and
+// echoes the user input into the raw output and preview for display.
+func (m *RemoteSessionManager) writeSDKInput(s *RemoteSession, sessionID, text, tag string) error {
+	m.app.log(fmt.Sprintf("[remote-write-%s] session=%s, len=%d, text=%q",
+		tag, sessionID, len(text), text))
+	err := s.Exec.Write([]byte(text))
+	if err != nil {
+		m.app.log(fmt.Sprintf("[remote-write-%s] FAILED session=%s: %v", tag, sessionID, err))
+	}
+	displayText := strings.TrimSpace(text)
+	if displayText != "" {
+		echoLine := fmt.Sprintf("❯ %s", displayText)
+		s.mu.Lock()
+		s.RawOutputLines = append(s.RawOutputLines, "", echoLine, "")
+		s.Preview.PreviewLines = append(s.Preview.PreviewLines, "", echoLine, "")
+		if len(s.RawOutputLines) > 2000 {
+			s.RawOutputLines = s.RawOutputLines[len(s.RawOutputLines)-2000:]
+		}
+		if len(s.Preview.PreviewLines) > 500 {
+			s.Preview.PreviewLines = s.Preview.PreviewLines[len(s.Preview.PreviewLines)-500:]
+		}
+		s.mu.Unlock()
+		if m.hubClient != nil {
+			_ = m.hubClient.SendPreviewDelta(SessionPreviewDelta{
+				SessionID:   sessionID,
+				OutputSeq:   s.Preview.OutputSeq,
+				AppendLines: []string{"", echoLine, ""},
+				UpdatedAt:   s.Preview.UpdatedAt,
+			})
+		}
 	}
 	return err
 }
@@ -777,7 +805,16 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 							eventsToSync = append(eventsToSync, evt)
 						}
 					}
-					imagesToSync = append(imagesToSync, extractImagesFromBlocks(s.ID, msg.Message.Content, "sdk-image", m.app)...)
+					extracted := extractImagesFromBlocks(s.ID, msg.Message.Content, "sdk-image", m.app)
+					imagesToSync = append(imagesToSync, extracted...)
+					for _, img := range extracted {
+						s.OutputImages = append(s.OutputImages, SessionOutputImage{
+							ImageID:      img.ImageID,
+							MediaType:    img.MediaType,
+							Data:         img.Data,
+							AfterLineIdx: len(s.RawOutputLines) - 1,
+						})
+					}
 				}
 				snap := s.Summary
 				summaryToSync = &snap
@@ -786,7 +823,16 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 				// Extract images from tool_result content blocks (e.g. screenshots
 				// captured by Claude Code's Bash/Read tools).
 				if msg.Message != nil {
-					imagesToSync = append(imagesToSync, extractImagesFromBlocks(s.ID, msg.Message.Content, "sdk-image-user", m.app)...)
+					extracted := extractImagesFromBlocks(s.ID, msg.Message.Content, "sdk-image-user", m.app)
+					imagesToSync = append(imagesToSync, extracted...)
+					for _, img := range extracted {
+						s.OutputImages = append(s.OutputImages, SessionOutputImage{
+							ImageID:      img.ImageID,
+							MediaType:    img.MediaType,
+							Data:         img.Data,
+							AfterLineIdx: len(s.RawOutputLines) - 1,
+						})
+					}
 				}
 
 			case "result":
@@ -836,6 +882,95 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			m.app.emitRemoteStateChanged()
 		}
 	}
+}
+
+
+// runCodexSDKOutputLoop handles output for Codex SDK-mode sessions.
+// Codex exec --json emits complete JSONL lines (not streaming fragments),
+// so we don't need the streaming accumulator used by Claude's SDK loop.
+func (m *RemoteSessionManager) runCodexSDKOutputLoop(s *RemoteSession) {
+	codexHandle, ok := s.Exec.(*CodexSDKExecutionHandle)
+	if !ok {
+		m.runOutputLoop(s)
+		return
+	}
+
+	pipeline := m.pipelineFactory()
+	output := codexHandle.Output()
+	sessionStarted := false
+
+	for chunk := range output {
+		text := string(chunk)
+
+		// Mark session as running on first output
+		if !sessionStarted {
+			sessionStarted = true
+			s.mu.Lock()
+			s.Status = SessionRunning
+			s.Summary.Status = string(SessionRunning)
+			s.Summary.Severity = "info"
+			s.Summary.CurrentTask = "Codex session started"
+			s.Summary.UpdatedAt = time.Now().Unix()
+			snap := s.Summary
+			s.mu.Unlock()
+			if m.hubClient != nil {
+				_ = m.hubClient.SendSessionSummary(snap)
+			}
+		}
+
+		// Codex emits complete lines — split and append directly.
+		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+		s.mu.Lock()
+		s.RawOutputLines = append(s.RawOutputLines, lines...)
+		if len(s.RawOutputLines) > 2000 {
+			s.RawOutputLines = s.RawOutputLines[len(s.RawOutputLines)-2000:]
+		}
+		s.mu.Unlock()
+
+		result := pipeline.Consume(s, chunk)
+
+		s.mu.Lock()
+		s.UpdatedAt = time.Now()
+
+		if result.Summary != nil {
+			s.Summary = *result.Summary
+			s.Status = SessionStatus(result.Summary.Status)
+		}
+
+		if result.PreviewDelta != nil {
+			s.Preview.SessionID = s.ID
+			s.Preview.OutputSeq = result.PreviewDelta.OutputSeq
+			s.Preview.UpdatedAt = result.PreviewDelta.UpdatedAt
+			s.Preview.PreviewLines = append(s.Preview.PreviewLines, result.PreviewDelta.AppendLines...)
+			if len(s.Preview.PreviewLines) > 500 {
+				s.Preview.PreviewLines = s.Preview.PreviewLines[len(s.Preview.PreviewLines)-500:]
+			}
+		}
+
+		for _, evt := range result.Events {
+			s.Events = appendRecentEvents(s.Events, evt, maxRecentImportantEvents)
+		}
+		s.mu.Unlock()
+
+		if result.Summary != nil && m.hubClient != nil {
+			_ = m.hubClient.SendSessionSummary(*result.Summary)
+		}
+		if result.PreviewDelta != nil && m.hubClient != nil {
+			_ = m.hubClient.SendPreviewDelta(*result.PreviewDelta)
+		}
+		for _, evt := range result.Events {
+			if m.hubClient != nil {
+				_ = m.hubClient.SendImportantEvent(evt)
+			}
+		}
+
+		m.app.refreshPowerOptimizationState()
+		m.app.emitRemoteStateChanged()
+	}
+
+	// `codex exec` is one-shot — the process exits after the output channel
+	// closes.  The exit loop (runExitLoop) handles the final status transition,
+	// so we don't set SessionWaitingInput here.
 }
 
 

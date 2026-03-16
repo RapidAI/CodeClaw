@@ -246,7 +246,7 @@ func (a *App) installToolsInBackground() {
 	}
 
 	tm := NewToolManager(a)
-	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "qoder", "kode", "iflow"}
+	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "kode", "iflow"}
 
 	for _, tool := range tools {
 		// Try to acquire lock for this tool
@@ -505,8 +505,6 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 			cmdArgs = append(cmdArgs, "-y")
 		case "kode":
 			cmdArgs = append(cmdArgs, "--dangerously-skip-permissions")
-		case "qodercli", "qoder":
-			cmdArgs = append(cmdArgs, "--yolo")
 		}
 	}
 

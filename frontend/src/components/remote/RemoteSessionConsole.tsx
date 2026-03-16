@@ -532,10 +532,25 @@ export function RemoteSessionConsole(props: Props) {
 
     // ── Build output elements ──
     const outputElements = useMemo((): React.ReactNode[] => {
+        // Build a map: rawLineIndex → images to show after that line.
+        // Images use after_line_idx relative to the full RawOutputLines;
+        // adjust for clearOffset so they align with the visible rawLines.
+        const imagesByLine = new Map<number, typeof session.output_images>();
+        if (session.output_images) {
+            for (const img of session.output_images) {
+                const adjusted = img.after_line_idx - clearOffset;
+                if (adjusted < 0) continue; // image is before the visible area
+                const list = imagesByLine.get(adjusted) || [];
+                list.push(img);
+                imagesByLine.set(adjusted, list);
+            }
+        }
+
         // Pre-process: merge lines that are SDK streaming fragments into the previous line.
         // 1. Lines starting with "/" that look like word fragments (e.g. "/ON/AC")
         // 2. Windows path continuations (e.g. "D:\" followed by "workprj\test")
         const merged: string[] = [];
+        const mergedToRawIdx: number[] = []; // maps merged index → last raw line index consumed
         for (let i = 0; i < rawLines.length; i++) {
             const cleaned = stripAnsi(rawLines[i]);
             const prev = merged.length > 0 ? merged[merged.length - 1] : "";
@@ -547,14 +562,17 @@ export function RemoteSessionConsole(props: Props) {
                 !/^\/[a-z][\w.\-]*\//.test(cleaned)
             ) {
                 merged[merged.length - 1] += cleaned;
+                mergedToRawIdx[merged.length - 1] = i;
             } else if (
                 /[A-Z]:\\$/.test(prev) &&
                 cleaned.length > 0 &&
                 /^[\w.\-\\]/.test(cleaned)
             ) {
                 merged[merged.length - 1] += cleaned;
+                mergedToRawIdx[merged.length - 1] = i;
             } else {
                 merged.push(cleaned);
+                mergedToRawIdx.push(i);
             }
         }
 
@@ -564,6 +582,50 @@ export function RemoteSessionConsole(props: Props) {
         let codeBlockLines: string[] = [];
         let codeBlockLang = "";
         let plainTextBuf: string[] = [];
+
+        // Helper: render pending images for a given merged line index
+        const renderImagesAfterMergedIdx = (mergedIdx: number) => {
+            const rawIdx = mergedToRawIdx[mergedIdx];
+            if (rawIdx === undefined) return;
+            const imgs = imagesByLine.get(rawIdx);
+            if (!imgs || imgs.length === 0) return;
+            for (const img of imgs) {
+                responseLines.push(
+                    <div key={`img-${img.image_id}`} style={{ margin: "8px 0", textAlign: "left" }}>
+                        <div style={{ color: "#666", fontSize: "10px", marginBottom: "4px" }}>
+                            🖼 {img.media_type}
+                        </div>
+                        <img
+                            src={`data:${img.media_type};base64,${img.data}`}
+                            alt="session output"
+                            style={{
+                                maxWidth: "100%",
+                                maxHeight: "400px",
+                                borderRadius: "4px",
+                                border: "1px solid #333",
+                                display: "block",
+                            }}
+                        />
+                    </div>
+                );
+            }
+        };
+
+        // Smart join: no space between CJK characters to avoid extra spaces in Chinese/Japanese text
+        const smartJoinPlain = (arr: string[]): string => {
+            if (arr.length === 0) return "";
+            let out = arr[0];
+            for (let j = 1; j < arr.length; j++) {
+                const prev = out, cur = arr[j];
+                if (prev.length === 0 || cur.length === 0) { out += cur; continue; }
+                const lastCh = prev.charCodeAt(prev.length - 1);
+                const firstCh = cur.charCodeAt(0);
+                const lastCJK = (lastCh >= 0x2E80 && lastCh <= 0x9FFF) || (lastCh >= 0xF900 && lastCh <= 0xFAFF) || (lastCh >= 0xFF00 && lastCh <= 0xFFEF);
+                const firstCJK = (firstCh >= 0x2E80 && firstCh <= 0x9FFF) || (firstCh >= 0xF900 && firstCh <= 0xFAFF) || (firstCh >= 0xFF00 && firstCh <= 0xFFEF);
+                if (lastCJK || firstCJK) { out += cur; } else { out += " " + cur; }
+            }
+            return out;
+        };
 
         const flushCodeBlock = () => {
             if (codeBlockLines.length > 0) {
@@ -637,7 +699,7 @@ export function RemoteSessionConsole(props: Props) {
                         if (plainTextBuf.length > 0) {
                             responseLines.push(
                                 <div key={`plain-${i}`} style={{ minHeight: "1.4em" }}>
-                                    {renderInlineMarkdown(plainTextBuf.join(" "))}
+                                    {renderInlineMarkdown(smartJoinPlain(plainTextBuf))}
                                 </div>
                             );
                             plainTextBuf = [];
@@ -669,7 +731,7 @@ export function RemoteSessionConsole(props: Props) {
                         if (plainTextBuf.length > 0) {
                             responseLines.push(
                                 <div key={`plain-${i}`} style={{ minHeight: "1.4em" }}>
-                                    {renderInlineMarkdown(plainTextBuf.join(" "))}
+                                    {renderInlineMarkdown(smartJoinPlain(plainTextBuf))}
                                 </div>
                             );
                             plainTextBuf = [];
@@ -681,12 +743,14 @@ export function RemoteSessionConsole(props: Props) {
                     }
                 }
             }
+            // After processing each merged line, render any images anchored here
+            renderImagesAfterMergedIdx(i);
         }
         // Flush remaining plain text
         if (plainTextBuf.length > 0) {
             responseLines.push(
                 <div key="plain-final" style={{ minHeight: "1.4em" }}>
-                    {renderInlineMarkdown(plainTextBuf.join(" "))}
+                    {renderInlineMarkdown(smartJoinPlain(plainTextBuf))}
                 </div>
             );
             plainTextBuf = [];
@@ -695,7 +759,7 @@ export function RemoteSessionConsole(props: Props) {
         flushResponse();
 
         return elements;
-    }, [rawLines]);
+    }, [rawLines, session.output_images, clearOffset]);
 
     return (
         <div style={overlayStyle}>

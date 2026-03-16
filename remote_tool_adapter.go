@@ -6,7 +6,8 @@ type ProviderAdapter interface {
 	BuildCommand(spec LaunchSpec) (CommandSpec, error)
 
 	// ExecutionMode returns how this provider should be launched.
-	// "sdk" means structured JSON stdin/stdout (Claude Code stream-json).
-	// "pty" means interactive pseudo-terminal (default for most tools).
+	// "sdk"       — structured JSON stdin/stdout (Claude Code stream-json).
+	// "codex-sdk" — one-shot JSONL via `codex exec --json`.
+	// "pty"       — interactive pseudo-terminal (default for most tools).
 	ExecutionMode() ExecutionMode
 }

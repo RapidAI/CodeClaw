@@ -397,8 +397,13 @@ func TestBuildRemoteLaunchSpecSupportsCodex(t *testing.T) {
 	if spec.BinaryName != "codex" {
 		t.Fatalf("spec.BinaryName = %q, want %q", spec.BinaryName, "codex")
 	}
-	if spec.Env["OPENAI_MODEL"] != "gpt-5.2-codex" {
-		t.Fatalf("OPENAI_MODEL = %q, want %q", spec.Env["OPENAI_MODEL"], "gpt-5.2-codex")
+	// Original mode: env vars should NOT be injected; Codex uses its own auth.
+	if spec.Env["OPENAI_MODEL"] != "" {
+		t.Fatalf("OPENAI_MODEL = %q, want empty (original mode)", spec.Env["OPENAI_MODEL"])
+	}
+	// ModelID should still be available in the spec for metadata.
+	if spec.ModelID != "gpt-5.2-codex" {
+		t.Fatalf("spec.ModelID = %q, want %q", spec.ModelID, "gpt-5.2-codex")
 	}
 }
 

@@ -2,8 +2,13 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 )
 
+// OpencodeAdapter launches the OpenCode CLI in HTTP server + SSE mode.
+// OpenCode supports --server --port <PORT>, exposing an HTTP API endpoint
+// with SSE event streaming for structured communication.
+// It runs with ExecModeOpenCodeSDK using the OpenCodeSDKExecutionStrategy.
 type OpencodeAdapter struct {
 	app *App
 }
@@ -17,7 +22,7 @@ func (a *OpencodeAdapter) ProviderName() string {
 }
 
 func (a *OpencodeAdapter) ExecutionMode() ExecutionMode {
-	return ExecModePTY
+	return ExecModeOpenCodeSDK
 }
 
 func (a *OpencodeAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
@@ -45,11 +50,18 @@ func (a *OpencodeAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 	}
 	env := buildOpenAICompatibleCommandEnv(spec.Env, extra)
 
+	port, err := findFreePort()
+	if err != nil {
+		return CommandSpec{}, fmt.Errorf("failed to find free port for opencode server: %w", err)
+	}
+	env["OPENCODE_SERVER_PORT"] = strconv.Itoa(port)
+
+	args := []string{"--server", "--port", strconv.Itoa(port)}
+
 	return CommandSpec{
 		Command: resolveWindowsSidecarExecutable(status.Path, []string{"opencode.exe"}),
+		Args:    args,
 		Cwd:     spec.ProjectPath,
 		Env:     env,
-		Cols:    120,
-		Rows:    32,
 	}, nil
 }

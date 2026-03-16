@@ -48,9 +48,6 @@ func (tm *ToolManager) GetToolStatus(name string) ToolStatus {
 	if name == "codebuddy" {
 		binaryNames = []string{"codebuddy", "codebuddy-code"}
 	}
-	if name == "qoder" {
-		binaryNames = []string{"qodercli", "qoder"}
-	}
 	if name == "iflow" {
 		binaryNames = []string{"iflow"}
 	}
@@ -686,8 +683,6 @@ func (tm *ToolManager) GetPackageName(name string) string {
 		return "opencode-ai"
 	case "codebuddy":
 		return "@tencent-ai/codebuddy-code"
-	case "qoder":
-		return "@qoder-ai/qodercli"
 	case "iflow":
 		return "@iflow-ai/iflow-cli"
 	case "kilo":
@@ -737,7 +732,7 @@ func (a *App) UpdateTool(name string) error {
 func (a *App) CheckToolsStatus() []ToolStatus {
 	tm := NewToolManager(a)
 	// Check kilo first, then other tools
-	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "cursor", "codebuddy", "qoder", "kode", "iflow"}
+	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "cursor", "codebuddy", "kode", "iflow"}
 	statuses := make([]ToolStatus, len(tools))
 	for i, name := range tools {
 		statuses[i] = tm.GetToolStatus(name)

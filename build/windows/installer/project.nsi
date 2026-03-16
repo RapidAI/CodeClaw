@@ -27,12 +27,17 @@ Unicode true
 ###
 ## !define PRODUCT_EXECUTABLE  "Application.exe"      # Default "${INFO_PROJECTNAME}.exe"
 ## !define UNINST_KEY_NAME     "UninstKeyInRegistry"  # Default "${INFO_COMPANYNAME}${INFO_PRODUCTNAME}"
+## !define AUTOSTART_REG_NAME  "RunEntryName"         # Default "${INFO_PROJECTNAME}"
 ####
 ## !define REQUEST_EXECUTION_LEVEL "admin"            # Default "admin"  see also https://nsis.sourceforge.io/Docs/Chapter4.html
 ####
 ## Include the wails tools
 ####
 !include "wails_tools.nsh"
+
+!ifndef AUTOSTART_REG_NAME
+!define AUTOSTART_REG_NAME "${INFO_PROJECTNAME}"
+!endif
 
 # The version information for this two must consist of 4 parts
 VIProductVersion "${INFO_PRODUCTVERSION}"
@@ -54,9 +59,6 @@ ManifestDPIAware true
 !define MUI_UNICON "..\icon.ico"
 # !define MUI_WELCOMEFINISHPAGE_BITMAP "resources\leftimage.bmp" #Include this to add a bitmap on the left side of the Welcome Page. Must be a size of 164x314
 !define MUI_FINISHPAGE_NOAUTOCLOSE # Wait on the INSTFILES page so the user can take a look into the details of the installation steps
-!define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_EXECUTABLE}" # Launch application after installation
-!define MUI_FINISHPAGE_RUN_PARAMETERS "init" # Add init parameter to force environment check
-!define MUI_FINISHPAGE_RUN_TEXT "Launch ${INFO_PRODUCTNAME} and setup environment" # Custom text for the checkbox
 !define MUI_ABORTWARNING # This will warn the user if they exit from the installer.
 
 !insertmacro MUI_PAGE_WELCOME # Welcome to the installer page.
@@ -97,6 +99,10 @@ Section
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
 
+    # Start automatically after Windows sign-in
+    SetRegView 64
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "${AUTOSTART_REG_NAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\" autostart"
+
     !insertmacro wails.writeUninstaller
 SectionEnd
 
@@ -112,6 +118,9 @@ Section "uninstall"
 
     !insertmacro wails.unassociateFiles
     !insertmacro wails.unassociateCustomProtocols
+
+    SetRegView 64
+    DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "${AUTOSTART_REG_NAME}"
 
     !insertmacro wails.deleteUninstaller
 SectionEnd

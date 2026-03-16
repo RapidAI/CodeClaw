@@ -71,6 +71,9 @@ func (a *App) StartRemoteSessionForProject(req RemoteStartSessionRequest) (Remot
 	}
 
 	tool := normalizeRemoteToolName(req.Tool)
+	if !remoteToolSupported(tool) {
+		return RemoteSessionView{}, fmt.Errorf("tool %q does not support remote mode", tool)
+	}
 	if a.remoteSessions == nil {
 		a.remoteSessions = NewRemoteSessionManager(a)
 	}

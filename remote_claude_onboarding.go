@@ -1,9 +1,6 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -28,74 +25,7 @@ import (
 // The function is idempotent — it only adds missing keys and never
 // removes existing user preferences.
 func ensureClaudeOnboardingComplete(app *App, projectPath string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot determine home directory: %w", err)
-	}
-
-	configPath := filepath.Join(home, ".claude.json")
-
-	// Read existing config (or start with empty object).
-	existing := map[string]any{}
-	data, err := os.ReadFile(configPath)
-	if err == nil {
-		if err := json.Unmarshal(data, &existing); err != nil {
-			backupPath := configPath + ".bak"
-			_ = os.Rename(configPath, backupPath)
-			if app != nil {
-				app.log(fmt.Sprintf("[claude-onboarding] backed up corrupt %s to %s", configPath, backupPath))
-			}
-			existing = map[string]any{}
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", configPath, err)
-	}
-
-	changed := false
-
-	// Mark onboarding as completed.
-	if !isTruthy(existing["hasCompletedOnboarding"]) {
-		existing["hasCompletedOnboarding"] = true
-		changed = true
-	}
-
-	// Set a default theme if none is configured.
-	if existing["theme"] == nil || strings.TrimSpace(fmt.Sprint(existing["theme"])) == "" {
-		existing["theme"] = "dark"
-		changed = true
-	}
-
-	// Ensure the project path has a trust entry.
-	if projectPath != "" {
-		if ensureProjectTrust(existing, projectPath) {
-			changed = true
-		}
-	}
-
-	if !changed {
-		if app != nil {
-			app.log("[claude-onboarding] config already complete, no changes needed")
-		}
-		return nil
-	}
-
-	out, err := json.MarshalIndent(existing, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, out, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", configPath, err)
-	}
-
-	if app != nil {
-		app.log(fmt.Sprintf("[claude-onboarding] updated %s with onboarding flags (project=%s)", configPath, projectPath))
-	}
-	return nil
+	return ensureClaudeCodeForkOnboarding(app, ".claude.json", "claude", projectPath)
 }
 
 // ensureProjectTrust adds a trust entry for the given project path in

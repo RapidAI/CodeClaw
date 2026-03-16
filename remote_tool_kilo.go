@@ -5,9 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
+// KiloAdapter launches the Kilo CLI in HTTP server + SSE mode via `kilo serve`.
+// Kilo is an OpenCode fork that exposes a headless server with `kilo serve --port <PORT>`,
+// providing an HTTP API endpoint with SSE event streaming for structured communication.
+// It runs with ExecModeKiloSDK using the KiloSDKExecutionStrategy.
 type KiloAdapter struct {
 	app *App
 }
@@ -21,7 +26,7 @@ func (a *KiloAdapter) ProviderName() string {
 }
 
 func (a *KiloAdapter) ExecutionMode() ExecutionMode {
-	return ExecModePTY
+	return ExecModeKiloSDK
 }
 
 func (a *KiloAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
@@ -46,12 +51,20 @@ func (a *KiloAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 	env := buildOpenAICompatibleCommandEnv(spec.Env, map[string]string{
 		"KILO_MODEL": spec.ModelID,
 	})
+
+	port, err := findFreePort()
+	if err != nil {
+		return CommandSpec{}, fmt.Errorf("failed to find free port for kilo server: %w", err)
+	}
+	env["KILO_SERVER_PORT"] = strconv.Itoa(port)
+
+	args := []string{"serve", "--port", strconv.Itoa(port)}
+
 	return CommandSpec{
 		Command: resolveWindowsSidecarExecutable(status.Path, []string{"kilo.exe", "kilocode.exe"}),
+		Args:    args,
 		Cwd:     spec.ProjectPath,
 		Env:     env,
-		Cols:    120,
-		Rows:    32,
 	}, nil
 }
 

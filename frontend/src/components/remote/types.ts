@@ -42,6 +42,13 @@ export interface SessionPreviewView {
     updated_at?: number;
 }
 
+export interface SessionOutputImageView {
+    image_id: string;
+    media_type: string;
+    data: string;          // base64-encoded
+    after_line_idx: number; // insert after this raw-output-line index
+}
+
 export interface RemoteSessionView {
     id: string;
     tool: string;
@@ -60,6 +67,7 @@ export interface RemoteSessionView {
     preview?: SessionPreviewView;
     events?: ImportantEventView[];
     raw_output_lines?: string[];
+    output_images?: SessionOutputImageView[];
 }
 
 export interface RemoteToolReadinessView {
@@ -133,6 +141,7 @@ export interface RemoteToolMetadataView {
     uses_openai_compat?: boolean;
     requires_session_config?: boolean;
     supports_proxy?: boolean;
+    supports_remote?: boolean;
     visible?: boolean;
     installed?: boolean;
     can_start?: boolean;

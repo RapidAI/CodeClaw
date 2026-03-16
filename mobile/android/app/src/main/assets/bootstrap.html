@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>MaClaw APP</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,6 +36,18 @@
 <body>
   <div id="app"></div>
   <script>
+    // Unregister any existing Service Workers and clear caches to ensure fresh loads
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(regs) {
+        regs.forEach(function(r) { r.unregister(); });
+      });
+    }
+    if ('caches' in window) {
+      caches.keys().then(function(names) {
+        names.forEach(function(n) { caches.delete(n); });
+      });
+    }
+
     const params = new URLSearchParams(window.location.search);
     const center = (params.get("hubcenter") || "").replace(/\/+$/, "");
     const prefillEmail = params.get("prefill_email") || "";
@@ -172,6 +187,41 @@
       var payload = await resp.json();
       if (!resp.ok) throw new Error(payload.message || resp.statusText || "Private hub probe failed");
       if (payload.status === "bound" && payload.pwa_url) return String(payload.pwa_url).trim();
+
+      // If pending approval, show a clear message
+      if (payload.status === "pending_approval") {
+        throw new Error(payload.message || "Your enrollment request is pending administrator approval.");
+      }
+
+      // If user not found and enrollment mode supports it, submit an enrollment request
+      if (payload.status === "not_found" && payload.enrollment_mode) {
+        var invCode = "";
+        if (payload.invitation_code_required) {
+          invCode = prompt("This hub requires an invitation code:") || "";
+          if (!invCode) throw new Error("Invitation code is required");
+        }
+        var enrollResp = await fetch(hubURL + "/api/enroll/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email, invitation_code: invCode })
+        });
+        var enrollData = await enrollResp.json();
+        if (!enrollResp.ok) throw new Error(enrollData.message || "Enrollment request failed");
+        if (enrollData.status === "pending_approval") {
+          throw new Error(enrollData.message || "Your enrollment request has been submitted. Please wait for administrator approval.");
+        }
+        if (enrollData.status === "manual_binding_required") {
+          throw new Error(enrollData.message || "This hub requires manual binding by an administrator.");
+        }
+        // If auto-approved, re-probe to get the pwa_url
+        if (enrollData.status === "approved") {
+          var resp2 = await fetch(hubURL + "/api/entry/probe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: email }) });
+          var payload2 = await resp2.json();
+          if (payload2.status === "bound" && payload2.pwa_url) return String(payload2.pwa_url).trim();
+        }
+        throw new Error(enrollData.message || "Enrollment submitted but hub is not ready yet");
+      }
+
       throw new Error(payload.message || "Email is not bound to this hub");
     }
 

@@ -4,8 +4,12 @@ import WebKit
 final class ViewController: UIViewController, UITextFieldDelegate {
     private let textField = UITextField(frame: .zero)
     private let button = UIButton(type: .system)
+    private let refreshButton = UIButton(type: .system)
     private let stackView = UIStackView(frame: .zero)
-    private let webView = WKWebView(frame: .zero)
+    private let webView: WKWebView = {
+        let config = WKWebViewConfiguration()
+        return WKWebView(frame: .zero, configuration: config)
+    }()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -16,7 +20,7 @@ final class ViewController: UIViewController, UITextFieldDelegate {
     }
 
     private func configureControls() {
-        [textField, button, stackView, webView].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+        [textField, button, refreshButton, stackView, webView].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
 
         textField.borderStyle = .roundedRect
         textField.placeholder = "name@example.com"
@@ -30,11 +34,17 @@ final class ViewController: UIViewController, UITextFieldDelegate {
         button.configuration?.title = "Open PWA"
         button.addTarget(self, action: #selector(openUsingEmail), for: .touchUpInside)
 
+        refreshButton.configuration = .tinted()
+        refreshButton.configuration?.title = "↻"
+        refreshButton.addTarget(self, action: #selector(refreshPage), for: .touchUpInside)
+
         stackView.axis = .horizontal
         stackView.spacing = 12
         stackView.addArrangedSubview(textField)
         stackView.addArrangedSubview(button)
-        button.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        stackView.addArrangedSubview(refreshButton)
+        button.widthAnchor.constraint(equalToConstant: 100).isActive = true
+        refreshButton.widthAnchor.constraint(equalToConstant: 44).isActive = true
 
         view.addSubview(stackView)
         view.addSubview(webView)
@@ -109,5 +119,21 @@ final class ViewController: UIViewController, UITextFieldDelegate {
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
         openUsingEmail()
         return true
+    }
+
+    @objc private func refreshPage() {
+        // Clear website caches from the webView's own data store, then reload
+        let dataStore = webView.configuration.websiteDataStore
+        let dataTypes: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+            WKWebsiteDataTypeOfflineWebApplicationCache,
+            WKWebsiteDataTypeFetchCache
+        ]
+        dataStore.removeData(ofTypes: dataTypes, modifiedSince: .distantPast) { [weak self] in
+            DispatchQueue.main.async {
+                self?.webView.reloadFromOrigin()
+            }
+        }
     }
 }

@@ -79,7 +79,16 @@ type Event struct {
 	Summary      *SessionSummary
 	PreviewDelta *SessionPreviewDelta
 	Important    *ImportantEvent
+	ImageData    *SessionImage
 	Payload      map[string]any
+}
+
+// SessionImage carries a base64-encoded image from a session for delivery
+// to listeners (e.g. Feishu notifier).
+type SessionImage struct {
+	ImageID   string `json:"image_id"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"` // base64-encoded
 }
 
 type Listener func(Event)
@@ -319,6 +328,20 @@ func (s *Service) OnSessionClosed(ctx context.Context, machineID, userID, sessio
 	s.emit(Event{Type: "session.closed", SessionID: sessionID, MachineID: machineID, UserID: userID, Payload: payload})
 	return nil
 }
+
+// OnSessionImage dispatches a session.image event to listeners. The image
+// data is not persisted — it is only forwarded to real-time consumers such
+// as the Feishu notifier.
+func (s *Service) OnSessionImage(ctx context.Context, machineID, userID, sessionID string, img SessionImage) {
+	s.emit(Event{
+		Type:      "session.image",
+		SessionID: sessionID,
+		MachineID: machineID,
+		UserID:    userID,
+		ImageData: &img,
+	})
+}
+
 
 func (s *Service) MarkMachineOffline(ctx context.Context, machineID string) error {
 	s.cache.mu.RLock()

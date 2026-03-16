@@ -27,6 +27,8 @@ func ensureToolOnboardingComplete(app *App, toolName string, projectPath string)
 		err = ensureGeminiOnboardingComplete(app)
 	case "kode":
 		err = ensureKodeOnboardingComplete(app, projectPath)
+	case "codebuddy":
+		err = ensureCodeBuddyOnboardingComplete(app, projectPath)
 	default:
 		// Other tools (codex, iflow, kilo, opencode, cursor) don't have
 		// known first-run wizards that need pre-configuration.
@@ -111,12 +113,39 @@ func ensureGeminiOnboardingComplete(app *App) error {
 // wizard is skipped.  Kode is a fork of Claude Code and has a similar
 // onboarding flow.
 func ensureKodeOnboardingComplete(app *App, projectPath string) error {
+	return ensureClaudeCodeForkOnboarding(app, ".kode.json", "kode", projectPath)
+}
+
+// ensureCodeBuddyOnboardingComplete ensures that CodeBuddy CLI's user-level
+// config file (~/.codebuddy.json) has onboarding marked as complete so the
+// first-run login method selection prompt and any other interactive wizards
+// are skipped.
+//
+// CodeBuddy (腾讯云代码助手) is a Claude Code fork and shares the same
+// onboarding flow: hasCompletedOnboarding flag, theme selection, and
+// project trust dialog.
+//
+// Note: In SDK mode (-p --output-format stream-json) with CODEBUDDY_API_KEY
+// set, the login prompt is typically bypassed.  However, pre-setting these
+// flags provides defense-in-depth for edge cases where the CLI falls back
+// to interactive mode.
+func ensureCodeBuddyOnboardingComplete(app *App, projectPath string) error {
+	return ensureClaudeCodeForkOnboarding(app, ".codebuddy.json", "codebuddy", projectPath)
+}
+
+// ensureClaudeCodeForkOnboarding is the shared implementation for Claude Code
+// forks (Kode, CodeBuddy, etc.) that use the same ~/.{tool}.json config
+// format with hasCompletedOnboarding, theme, and project trust entries.
+//
+// configFileName is the basename of the config file (e.g. ".kode.json").
+// logTag is used for log messages (e.g. "kode", "codebuddy").
+func ensureClaudeCodeForkOnboarding(app *App, configFileName, logTag, projectPath string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
-	configPath := filepath.Join(home, ".kode.json")
+	configPath := filepath.Join(home, configFileName)
 
 	existing := map[string]any{}
 	data, err := os.ReadFile(configPath)
@@ -125,7 +154,7 @@ func ensureKodeOnboardingComplete(app *App, projectPath string) error {
 			backupPath := configPath + ".bak"
 			_ = os.Rename(configPath, backupPath)
 			if app != nil {
-				app.log(fmt.Sprintf("[kode-onboarding] backed up corrupt %s to %s", configPath, backupPath))
+				app.log(fmt.Sprintf("[%s-onboarding] backed up corrupt %s to %s", logTag, configPath, backupPath))
 			}
 			existing = map[string]any{}
 		}
@@ -145,7 +174,6 @@ func ensureKodeOnboardingComplete(app *App, projectPath string) error {
 		changed = true
 	}
 
-	// Ensure project trust (same pattern as Claude).
 	if projectPath != "" {
 		if ensureProjectTrust(existing, projectPath) {
 			changed = true
@@ -154,7 +182,7 @@ func ensureKodeOnboardingComplete(app *App, projectPath string) error {
 
 	if !changed {
 		if app != nil {
-			app.log("[kode-onboarding] config already complete, no changes needed")
+			app.log(fmt.Sprintf("[%s-onboarding] config already complete, no changes needed", logTag))
 		}
 		return nil
 	}
@@ -173,7 +201,7 @@ func ensureKodeOnboardingComplete(app *App, projectPath string) error {
 	}
 
 	if app != nil {
-		app.log(fmt.Sprintf("[kode-onboarding] updated %s with onboarding flags", configPath))
+		app.log(fmt.Sprintf("[%s-onboarding] updated %s with onboarding flags", logTag, configPath))
 	}
 	return nil
 }

@@ -9,8 +9,8 @@ import geminiIcon from './assets/images/gemincli.png';
 import iflowIcon from './assets/images/iflow.png';
 import opencodeIcon from './assets/images/opencode.png';
 import kiloIcon from './assets/images/KiloCode.png';
+import cursorIcon from './assets/images/qodercli.png';
 import kodeIcon from './assets/images/Kodecli.png';
-import qoderIcon from './assets/images/qodercli.png';
 import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
@@ -126,7 +126,7 @@ const recommendedModels: { [provider: string]: { id: string; note?: string }[] }
 const APP_VERSION = "5.0.0.9300"
 
 // Tool name constants to avoid repeated string arrays
-const TOOL_NAMES = ['claude', 'gemini', 'codex', 'opencode', 'codebuddy', 'qoder', 'iflow', 'kilo', 'kode'] as const;
+const TOOL_NAMES = ['claude', 'gemini', 'codex', 'opencode', 'codebuddy', 'cursor', 'iflow', 'kilo', 'kode'] as const;
 const SKILL_TOOLS = ['claude', 'gemini', 'codex'] as const;
 const isToolTab = (tab: string): boolean => (TOOL_NAMES as readonly string[]).includes(tab);
 const isSkillTool = (tab: string): boolean => (SKILL_TOOLS as readonly string[]).includes(tab);
@@ -266,8 +266,8 @@ const translations: any = {
         "opencodeDesc": "OpenCode AI Programming Assistant",
         "codebuddy": "CodeBuddy",
         "codebuddyDesc": "CodeBuddy AI Assistant",
-        "qoder": "Qoder CLI",
-        "qoderDesc": "Qoder AI Programming Assistant",
+        "cursor": "Cursor Agent",
+        "cursorDesc": "Cursor AI Programming Assistant",
         "iflow": "iFlow CLI",
         "iflowDesc": "iFlow AI Programming Assistant",
         "kilo": "Kilo Code CLI",
@@ -628,8 +628,8 @@ const translations: any = {
         "opencodeDesc": "OpenCode AI 辅助编程",
         "codebuddy": "CodeBuddy",
         "codebuddyDesc": "CodeBuddy 编程助手",
-        "qoder": "Qoder CLI",
-        "qoderDesc": "Qoder AI 辅助编程",
+        "cursor": "Cursor Agent",
+        "cursorDesc": "Cursor AI 辅助编程",
         "iflow": "iFlow CLI",
         "iflowDesc": "iFlow AI 辅助编程",
         "kilo": "Kilo Code CLI",
@@ -966,8 +966,8 @@ const translations: any = {
         "opencodeDesc": "OpenCode AI 輔助編程",
         "codebuddy": "CodeBuddy",
         "codebuddyDesc": "CodeBuddy 編程助手",
-        "qoder": "Qoder CLI",
-        "qoderDesc": "Qoder AI 輔助編程",
+        "cursor": "Cursor Agent",
+        "cursorDesc": "Cursor AI 輔助編程",
         "iflow": "iFlow CLI",
         "iflowDesc": "iFlow AI 輔助編程",
         "kilo": "Kilo Code CLI",
@@ -1828,7 +1828,7 @@ function App() {
             // Sync with tray menu changes
             const tool = cfg.active_tool || "message";
             setNavTab(tool);
-            if (tool === 'claude' || tool === 'gemini' || tool === 'codex' || tool === 'opencode' || tool === 'codebuddy' || tool === 'iflow' || tool === 'kilo' || tool === 'kode') {
+            if (tool === 'claude' || tool === 'gemini' || tool === 'codex' || tool === 'opencode' || tool === 'codebuddy' || tool === 'cursor' || tool === 'iflow' || tool === 'kilo' || tool === 'kode') {
                 setActiveTool(tool);
                 const toolCfg = (cfg as any)[tool];
                 if (toolCfg && toolCfg.models) {
@@ -2080,6 +2080,7 @@ function App() {
         remoteBusy,
         selectedRemoteTool,
         setSelectedRemoteTool,
+        remoteToolMetadata,
         visibleRemoteTools,
         selectedRemoteToolInfo,
         selectedRemoteToolCanStart,
@@ -2250,7 +2251,7 @@ function App() {
         } else if (activeTool === 'gemini') {
             return 'gemini';
         } else {
-            return 'openai'; // codex, opencode, codebuddy, qoder, iflow, kilo, kode
+            return 'openai'; // codex, opencode, codebuddy, iflow, kilo, kode
         }
     };
 
@@ -2360,7 +2361,7 @@ function App() {
             if (p.includes("doubao")) return "doubao-seed-code-preview-latest";
             if (p.includes("kimi")) return "kimi-for-coding";
             if (p.includes("minimax")) return "MiniMax-M2.1";
-        } else if (tool === "opencode" || tool === "codebuddy" || tool === "qoder" || tool === "iflow" || tool === "kilo" || tool === "kode") {
+        } else if (tool === "opencode" || tool === "codebuddy" || tool === "iflow" || tool === "kilo" || tool === "kode") {
             if (p.includes("deepseek")) return "deepseek-chat";
             if (p.includes("glm")) return "glm-4.7";
             if (p.includes("doubao")) return "doubao-seed-code-preview-latest";
@@ -2771,8 +2772,9 @@ ${instruction}`;
             desc: lang === 'zh-Hans' ? '仅配置远程服务器地址' : lang === 'zh-Hant' ? '僅配置遠端伺服器位址' : 'Server addresses only',
         },
     ];
-    const remoteCapableTools = ['claude', 'codex', 'opencode', 'iflow', 'kilo', 'kode', 'gemini', 'cursor'] as const;
-    const isRemoteCapableActiveTool = remoteCapableTools.includes(activeTool as typeof remoteCapableTools[number]);
+    const isRemoteCapableActiveTool = remoteToolMetadata.some(
+        (meta) => meta.name === activeTool && meta.supports_remote === true
+    );
 
     return (
         <div id="App">
@@ -2909,6 +2911,13 @@ ${instruction}`;
                                 </span> <span>CodeBuddy</span>
                             </div>
                         )}
+                        {(config as any)?.show_cursor !== false && (
+                            <div className={`sidebar-item ${navTab === 'cursor' ? 'active' : ''}`} onClick={() => switchTool('cursor')}>
+                                <span className="sidebar-icon">
+                                    <img src={cursorIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="Cursor" />
+                                </span> <span>Cursor Agent</span>
+                            </div>
+                        )}
                         {config?.show_iflow !== false && (
                             <div className={`sidebar-item ${navTab === 'iflow' ? 'active' : ''}`} onClick={() => switchTool('iflow')}>
                                 <span className="sidebar-icon">
@@ -2930,13 +2939,7 @@ ${instruction}`;
                                 </span> <span>Kode CLI</span>
                             </div>
                         )}
-                        {config?.show_qoder !== false && (
-                            <div className={`sidebar-item ${navTab === 'qoder' ? 'active' : ''}`} onClick={() => switchTool('qoder')}>
-                                <span className="sidebar-icon">
-                                    <img src={qoderIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="Qoder" />
-                                </span> <span>Qoder CLI</span>
-                            </div>
-                        )}
+
                     </div>
                 </div>
             </div>
@@ -2952,8 +2955,8 @@ ${instruction}`;
                                             navTab === 'codex' ? 'OpenAI Codex' :
                                                 navTab === 'opencode' ? 'OpenCode AI' :
                                                     navTab === 'codebuddy' ? 'CodeBuddy AI' :
-                                                        navTab === 'qoder' ? 'Qoder CLI' :
-                                                            navTab === 'iflow' ? 'iFlow CLI' :
+                                                        navTab === 'cursor' ? 'Cursor Agent' :
+                                                                            navTab === 'iflow' ? 'iFlow CLI' :
                                                                 navTab === 'kilo' ? 'Kilo Code CLI' :
                                                                     navTab === 'kode' ? 'Kode CLI' :
                                                                         navTab === 'projects' ? t("projectManagement") :
@@ -3887,17 +3890,17 @@ ${instruction}`;
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                                         <input
                                             type="checkbox"
-                                            checked={config?.show_qoder !== false}
+                                            checked={(config as any)?.show_cursor !== false}
                                             onChange={(e) => {
                                                 if (config) {
-                                                    const newConfig = new main.AppConfig({ ...config, show_qoder: e.target.checked });
+                                                    const newConfig = new main.AppConfig({ ...config, show_cursor: e.target.checked });
                                                     setConfig(newConfig);
                                                     SaveConfig(newConfig);
                                                 }
                                             }}
                                             style={{ width: '16px', height: '16px' }}
                                         />
-                                        <span style={{ fontSize: '0.8rem', color: '#4b5563' }}>Qoder CLI</span>
+                                        <span style={{ fontSize: '0.8rem', color: '#4b5563' }}>Cursor Agent</span>
                                     </label>
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                                         <input
@@ -4080,7 +4083,7 @@ ${instruction}`;
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
                                 <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                                    <button className="btn-link" style={{ fontSize: '0.75rem', padding: '2px 6px' }} onClick={() => BrowserOpenURL("https://maclaw.rapidai.tech/")}>{t("officialWebsite")}</button>
+                                    <button className="btn-link" style={{ fontSize: '0.75rem', padding: '2px 6px' }} onClick={() => BrowserOpenURL("https://maclaw.top")}>{t("officialWebsite")}</button>
                                     <button
                                         className="btn-link"
                                         style={{ fontSize: '0.75rem', padding: '2px 6px' }}
@@ -4109,8 +4112,8 @@ ${instruction}`;
                                         {t("onlineUpdate")}
                                     </button>
                                     <button className="btn-link" style={{ fontSize: '0.75rem', padding: '2px 6px' }} onClick={() => setShowInstallLog(true)}>{t("installLog")}</button>
-                                    <button className="btn-link" style={{ fontSize: '0.75rem', padding: '2px 6px' }} onClick={() => BrowserOpenURL("https://github.com/RapidAI/maclaw/issues/new")}>{t("bugReport")}</button>
-                                    <button className="btn-link" style={{ fontSize: '0.75rem', padding: '2px 6px' }} onClick={() => BrowserOpenURL("https://github.com/RapidAI/maclaw")}>GitHub</button>
+                                    <button className="btn-link" style={{ fontSize: '0.75rem', padding: '2px 6px' }} onClick={() => BrowserOpenURL("https://github.com/rapidai/maclaw/issues/new")}>{t("bugReport")}</button>
+                                    <button className="btn-link" style={{ fontSize: '0.75rem', padding: '2px 6px' }} onClick={() => BrowserOpenURL("https://github.com/rapidai/maclaw")}>GitHub</button>
                                 </div>
                             </div>
                         </div>
@@ -4227,6 +4230,7 @@ ${instruction}`;
                             </div>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '15px' }}>
+                                {isRemoteCapableActiveTool && (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                     {/* launchModeLabel removed */}
                                     <div style={{ display: 'inline-flex', padding: '3px', borderRadius: '999px', border: '1px solid #e0e7ff', background: '#eef2ff' }}>
@@ -4253,29 +4257,27 @@ ${instruction}`;
                                         <button
                                             type="button"
                                             onClick={() => {
-                                                if (!isRemoteCapableActiveTool) return;
                                                 const newConfig = new main.AppConfig({ ...config, remote_enabled: true });
                                                 setConfig(newConfig);
                                                 SaveConfig(newConfig);
                                             }}
-                                            disabled={!isRemoteCapableActiveTool}
                                             style={{
                                                 border: 'none',
                                                 borderRadius: '999px',
                                                 padding: '5px 12px',
                                                 background: config?.remote_enabled ? '#6366f1' : 'transparent',
-                                                color: config?.remote_enabled ? '#ffffff' : (isRemoteCapableActiveTool ? '#475569' : '#94a3b8'),
+                                                color: config?.remote_enabled ? '#ffffff' : '#475569',
                                                 fontSize: '0.78rem',
                                                 fontWeight: 700,
-                                                cursor: isRemoteCapableActiveTool ? 'pointer' : 'not-allowed',
-                                                opacity: isRemoteCapableActiveTool ? 1 : 0.65
+                                                cursor: 'pointer'
                                             }}
-                                            title={isRemoteCapableActiveTool ? t("remoteModeDesc") : (lang === 'zh-Hans' ? '当前工具不支持远程' : lang === 'zh-Hant' ? '目前工具不支援遠端' : 'Remote is not supported for this tool')}
+                                            title={t("remoteModeDesc")}
                                         >
                                             {t("remoteModeLabel")}
                                         </button>
                                     </div>
                                 </div>
+                                )}
                                 {config?.remote_enabled && (
                                     <div
                                         style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 10px', background: remoteActivationStatus?.activated ? '#f0fdf4' : '#fffbeb', border: `1px solid ${remoteActivationStatus?.activated ? '#bbf7d0' : '#fde68a'}`, borderRadius: '999px', cursor: remoteActivationStatus?.activated ? 'default' : 'pointer' }}
@@ -5091,11 +5093,11 @@ ${instruction}`;
                                 </div>
                             )}
 
-                            {(config as any)[activeTool].models[activeTab].model_name !== "Original" && activeTool !== 'qoder' && (
+                            {(config as any)[activeTool].models[activeTab].model_name !== "Original" && (
                                 <div className="form-group" style={{ flex: 1 }}>
                                     <label className="form-label">
                                         {t("modelName")}
-                                        {(activeTool === 'codebuddy' || activeTool === 'qoder') && <span style={{ fontSize: '0.7rem', color: '#94a3b8', marginLeft: '5px' }}>(Supports multiple, separated by comma)</span>}
+                                        {activeTool === 'codebuddy' && <span style={{ fontSize: '0.7rem', color: '#94a3b8', marginLeft: '5px' }}>(Supports multiple, separated by comma)</span>}
                                     </label>
                                     <div style={{ position: 'relative' }}>
                                         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
@@ -5107,7 +5109,7 @@ ${instruction}`;
                                                 value={(config as any)[activeTool].models[activeTab].model_id}
                                                 onChange={(e) => handleModelIdChange(e.target.value)}
                                                 onContextMenu={(e) => handleContextMenu(e, e.currentTarget)}
-                                                placeholder={(activeTool === 'codebuddy' || activeTool === 'qoder') ? "e.g. gpt-4,gpt-3.5-turbo" : (getDefaultModelId(activeTool, (config as any)[activeTool].models[activeTab].model_name) || "e.g. gpt-4")}
+                                                placeholder={activeTool === 'codebuddy' ? "e.g. gpt-4,gpt-3.5-turbo" : (getDefaultModelId(activeTool, (config as any)[activeTool].models[activeTab].model_name) || "e.g. gpt-4")}
                                                 spellCheck={false}
                                                 autoComplete="off"
                                             />
@@ -5171,17 +5173,8 @@ ${instruction}`;
 
                                 <div className="form-group">
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                        <label className="form-label" style={{ margin: 0 }}>{activeTool === 'qoder' ? t("personalToken") : t("apiKey")}</label>
-                                        {activeTool === 'qoder' ? (
-                                            <button
-                                                className="btn-link"
-                                                style={{ fontSize: '0.75rem', padding: '2px 8px' }}
-                                                onClick={() => BrowserOpenURL("https://qoder.com/account/integrations")}
-                                            >
-                                                {t("getToken")}
-                                            </button>
-                                        ) : (
-                                            !(config as any)[activeTool].models[activeTab].is_custom && (
+                                        <label className="form-label" style={{ margin: 0 }}>{t("apiKey")}</label>
+                                        {!(config as any)[activeTool].models[activeTab].is_custom && (
                                                 <button
                                                     className="btn-link"
                                                     style={{ fontSize: '0.75rem', padding: '2px 8px' }}
@@ -5190,7 +5183,7 @@ ${instruction}`;
                                                     {t("getKey")}
                                                 </button>
                                             )
-                                        )}
+                                        }
                                     </div>
                                     <input
                                         type="password"
@@ -5199,14 +5192,13 @@ ${instruction}`;
                                         value={(config as any)[activeTool].models[activeTab].api_key}
                                         onChange={(e) => handleApiKeyChange(e.target.value)}
                                         onContextMenu={(e) => handleContextMenu(e, e.currentTarget)}
-                                        placeholder={activeTool === 'qoder' ? t("personalToken") : t("enterKey")}
+                                        placeholder={t("enterKey")}
                                         spellCheck={false}
                                         autoComplete="off"
                                     />
                                 </div>
 
-                                {activeTool !== 'qoder' && (
-                                    <div className="form-group">
+                                <div className="form-group">
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                                             <label className="form-label" style={{ margin: 0 }}>{t("apiEndpoint")}</label>
                                             {(config as any)[activeTool].models[activeTab].is_custom && (
@@ -5237,7 +5229,6 @@ ${instruction}`;
                                             style={!(config as any)[activeTool].models[activeTab].is_custom ? { backgroundColor: '#f3f4f6', cursor: 'not-allowed', color: '#9ca3af' } : {}}
                                         />
                                     </div>
-                                )}
                             </>
                         )}
 
@@ -5272,7 +5263,7 @@ ${instruction}`;
                                     {t("delete")}
                                 </button>
                             )}
-                            {activeTool !== 'qoder' && (() => {
+                            {(() => {
                                 const allModels = (config as any)[activeTool].models;
                                 const customModels = allModels.filter((m: any) => m.is_custom);
                                 const canAddMore = customModels.length < 6;
@@ -5530,8 +5521,8 @@ ${instruction}`;
                                     }}
                                     onClick={() => {
                                         const manualUrl = (lang === 'zh-Hans' || lang === 'zh-Hant')
-                                            ? "https://github.com/RapidAI/maclaw/blob/main/UserManual_CN.md"
-                                            : "https://github.com/RapidAI/maclaw/blob/main/UserManual_EN.md";
+                                            ? "https://github.com/rapidai/maclaw/blob/main/UserManual_CN.md"
+                                            : "https://github.com/rapidai/maclaw/blob/main/UserManual_EN.md";
                                         BrowserOpenURL(manualUrl);
                                     }}
                                 >

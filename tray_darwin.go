@@ -166,31 +166,6 @@ func setupTray(app *App, appOptions *options.App) {
 				})
 			}
 
-			// 6. Qoder CLI Submenu
-			mQoder := systray.AddMenuItem("Qoder CLI", "Qoder Models")
-			for _, model := range config.Qoder.Models {
-				m := mQoder.AddSubMenuItemCheckbox(model.ModelName, "Switch to "+model.ModelName, model.ModelName == config.Qoder.CurrentModel && config.ActiveTool == "qoder")
-				modelItems["qoder-"+model.ModelName] = m
-
-				modelName := model.ModelName
-				m.Click(func() {
-					go func() {
-						currentConfig, _ := app.LoadConfig()
-						currentConfig.Qoder.CurrentModel = modelName
-						currentConfig.ActiveTool = "qoder"
-						app.SaveConfig(currentConfig)
-
-						// Check if API key is missing
-						for _, m := range currentConfig.Qoder.Models {
-							if m.ModelName == modelName && m.ApiKey == "" {
-								runtime.WindowShow(app.ctx)
-								break
-							}
-						}
-					}()
-				})
-			}
-
 			// 7. iFlow CLI Submenu
 			mIFlow := systray.AddMenuItem("iFlow CLI", "iFlow Models")
 			for _, model := range config.IFlow.Models {
@@ -293,7 +268,6 @@ func setupTray(app *App, appOptions *options.App) {
 						(cfg.ActiveTool == "codex" && name == "codex-"+cfg.Codex.CurrentModel) ||
 						(cfg.ActiveTool == "opencode" && name == "opencode-"+cfg.Opencode.CurrentModel) ||
 						(cfg.ActiveTool == "codebuddy" && name == "codebuddy-"+cfg.CodeBuddy.CurrentModel) ||
-						(cfg.ActiveTool == "qoder" && name == "qoder-"+cfg.Qoder.CurrentModel) ||
 					(cfg.ActiveTool == "iflow" && name == "iflow-"+cfg.IFlow.CurrentModel) ||
 					(cfg.ActiveTool == "kilo" && name == "kilo-"+cfg.Kilo.CurrentModel) ||
 					(cfg.ActiveTool == "kode" && name == "kode-"+cfg.Kode.CurrentModel) {

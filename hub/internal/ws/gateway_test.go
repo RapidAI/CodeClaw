@@ -85,6 +85,10 @@ func (s *testSessionService) OnSessionClosed(ctx context.Context, machineID, use
 	return nil
 }
 
+func (s *testSessionService) OnSessionImage(ctx context.Context, machineID, userID, sessionID string, img session.SessionImage) {
+	s.events = append(s.events, "session.image")
+}
+
 func (s *testSessionService) MarkMachineOffline(ctx context.Context, machineID string) error {
 	s.offlineMachineID = machineID
 	return nil

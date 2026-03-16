@@ -5,6 +5,9 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.Gravity
+import android.widget.Button
+import android.widget.FrameLayout
 import android.webkit.CookieManager
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -26,7 +29,34 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         webView = WebView(this)
-        setContentView(webView)
+
+        // Create a FrameLayout with WebView + floating refresh button
+        val container = FrameLayout(this)
+        container.addView(webView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        val refreshBtn = Button(this).apply {
+            text = "↻"
+            textSize = 18f
+            val size = (48 * resources.displayMetrics.density).toInt()
+            val margin = (16 * resources.displayMetrics.density).toInt()
+            val lp = FrameLayout.LayoutParams(size, size).apply {
+                gravity = Gravity.BOTTOM or Gravity.END
+                setMargins(margin, margin, margin, margin)
+            }
+            layoutParams = lp
+            alpha = 0.85f
+            setPadding(0, 0, 0, 0)
+            setOnClickListener {
+                webView.clearCache(true)
+                webView.reload()
+            }
+        }
+        container.addView(refreshBtn)
+
+        setContentView(container)
 
         // Register file chooser result handler
         fileChooserLauncher = registerForActivityResult(
@@ -56,7 +86,7 @@ class MainActivity : AppCompatActivity() {
         @Suppress("DEPRECATION")
         settings.allowUniversalAccessFromFileURLs = true
         settings.loadsImagesAutomatically = true
-        settings.cacheMode = WebSettings.LOAD_DEFAULT
+        settings.cacheMode = WebSettings.LOAD_NO_CACHE
         settings.mediaPlaybackRequiresUserGesture = false
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 

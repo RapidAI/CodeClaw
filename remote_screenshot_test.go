@@ -22,8 +22,9 @@ func TestBuildScreenshotCommand_PlatformKeywords(t *testing.T) {
 
 	switch runtime.GOOS {
 	case "windows":
-		if !strings.Contains(strings.ToLower(cmd), "powershell") {
-			t.Fatalf("expected Windows command to contain 'powershell', got: %s", cmd)
+		// Windows commands are pure PowerShell script blocks (no powershell.exe prefix)
+		if !strings.Contains(cmd, "System.Drawing") {
+			t.Fatalf("expected Windows command to contain 'System.Drawing', got: %s", cmd)
 		}
 	case "darwin":
 		if !strings.Contains(cmd, "screencapture") {
@@ -94,11 +95,15 @@ func TestParseScreenshotOutput_ValidPNGWithWhitespace(t *testing.T) {
 }
 
 func TestParseScreenshotOutput_InvalidBase64(t *testing.T) {
+	// After stripping non-base64 characters, "!!!not-valid-base64!!!" becomes
+	// "notvalidbase64" which is decodable but not PNG data.
 	_, err := ParseScreenshotOutput("!!!not-valid-base64!!!")
 	if err == nil {
 		t.Fatal("expected error for invalid base64")
 	}
-	if !strings.Contains(err.Error(), "invalid base64") {
+	// The error should indicate either invalid base64 or not PNG.
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "invalid base64") && !strings.Contains(errMsg, "not PNG") {
 		t.Fatalf("unexpected error message: %v", err)
 	}
 }
@@ -321,6 +326,73 @@ func TestBuildWindowScreenshotCommand_ValidTitle(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "Notepad") {
 		t.Fatalf("expected command to contain window title, got: %s", cmd)
+	}
+}
+
+func TestParseScreenshotOutput_BOMPrefix(t *testing.T) {
+	pngData := append([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, []byte("bom-test")...)
+	encoded := base64.StdEncoding.EncodeToString(pngData)
+	// Prepend UTF-8 BOM
+	withBOM := "\xEF\xBB\xBF" + encoded
+
+	result, err := ParseScreenshotOutput(withBOM)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != encoded {
+		t.Fatalf("expected %q, got %q", encoded, result)
+	}
+}
+
+func TestParseScreenshotOutput_RawBase64NoPadding(t *testing.T) {
+	pngData := append([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, []byte("no-pad")...)
+	// Encode without padding
+	encoded := base64.RawStdEncoding.EncodeToString(pngData)
+
+	result, err := ParseScreenshotOutput(encoded)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Result should be re-encoded with standard padding
+	decoded, err := base64.StdEncoding.DecodeString(result)
+	if err != nil {
+		t.Fatalf("result is not valid standard base64: %v", err)
+	}
+	if string(decoded) != string(pngData) {
+		t.Fatal("round-trip data mismatch")
+	}
+}
+
+func TestParseScreenshotOutput_NullBytesStripped(t *testing.T) {
+	pngData := append([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, []byte("null-test")...)
+	encoded := base64.StdEncoding.EncodeToString(pngData)
+	// Inject null bytes
+	withNulls := encoded[:4] + "\x00" + encoded[4:]
+
+	result, err := ParseScreenshotOutput(withNulls)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != encoded {
+		t.Fatalf("expected %q, got %q", encoded, result)
+	}
+}
+
+func TestStripNonBase64(t *testing.T) {
+	cases := []struct {
+		input, want string
+	}{
+		{"abc123+/=", "abc123+/="},
+		{"abc\x00def", "abcdef"},
+		{"\xEF\xBB\xBFabc", "abc"},
+		{"a b\tc\nd", "abcd"},
+		{"hello世界", "hello"},
+	}
+	for _, tc := range cases {
+		got := stripNonBase64(tc.input)
+		if got != tc.want {
+			t.Errorf("stripNonBase64(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
 

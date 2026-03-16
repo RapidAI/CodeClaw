@@ -29,6 +29,7 @@ type App struct {
 	downloadCancelers map[string]context.CancelFunc
 	downloadMutex     sync.Mutex
 	IsInitMode        bool
+	IsAutoStart       bool
 	installingNode    bool      // Flag to prevent concurrent Node.js installation
 	installingGit     bool      // Flag to prevent concurrent Git installation
 	nodeInstallDone   chan bool // Channel to signal Node.js installation completion
@@ -99,7 +100,6 @@ type AppConfig struct {
 	Codex                ToolConfig      `json:"codex"`
 	Opencode             ToolConfig      `json:"opencode"`
 	CodeBuddy            ToolConfig      `json:"codebuddy"`
-	Qoder                ToolConfig      `json:"qoder"`
 	IFlow                ToolConfig      `json:"iflow"`
 	Kilo                 ToolConfig      `json:"kilo"`
 	Kode                 ToolConfig      `json:"kode"`
@@ -112,7 +112,6 @@ type AppConfig struct {
 	ShowCodex            bool            `json:"show_codex"`
 	ShowOpenCode         bool            `json:"show_opencode"`
 	ShowCodeBuddy        bool            `json:"show_codebuddy"`
-	ShowQoder            bool            `json:"show_qoder"`
 	ShowIFlow            bool            `json:"show_iflow"`
 	ShowKilo             bool            `json:"show_kilo"`
 	ShowKode             bool            `json:"show_kode"`
@@ -358,7 +357,12 @@ func (a *App) buildClaudeLaunchEnv(
 		}
 	}
 
-	a.clearClaudeConfig()
+	if strings.ToLower(selectedModel.ModelName) != "original" {
+		a.clearClaudeConfig()
+	} else {
+		// Restore native config so Claude can use its own Anthropic auth.
+		a.restoreToolNativeConfig("claude")
+	}
 	return env, nil
 }
 
@@ -384,20 +388,31 @@ func (a *App) buildCodexLaunchEnv(
 	}
 
 	env := map[string]string{}
-	if selectedModel.ApiKey != "" {
-		env["OPENAI_API_KEY"] = selectedModel.ApiKey
+
+	// Original (OpenAI native) mode: don't inject API key / base URL env vars,
+	// let Codex use its own `codex auth` login token stored locally.
+	// Only clear config and inject env vars for third-party providers.
+	if strings.ToLower(selectedModel.ModelName) != "original" {
+		if selectedModel.ApiKey != "" {
+			env["OPENAI_API_KEY"] = selectedModel.ApiKey
+		}
+		if selectedModel.ModelUrl != "" {
+			env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
+		}
+		if selectedModel.ModelId != "" {
+			env["OPENAI_MODEL"] = selectedModel.ModelId
+		}
+		wireAPI := strings.TrimSpace(selectedModel.WireApi)
+		if wireAPI == "" {
+			wireAPI = "responses"
+		}
+		env["WIRE_API"] = wireAPI
+
+		a.clearCodexConfig()
+	} else {
+		// Restore native config so Codex can use its own auth.
+		a.restoreToolNativeConfig("codex")
 	}
-	if selectedModel.ModelUrl != "" {
-		env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
-	}
-	if selectedModel.ModelId != "" {
-		env["OPENAI_MODEL"] = selectedModel.ModelId
-	}
-	wireAPI := strings.TrimSpace(selectedModel.WireApi)
-	if wireAPI == "" {
-		wireAPI = "responses"
-	}
-	env["WIRE_API"] = wireAPI
 
 	if useProxy {
 		proxyURL := a.resolveProjectProxyURL(config, projectDir)
@@ -409,7 +424,6 @@ func (a *App) buildCodexLaunchEnv(
 		}
 	}
 
-	a.clearCodexConfig()
 	return env, nil
 }
 
@@ -561,15 +575,24 @@ func (a *App) buildGeminiLaunchEnv(
 	}
 
 	env := map[string]string{}
-	if selectedModel.ApiKey != "" {
-		env["GEMINI_API_KEY"] = selectedModel.ApiKey
-		env["GOOGLE_API_KEY"] = selectedModel.ApiKey
-	}
-	if selectedModel.ModelUrl != "" {
-		env["GOOGLE_GEMINI_BASE_URL"] = selectedModel.ModelUrl
-	}
-	if selectedModel.ModelId != "" {
-		env["GEMINI_MODEL"] = selectedModel.ModelId
+
+	// Original (Google native) mode: don't inject API key / base URL env vars,
+	// let Gemini CLI use its own Google OAuth login stored locally.
+	// Only inject env vars for third-party providers.
+	if strings.ToLower(selectedModel.ModelName) != "original" {
+		if selectedModel.ApiKey != "" {
+			env["GEMINI_API_KEY"] = selectedModel.ApiKey
+			env["GOOGLE_API_KEY"] = selectedModel.ApiKey
+		}
+		if selectedModel.ModelUrl != "" {
+			env["GOOGLE_GEMINI_BASE_URL"] = selectedModel.ModelUrl
+		}
+		if selectedModel.ModelId != "" {
+			env["GEMINI_MODEL"] = selectedModel.ModelId
+		}
+	} else {
+		// Restore native config so Gemini CLI can use its own Google OAuth.
+		a.restoreToolNativeConfig("gemini")
 	}
 
 	if useProxy {
@@ -888,35 +911,168 @@ func (a *App) getIFlowConfigPaths(projectDir string, instanceID string) (string,
 	config := filepath.Join(dir, "settings.json")
 	return dir, config
 }
+
+// ---------------------------------------------------------------------------
+// Native config backup / restore
+// ---------------------------------------------------------------------------
+// When switching to a third-party provider we need to clear the tool's native
+// config directory (e.g. ~/.claude, ~/.codex, ~/.gemini) so that env-var-based
+// credentials take effect.  Instead of deleting the directory outright we move
+// it to a backup location (~/.cceasy/config_backup/<tool>/) so that switching
+// back to the original provider can restore it without forcing the user to
+// re-authenticate.
+
+// toolNativeConfigPaths returns the native config directory and any extra
+// legacy files that belong to the tool's original-provider configuration.
+func (a *App) toolNativeConfigPaths(tool string) (dir string, extras []string) {
+	home := a.GetUserHomeDir()
+	switch strings.ToLower(tool) {
+	case "claude":
+		return filepath.Join(home, ".claude"),
+			[]string{
+				filepath.Join(home, ".claude.json"),
+				filepath.Join(home, ".claude.json.backup"),
+			}
+	case "gemini":
+		return filepath.Join(home, ".gemini"),
+			[]string{filepath.Join(home, ".geminirc")}
+	case "codex":
+		return filepath.Join(home, ".codex"), nil
+	case "opencode":
+		return filepath.Join(home, ".config", "opencode"), nil
+	case "iflow":
+		return filepath.Join(home, ".iflow"), nil
+	case "kilo":
+		return filepath.Join(home, ".kilocode", "cli"), nil
+	case "kode":
+		return filepath.Join(home, ".kode", "cli"), nil
+	default:
+		return filepath.Join(home, "."+strings.ToLower(tool)), nil
+	}
+}
+
+// configBackupDir returns ~/.cceasy/config_backup/<tool>.
+func (a *App) configBackupDir(tool string) string {
+	home := a.GetUserHomeDir()
+	return filepath.Join(home, ".cceasy", "config_backup", strings.ToLower(tool))
+}
+
+// backupToolNativeConfig moves the tool's native config directory (and any
+// legacy files) into the backup location.  If a backup already exists it is
+// left untouched so we never overwrite a good backup with an empty directory.
+func (a *App) backupToolNativeConfig(tool string) {
+	srcDir, extras := a.toolNativeConfigPaths(tool)
+	backupBase := a.configBackupDir(tool)
+
+	// Only backup if the source directory actually exists and is non-empty.
+	if info, err := os.Stat(srcDir); err == nil && info.IsDir() {
+		backupDirDst := filepath.Join(backupBase, filepath.Base(srcDir))
+		// Don't overwrite an existing backup — it may contain a valid login.
+		if _, err := os.Stat(backupDirDst); os.IsNotExist(err) {
+			os.MkdirAll(backupBase, 0755)
+			if err := os.Rename(srcDir, backupDirDst); err != nil {
+				// Rename can fail across filesystems; fall back to copy.
+				a.copyDir(srcDir, backupDirDst)
+				os.RemoveAll(srcDir)
+			}
+			a.log(fmt.Sprintf("[config-backup] backed up %s -> %s", srcDir, backupDirDst))
+		} else {
+			// Backup already exists, just remove the source.
+			os.RemoveAll(srcDir)
+			a.log(fmt.Sprintf("[config-backup] backup already exists for %s, removed source", tool))
+		}
+	}
+
+	// Handle legacy extra files the same way.
+	for _, extra := range extras {
+		if _, err := os.Stat(extra); err == nil {
+			backupPath := filepath.Join(backupBase, filepath.Base(extra))
+			if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+				os.MkdirAll(backupBase, 0755)
+				os.Rename(extra, backupPath)
+				a.log(fmt.Sprintf("[config-backup] backed up %s", extra))
+			} else {
+				os.Remove(extra)
+			}
+		}
+	}
+}
+
+// restoreToolNativeConfig restores a previously backed-up native config
+// directory (and legacy files) back to their original locations.
+func (a *App) restoreToolNativeConfig(tool string) {
+	srcDir, extras := a.toolNativeConfigPaths(tool)
+	backupBase := a.configBackupDir(tool)
+
+	backupDirSrc := filepath.Join(backupBase, filepath.Base(srcDir))
+	if info, err := os.Stat(backupDirSrc); err == nil && info.IsDir() {
+		// Remove any current config that might have been written by a
+		// third-party provider so the restore is clean.
+		os.RemoveAll(srcDir)
+		if err := os.Rename(backupDirSrc, srcDir); err != nil {
+			a.copyDir(backupDirSrc, srcDir)
+			os.RemoveAll(backupDirSrc)
+		}
+		a.log(fmt.Sprintf("[config-restore] restored %s -> %s", backupDirSrc, srcDir))
+	}
+
+	// Restore legacy extra files.
+	for _, extra := range extras {
+		backupPath := filepath.Join(backupBase, filepath.Base(extra))
+		if _, err := os.Stat(backupPath); err == nil {
+			os.Remove(extra) // remove any stale version
+			os.Rename(backupPath, extra)
+			a.log(fmt.Sprintf("[config-restore] restored %s", extra))
+		}
+	}
+
+	// Clean up the backup directory if it's now empty.
+	if entries, err := os.ReadDir(backupBase); err == nil && len(entries) == 0 {
+		os.Remove(backupBase)
+	}
+}
+
+// copyDir recursively copies src to dst (best-effort, used as fallback when
+// os.Rename fails across filesystems).
+func (a *App) copyDir(src, dst string) {
+	filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
+}
+
 func (a *App) clearClaudeConfig() {
-	// Clear both project-specific and global configs
-	home, _ := os.UserHomeDir()
-	dir, _, legacy := a.getClaudeConfigPaths("", "")
-	os.RemoveAll(dir)
-	os.Remove(legacy)
-	os.Remove(filepath.Join(home, ".claude.json.backup"))
-	a.log("Cleared Claude configuration files")
+	// Backup native config before clearing so it can be restored when
+	// switching back to the original provider.
+	a.backupToolNativeConfig("claude")
+	a.log("Cleared Claude configuration files (backed up)")
 }
 func (a *App) clearGeminiConfig() {
-	dir, _, legacy := a.getGeminiConfigPaths("", "")
-	os.RemoveAll(dir)
-	os.Remove(legacy)
-	a.log("Cleared Gemini configuration files")
+	a.backupToolNativeConfig("gemini")
+	a.log("Cleared Gemini configuration files (backed up)")
 }
 func (a *App) clearCodexConfig() {
-	dir, _ := a.getCodexConfigPaths("", "")
-	os.RemoveAll(dir)
-	a.log("Cleared Codex configuration directory")
+	a.backupToolNativeConfig("codex")
+	a.log("Cleared Codex configuration directory (backed up)")
 }
 func (a *App) clearOpencodeConfig() {
-	dir, _ := a.getOpencodeConfigPaths("", "")
-	os.RemoveAll(dir)
-	a.log("Cleared Opencode configuration directory")
+	a.backupToolNativeConfig("opencode")
+	a.log("Cleared Opencode configuration directory (backed up)")
 }
 func (a *App) clearIFlowConfig() {
-	dir, _ := a.getIFlowConfigPaths("", "")
-	os.RemoveAll(dir)
-	a.log("Cleared iFlow configuration directory")
+	a.backupToolNativeConfig("iflow")
+	a.log("Cleared iFlow configuration directory (backed up)")
 }
 func (a *App) getKiloConfigPaths(projectDir string, instanceID string) (string, string) {
 	// Use project-specific config directory with instance ID to avoid cross-contamination
@@ -932,9 +1088,8 @@ func (a *App) getKiloConfigPaths(projectDir string, instanceID string) (string, 
 	return dir, config
 }
 func (a *App) clearKiloConfig() {
-	_, configPath := a.getKiloConfigPaths("", "")
-	os.Remove(configPath)
-	a.log("Cleared Kilo Code configuration file")
+	a.backupToolNativeConfig("kilo")
+	a.log("Cleared Kilo Code configuration file (backed up)")
 }
 func (a *App) getKodeConfigPaths(projectDir string, instanceID string) (string, string) {
 	// Use project-specific config directory with instance ID to avoid cross-contamination
@@ -950,9 +1105,8 @@ func (a *App) getKodeConfigPaths(projectDir string, instanceID string) (string, 
 	return dir, config
 }
 func (a *App) clearKodeConfig() {
-	_, configPath := a.getKodeConfigPaths("", "")
-	os.Remove(configPath)
-	a.log("Cleared Kode CLI configuration file")
+	a.backupToolNativeConfig("kode")
+	a.log("Cleared Kode CLI configuration file (backed up)")
 }
 func (a *App) clearEnvVars() {
 	vars := []string{
@@ -965,7 +1119,6 @@ func (a *App) clearEnvVars() {
 		"GEMINI_API_KEY", "GOOGLE_GEMINI_BASE_URL",
 		"OPENCODE_API_KEY", "OPENCODE_BASE_URL",
 		"CODEBUDDY_API_KEY", "CODEBUDDY_BASE_URL", "CODEBUDDY_CODE_MAX_OUTPUT_TOKENS",
-		"QODER_PERSONAL_ACCESS_TOKEN", "QODER_BASE_URL",
 		"IFLOW_API_KEY", "IFLOW_BASE_URL",
 		"KILO_API_KEY", "KILO_BASE_URL", "KILO_MODEL",
 	}
@@ -1914,84 +2067,6 @@ func (a *App) syncToCodeBuddySettings(config AppConfig, projectPath string) erro
 	}
 	return os.WriteFile(cbFilePath, data, 0644)
 }
-func (a *App) syncToQoderSettings(config AppConfig, projectPath string) error {
-	if projectPath == "" {
-		projectPath = a.GetCurrentProjectPath()
-	}
-	if projectPath == "" {
-		return nil
-	}
-	qDir := filepath.Join(projectPath, ".qoder")
-	if err := os.MkdirAll(qDir, 0755); err != nil {
-		return err
-	}
-	qFilePath := filepath.Join(qDir, "models.json")
-	var qModels []CodeBuddyModel
-	var availableModelIds []string
-	for _, m := range config.Qoder.Models {
-		// Only sync the currently selected model
-		if m.ModelName != config.Qoder.CurrentModel {
-			continue
-		}
-		if strings.ToLower(m.ModelName) == "original" {
-			continue
-		}
-		vendor := strings.ToLower(m.ModelName)
-		idStr := m.ModelId
-		if idStr == "" {
-			switch vendor {
-			case "deepseek":
-				idStr = "deepseek-chat"
-			case "glm":
-				idStr = "glm-4.7"
-			case "doubao":
-				idStr = "doubao-seed-code-preview-latest"
-			case "kimi":
-				idStr = "kimi-for-coding"
-			case "minimax":
-				idStr = "MiniMax-M2.1"
-			default:
-				idStr = vendor + "-model"
-			}
-		}
-		modelIds := strings.Split(idStr, ",")
-		modelUrl := m.ModelUrl
-		if modelUrl != "" && !strings.HasSuffix(modelUrl, "/chat/completions") {
-			if strings.HasSuffix(modelUrl, "/") {
-				modelUrl += "chat/completions"
-			} else {
-				modelUrl += "/chat/completions"
-			}
-		}
-		for _, id := range modelIds {
-			id = strings.TrimSpace(id)
-			if id == "" {
-				continue
-			}
-			availableModelIds = append(availableModelIds, id)
-			qModels = append(qModels, CodeBuddyModel{
-				Id:               id,
-				Name:             id,
-				Vendor:           vendor,
-				ApiKey:           m.ApiKey,
-				MaxInputTokens:   200000,
-				MaxOutputTokens:  8192,
-				Url:              modelUrl,
-				SupportsToolCall: true,
-				SupportsImages:   true,
-			})
-		}
-	}
-	qConfig := CodeBuddyFileConfig{
-		Models:          qModels,
-		AvailableModels: availableModelIds,
-	}
-	data, err := json.MarshalIndent(qConfig, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(qFilePath, data, 0644)
-}
 func getBaseUrl(selectedModel *ModelConfig) string {
 	// If user provided a URL for the selected model, always prefer it.
 	if selectedModel.ModelUrl != "" {
@@ -2086,11 +2161,6 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 		envKey = "CODEBUDDY_API_KEY"
 		envBaseUrl = "CODEBUDDY_BASE_URL"
 		binaryName = "codebuddy"
-	case "qoder":
-		toolCfg = config.Qoder
-		envKey = "QODER_PERSONAL_ACCESS_TOKEN"
-		envBaseUrl = "QODER_BASE_URL"
-		binaryName = "qoder"
 	default:
 		return
 	}
@@ -2189,8 +2259,6 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 				env["OPENCODE_MODEL"] = selectedModel.ModelId
 			case "codebuddy":
 				// env["CODEBUDDY_MODEL"] = selectedModel.ModelId
-			case "qoder":
-				// Qoder doesn't use model env var
 			case "iflow":
 				// iFlow uses settings.json, but maybe env var too?
 				env["IFLOW_MODEL"] = selectedModel.ModelId
@@ -2235,6 +2303,7 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 				env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
 			}
 			// Clear old config to prevent interference with env vars
+			// (this branch only runs for non-original providers)
 			a.clearCodexConfig()
 			a.log("Codex: Using environment variables only (cleared old config)")
 		case "opencode":
@@ -2243,9 +2312,6 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 		case "codebuddy":
 			// CodeBuddy may need config file
 			// a.syncToCodeBuddySettings(config, projectDir, instanceID)
-		case "qoder":
-			// Qoder needs config file - keep the sync call
-			a.syncToQoderSettings(config, projectDir)
 		case "iflow":
 			// iFlow needs config file - use instanceID for isolation
 			// Ensure OpenAI standard vars for iFlow (compatibility)
@@ -2262,28 +2328,12 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 			a.syncToKodeSettings(config, projectDir, instanceID)
 		}
 	} else {
-		// --- ORIGINAL MODE: CLEANUP SPECIFIC TOOL ONLY ---
-		// Clear config files to ensure tools use original settings
-		if strings.ToLower(toolName) == "claude" {
-			a.clearClaudeConfig()
-		} else if strings.ToLower(toolName) == "gemini" {
-			a.clearGeminiConfig()
-		} else if strings.ToLower(toolName) == "codex" {
-			a.clearCodexConfig()
-		} else if strings.ToLower(toolName) == "opencode" {
-			a.clearOpencodeConfig()
-		} else if strings.ToLower(toolName) == "codebuddy" {
-			// Codebuddy might need cleanup too if we added a clear function
-		} else if strings.ToLower(toolName) == "qoder" {
-			// Qoder cleanup if needed
-		} else if strings.ToLower(toolName) == "iflow" {
-			a.clearIFlowConfig()
-		} else if strings.ToLower(toolName) == "kilo" {
-			a.clearKiloConfig()
-		} else if strings.ToLower(toolName) == "kode" {
-			a.clearKodeConfig()
-		}
-		a.log(fmt.Sprintf("Running %s in Original mode: Custom configurations cleared.", toolName))
+		// --- ORIGINAL MODE: RESTORE NATIVE CONFIG ---
+		// Restore previously backed-up native config so the tool can use
+		// its own login / auth without forcing the user to re-authenticate.
+		tool := strings.ToLower(toolName)
+		a.restoreToolNativeConfig(tool)
+		a.log(fmt.Sprintf("Running %s in Original mode: native config restored.", toolName))
 	}
 
 	// Claude Code Agent Teams mode
@@ -2421,10 +2471,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Custom4", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom5", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 	}
-	defaultQoderModels := []ModelConfig{
-		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: ""},
-		{ModelName: "Qoder", ModelId: "qoder-1.0", ModelUrl: "https://api.qoder.com/v1", ApiKey: ""},
-	}
 	defaultIFlowModels := []ModelConfig{
 		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: ""},
 		{ModelName: "DeepSeek", ModelId: "deepseek-chat", ModelUrl: "https://api.deepseek.com/v1", ApiKey: ""},
@@ -2515,10 +2561,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 							CurrentModel: "Original",
 							Models:       defaultOpencodeModels,
 						},
-						Qoder: ToolConfig{
-							CurrentModel: "Original",
-							Models:       defaultQoderModels,
-						},
 						IFlow: ToolConfig{
 							CurrentModel: "Original",
 							Models:       defaultIFlowModels,
@@ -2540,7 +2582,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 						ShowKode:           true,
 						ShowCursor:         true,
 						ShowCodeBuddy:      true,
-						ShowQoder:          true,
 						ShowIFlow:          true,
 						ShowKilo:           true,
 						PowerOptimization:  true,
@@ -2582,10 +2623,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 				CurrentModel: "AiCodeMirror",
 				Models:       defaultOpencodeModels,
 			},
-			Qoder: ToolConfig{
-				CurrentModel: "Original",
-				Models:       defaultQoderModels,
-			},
 			IFlow: ToolConfig{
 				CurrentModel: "Original",
 				Models:       defaultIFlowModels,
@@ -2612,7 +2649,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 			ShowCodex:          true,
 			ShowOpenCode:       true,
 			ShowCodeBuddy:      true,
-			ShowQoder:          true,
 			ShowIFlow:          true,
 			ShowKilo:           true,
 			ShowKode:           true,
@@ -2639,7 +2675,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		ShowOpenCode:       true,
 		ShowCursor:         true,
 		ShowCodeBuddy:      true,
-		ShowQoder:          true,
 		ShowIFlow:          true,
 		ShowKilo:           true,
 		ShowKode:           true,
@@ -2746,10 +2781,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	if config.CodeBuddy.Models == nil || len(config.CodeBuddy.Models) == 0 {
 		config.CodeBuddy.Models = defaultOpencodeModels
 		config.CodeBuddy.CurrentModel = "Original"
-	}
-	if config.Qoder.Models == nil || len(config.Qoder.Models) == 0 {
-		config.Qoder.Models = defaultQoderModels
-		config.Qoder.CurrentModel = "Original"
 	}
 	if config.IFlow.Models == nil || len(config.IFlow.Models) == 0 {
 		config.IFlow.Models = defaultIFlowModels
@@ -2893,7 +2924,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	ensureOriginal(&config.Codex.Models)
 	ensureOriginal(&config.Opencode.Models)
 	ensureOriginal(&config.CodeBuddy.Models)
-	ensureOriginal(&config.Qoder.Models)
 	ensureOriginal(&config.IFlow.Models)
 	ensureOriginal(&config.Kilo.Models)
 	cleanOpencodeModels(&config.Opencode.Models)
@@ -2942,27 +2972,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	ensureCustom(&config.IFlow.Models)
 	ensureCustom(&config.Kilo.Models)
 	ensureCustom(&config.Kode.Models)
-	// Qoder only has Original and Qoder
-	// Preserve existing Qoder key if present
-	var existingQoderKey string
-	for _, m := range config.Qoder.Models {
-		if m.ModelName == "Qoder" {
-			existingQoderKey = m.ApiKey
-			break
-		}
-	}
-	config.Qoder.Models = defaultQoderModels
-	if existingQoderKey != "" {
-		for i := range config.Qoder.Models {
-			if config.Qoder.Models[i].ModelName == "Qoder" {
-				config.Qoder.Models[i].ApiKey = existingQoderKey
-				break
-			}
-		}
-	}
-	if !strings.EqualFold(config.Qoder.CurrentModel, "Original") && !strings.EqualFold(config.Qoder.CurrentModel, "Qoder") {
-		config.Qoder.CurrentModel = "Original"
-	}
 	// Ensure custom models are always last for all tools
 	// Custom models are identified by IsCustom flag, not by name
 	moveCustomToLast := func(models *[]ModelConfig) {
@@ -3007,7 +3016,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	ensureOriginalFirst(&config.Codex.Models)
 	ensureOriginalFirst(&config.Opencode.Models)
 	ensureOriginalFirst(&config.CodeBuddy.Models)
-	ensureOriginalFirst(&config.Qoder.Models)
 	ensureOriginalFirst(&config.IFlow.Models)
 	ensureOriginalFirst(&config.Kilo.Models)
 	// Ensure CurrentModel is valid
@@ -3022,9 +3030,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	}
 	if config.CodeBuddy.CurrentModel == "" {
 		config.CodeBuddy.CurrentModel = "Original"
-	}
-	if config.Qoder.CurrentModel == "" {
-		config.Qoder.CurrentModel = "Original"
 	}
 	if config.IFlow.CurrentModel == "" {
 		config.IFlow.CurrentModel = "Original"
@@ -3060,7 +3065,6 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	normalizeCurrentModel(&config.Codex)
 	normalizeCurrentModel(&config.Opencode)
 	normalizeCurrentModel(&config.CodeBuddy)
-	normalizeCurrentModel(&config.Qoder)
 	normalizeCurrentModel(&config.IFlow)
 	normalizeCurrentModel(&config.Kilo)
 	normalizeCurrentModel(&config.Kode)
@@ -3086,7 +3090,6 @@ func syncAllProviderApiKeys(a *App, oldConfig, newConfig *AppConfig) {
 		"codex":     &newConfig.Codex,
 		"opencode":  &newConfig.Opencode,
 		"codebuddy": &newConfig.CodeBuddy,
-		"qoder":     &newConfig.Qoder,
 		"iflow":     &newConfig.IFlow,
 		"kilo":      &newConfig.Kilo,
 		"kode":      &newConfig.Kode,
@@ -3097,7 +3100,6 @@ func syncAllProviderApiKeys(a *App, oldConfig, newConfig *AppConfig) {
 		"codex":     &oldConfig.Codex,
 		"opencode":  &oldConfig.Opencode,
 		"codebuddy": &oldConfig.CodeBuddy,
-		"qoder":     &oldConfig.Qoder,
 		"iflow":     &oldConfig.IFlow,
 		"kilo":      &oldConfig.Kilo,
 		"kode":      &oldConfig.Kode,
@@ -3173,7 +3175,6 @@ func (a *App) SaveConfig(config AppConfig) error {
 	sanitizeCustomNames(config.Codex.Models)
 	sanitizeCustomNames(config.Opencode.Models)
 	sanitizeCustomNames(config.CodeBuddy.Models)
-	sanitizeCustomNames(config.Qoder.Models)
 	sanitizeCustomNames(config.IFlow.Models)
 	sanitizeCustomNames(config.Kilo.Models)
 	sanitizeCustomNames(config.Kode.Models)
@@ -4358,8 +4359,6 @@ func getToolConfigDirName(tool string) string {
 		return ".opencode"
 	case "codebuddy":
 		return ".codebuddy"
-	case "qoder":
-		return ".qoder"
 	case "iflow":
 		return ".iflow"
 	case "kilo", "kilocode":

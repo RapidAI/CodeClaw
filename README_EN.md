@@ -53,7 +53,8 @@ Select a provider and enter your API Key in the configuration panel for each too
 
 *   **Version**: V5.0.0.9300
 *   **Author**: Dr. Daniel
-*   **GitHub**: [RapidAI/MaClaw](https://github.com/RapidAI/MaClaw)
+*   **GitHub**: [RapidAI/MaClaw](https://github.com/rapidai/maclaw)
+*   **Website**: [maclaw.top](https://maclaw.top)
 *   **Resources**: [CS146s Chinese Version](https://github.com/BIT-ENGD/cs146s_cn)
 
 ---

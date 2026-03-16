@@ -156,6 +156,13 @@ type RemoteSession struct {
 	// Used by the desktop console for a terminal-like raw view.
 	RawOutputLines []string
 
+	// OutputImages stores images extracted from SDK output (assistant
+	// responses, tool results) so the desktop console can render them
+	// inline.  Each entry records the raw-output-line index at which
+	// the image was produced, allowing the frontend to interleave
+	// images with text.
+	OutputImages []SessionOutputImage
+
 	Exec     ExecutionHandle
 	Provider ProviderAdapter
 
@@ -166,6 +173,15 @@ type OutputResult struct {
 	Summary      *SessionSummary
 	PreviewDelta *SessionPreviewDelta
 	Events       []ImportantEvent
+}
+
+// SessionOutputImage is an image extracted from SDK output, tagged with
+// the raw-output-line index so the desktop console can render it inline.
+type SessionOutputImage struct {
+	ImageID      string `json:"image_id"`
+	MediaType    string `json:"media_type"`
+	Data         string `json:"data"`          // base64-encoded
+	AfterLineIdx int    `json:"after_line_idx"` // insert after this raw-output-line index
 }
 
 // ImageTransferMessage represents an image being transferred between desktop and mobile via Hub.

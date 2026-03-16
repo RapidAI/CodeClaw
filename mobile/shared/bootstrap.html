@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>MaClaw APP</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,6 +36,18 @@
 <body>
   <div id="app"></div>
   <script>
+    // Unregister any existing Service Workers and clear caches to ensure fresh loads
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(regs) {
+        regs.forEach(function(r) { r.unregister(); });
+      });
+    }
+    if ('caches' in window) {
+      caches.keys().then(function(names) {
+        names.forEach(function(n) { caches.delete(n); });
+      });
+    }
+
     const params = new URLSearchParams(window.location.search);
     const center = (params.get("hubcenter") || "").replace(/\/+$/, "");
     const prefillEmail = params.get("prefill_email") || "";
