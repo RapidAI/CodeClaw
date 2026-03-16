@@ -308,8 +308,8 @@ func TestRemoteSessionManagerDefaultProviderFactorySupportsGemini(t *testing.T) 
 	if provider.ProviderName() != "gemini" {
 		t.Fatalf("provider.ProviderName() = %q, want %q", provider.ProviderName(), "gemini")
 	}
-	if provider.ExecutionMode() != ExecModeSDK {
-		t.Fatalf("provider.ExecutionMode() = %q, want %q", provider.ExecutionMode(), ExecModeSDK)
+	if provider.ExecutionMode() != ExecModePTY {
+		t.Fatalf("provider.ExecutionMode() = %q, want %q", provider.ExecutionMode(), ExecModePTY)
 	}
 }
 

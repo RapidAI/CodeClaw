@@ -6,9 +6,12 @@ import (
 )
 
 // GeminiAdapter launches the Gemini CLI (google-gemini/gemini-cli).
-// Gemini CLI supports --output-format stream-json, producing JSONL events
-// compatible with Claude Code's stream-json protocol. It runs in SDK mode
-// reusing the existing SDKExecutionStrategy.
+// Gemini CLI's headless mode (--output-format stream-json) is single-shot:
+// it requires a prompt via -p or stdin, executes once, then exits.
+// Unlike Claude Code, it does NOT support --input-format stream-json for
+// persistent stdin-based multi-turn interaction.
+// Therefore Gemini runs in PTY mode (interactive TUI) so the process stays
+// alive and accepts user input continuously.
 type GeminiAdapter struct {
 	app *App
 }
@@ -22,7 +25,7 @@ func (a *GeminiAdapter) ProviderName() string {
 }
 
 func (a *GeminiAdapter) ExecutionMode() ExecutionMode {
-	return ExecModeSDK
+	return ExecModePTY
 }
 
 func (a *GeminiAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
@@ -51,8 +54,6 @@ func (a *GeminiAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 	env := buildOpenAICompatibleCommandEnv(spec.Env, extra)
 
 	args := make([]string, 0, 8)
-	// SDK mode: use stream-json for structured communication
-	args = append(args, "--output-format", "stream-json")
 	if !isOriginal && spec.ModelID != "" {
 		args = append(args, "--model", spec.ModelID)
 	}
@@ -65,5 +66,7 @@ func (a *GeminiAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 		Args:    args,
 		Cwd:     spec.ProjectPath,
 		Env:     env,
+		Cols:    120,
+		Rows:    32,
 	}, nil
 }

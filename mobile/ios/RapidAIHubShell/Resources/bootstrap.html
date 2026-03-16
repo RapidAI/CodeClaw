@@ -145,7 +145,11 @@
         discoveredHubs = hubs;
         renderHubList(hubs, email, result.default_hub_id || "");
       } catch (err) {
-        status.textContent = err instanceof Error ? err.message : String(err);
+        var msg = err instanceof Error ? err.message : String(err);
+        if (/fetch|network|cors|load/i.test(msg)) {
+          msg = "Network error: unable to reach Hub Center (" + center + "). " + msg;
+        }
+        status.textContent = msg;
         status.className = "status error";
       }
     }

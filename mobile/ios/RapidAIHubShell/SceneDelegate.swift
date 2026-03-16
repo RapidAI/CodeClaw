@@ -11,10 +11,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         let window = UIWindow(windowScene: windowScene)
-        let navigationController = UINavigationController(rootViewController: ViewController())
-        navigationController.navigationBar.prefersLargeTitles = true
-        navigationController.topViewController?.title = "MaClaw Pocket"
-        window.rootViewController = navigationController
+        window.rootViewController = ViewController()
         self.window = window
         window.makeKeyAndVisible()
     }
