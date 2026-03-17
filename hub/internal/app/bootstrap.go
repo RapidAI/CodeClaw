@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"path/filepath"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
 	"github.com/RapidAI/CodeClaw/hub/internal/center"
@@ -16,6 +17,7 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
+	"github.com/RapidAI/CodeClaw/hub/internal/skill"
 	"github.com/RapidAI/CodeClaw/hub/internal/store/sqlite"
 	"github.com/RapidAI/CodeClaw/hub/internal/ws"
 )
@@ -151,9 +153,17 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	qqbotPlugin.SetBroadcaster(broadcaster)
 	feishuNotifier.SetBroadcaster(broadcaster)
 
+	// Wire login link broadcaster into identity service so PWA login
+	// confirmation links are also sent to bound IM channels.
+	identityService.SetLoginNotifier(broadcaster)
+
 	// Register session event listener — routes through IM Adapter when available,
 	// falls back to legacy notifier path.
 	sessionService.RegisterListener(feishuNotifier.HandleEvent)
+
+	// Skill store: derive directory from database DSN path.
+	skillStoreDir := filepath.Join(filepath.Dir(cfg.Database.DSN), "skills")
+	skillStore := skill.NewSkillStore(skillStoreDir)
 
 	router := httpapi.NewRouter(
 		adminService,
@@ -168,6 +178,7 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		feishuNotifier,
 		openclawIMPlugin,
 		qqbotPlugin,
+		skillStore,
 		cfg.PWA.StaticDir,
 		cfg.PWA.RoutePrefix,
 	)
@@ -190,5 +201,8 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		FeishuPlugin:     feishuPlugin,
 		OpenclawIMPlugin: openclawIMPlugin,
 		QQBotPlugin:      qqbotPlugin,
+
+		// Skill store
+		SkillStore: skillStore,
 	}, nil
 }

@@ -238,3 +238,99 @@ func TestAuditLog_DefaultTimestamp(t *testing.T) {
 		t.Errorf("expected timestamp between %v and %v, got %v", before, after, ts)
 	}
 }
+
+func TestAuditLog_ActionFieldAndFilter(t *testing.T) {
+	dir := t.TempDir()
+	al, err := NewAuditLog(dir)
+	if err != nil {
+		t.Fatalf("NewAuditLog: %v", err)
+	}
+	defer al.Close()
+
+	now := time.Now()
+	entries := []AuditEntry{
+		{
+			Timestamp:    now.Add(-2 * time.Minute),
+			Action:       AuditActionHubSkillInstall,
+			ToolName:     "hub_skill_install",
+			RiskLevel:    RiskLow,
+			PolicyAction: PolicyAllow,
+			Result:       "installed and executed skill deploy-helper from https://hub.example.com, trust_level=official, risk=low: success",
+		},
+		{
+			Timestamp:    now.Add(-1 * time.Minute),
+			Action:       AuditActionHubSkillReject,
+			ToolName:     "hub_skill_install",
+			RiskLevel:    RiskCritical,
+			PolicyAction: PolicyDeny,
+			Result:       "rejected skill dangerous-tool from https://hub.example.com: critical risk, trust_level=unknown",
+		},
+		{
+			Timestamp: now,
+			ToolName:  "Bash",
+			RiskLevel: RiskLow,
+			PolicyAction: PolicyAllow,
+			Result:    "success",
+		},
+	}
+
+	for _, e := range entries {
+		if err := al.Log(e); err != nil {
+			t.Fatalf("Log: %v", err)
+		}
+	}
+
+	// Query by Action — should return only install entries.
+	installOnly, err := al.Query(AuditFilter{Action: AuditActionHubSkillInstall})
+	if err != nil {
+		t.Fatalf("Query install: %v", err)
+	}
+	if len(installOnly) != 1 {
+		t.Errorf("expected 1 install entry, got %d", len(installOnly))
+	}
+	if len(installOnly) > 0 && installOnly[0].Action != AuditActionHubSkillInstall {
+		t.Errorf("expected action %s, got %s", AuditActionHubSkillInstall, installOnly[0].Action)
+	}
+
+	// Query by Action — should return only reject entries.
+	rejectOnly, err := al.Query(AuditFilter{Action: AuditActionHubSkillReject})
+	if err != nil {
+		t.Fatalf("Query reject: %v", err)
+	}
+	if len(rejectOnly) != 1 {
+		t.Errorf("expected 1 reject entry, got %d", len(rejectOnly))
+	}
+
+	// Query without Action filter — should return all 3.
+	all, err := al.Query(AuditFilter{})
+	if err != nil {
+		t.Fatalf("Query all: %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("expected 3 entries, got %d", len(all))
+	}
+
+	// Verify the Action field round-trips through JSON serialization.
+	if len(installOnly) > 0 {
+		entry := installOnly[0]
+		if entry.Action != AuditActionHubSkillInstall {
+			t.Errorf("expected action %q, got %q", AuditActionHubSkillInstall, entry.Action)
+		}
+		if entry.RiskLevel != RiskLow {
+			t.Errorf("expected risk level %q, got %q", RiskLow, entry.RiskLevel)
+		}
+	}
+}
+
+func TestAuditAction_Constants(t *testing.T) {
+	// Verify the AuditAction constants have the expected string values.
+	if AuditActionHubSkillInstall != "hub_skill_install" {
+		t.Errorf("expected %q, got %q", "hub_skill_install", AuditActionHubSkillInstall)
+	}
+	if AuditActionHubSkillUpdate != "hub_skill_update" {
+		t.Errorf("expected %q, got %q", "hub_skill_update", AuditActionHubSkillUpdate)
+	}
+	if AuditActionHubSkillReject != "hub_skill_reject" {
+		t.Errorf("expected %q, got %q", "hub_skill_reject", AuditActionHubSkillReject)
+	}
+}

@@ -140,6 +140,7 @@ export namespace main {
 	    maclaw_llm_url: string;
 	    maclaw_llm_key: string;
 	    maclaw_llm_model: string;
+	    skill_hub_urls: any[];
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -196,6 +197,7 @@ export namespace main {
 	        this.maclaw_llm_url = source["maclaw_llm_url"];
 	        this.maclaw_llm_key = source["maclaw_llm_key"];
 	        this.maclaw_llm_model = source["maclaw_llm_model"];
+	        this.skill_hub_urls = source["skill_hub_urls"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

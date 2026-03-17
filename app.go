@@ -54,6 +54,9 @@ type App struct {
 	orchestrator        *Orchestrator
 	sharedContext       *SharedContextStore
 	toolSelector        *ToolSelector
+	skillHubClient         *SkillHubClient
+	capabilityGapDetector  *CapabilityGapDetector
+	stopHubTicker          chan struct{} // signals the 24h recommendation refresh goroutine to stop
 }
 
 var OnConfigChanged func(AppConfig)
@@ -165,6 +168,14 @@ type AppConfig struct {
 	MCPServers []MCPServerEntry `json:"mcp_servers,omitempty"`
 	// Client-side NL Skill definitions (Agent Passthrough architecture)
 	NLSkills []NLSkillEntry `json:"nl_skills,omitempty"`
+	// SkillHUB registry URLs for searching and downloading skill packages
+	SkillHubURLs []SkillHubEntry `json:"skill_hub_urls,omitempty"`
+}
+
+// SkillHubEntry represents a single SkillHUB registry endpoint.
+type SkillHubEntry struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
 }
 type Skill struct {
 	Name        string `json:"name"`
@@ -238,6 +249,32 @@ func (a *App) ensureRemoteInfra() {
 	if a.orchestrator == nil {
 		a.orchestrator = NewOrchestrator(a, a.remoteSessions, a.sharedContext, a.toolSelector)
 	}
+	if a.skillHubClient == nil {
+		a.skillHubClient = NewSkillHubClient(a)
+		go a.skillHubClient.RefreshRecommendations(context.Background())
+		a.stopHubTicker = make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					_ = a.skillHubClient.RefreshRecommendations(context.Background())
+				case <-a.stopHubTicker:
+					return
+				}
+			}
+		}()
+	}
+	if a.toolRouter != nil && a.skillHubClient != nil {
+		a.toolRouter.SetHubClient(a.skillHubClient)
+	}
+	if a.capabilityGapDetector == nil {
+		cfg := a.GetMaclawLLMConfig()
+		a.capabilityGapDetector = NewCapabilityGapDetector(
+			a, a.skillHubClient, a.skillExecutor, a.riskAssessor, a.auditLog, cfg,
+		)
+	}
 }
 
 // tryLockTool attempts to acquire a lock for installing a specific tool
@@ -289,6 +326,15 @@ func (a *App) startup(ctx context.Context) {
 			a.ensureRemoteInfra()
 			hubClient := NewRemoteHubClient(a, a.remoteSessions)
 			a.remoteSessions.SetHubClient(hubClient)
+			if a.capabilityGapDetector != nil {
+				hubClient.imHandler.SetCapabilityGapDetector(a.capabilityGapDetector)
+			}
+			if a.toolDefGenerator != nil {
+				hubClient.imHandler.SetToolDefGenerator(a.toolDefGenerator)
+			}
+			if a.toolRouter != nil {
+				hubClient.imHandler.SetToolRouter(a.toolRouter)
+			}
 			_ = hubClient.Connect()
 		} else if config.RemoteEmail != "" && config.RemoteHubURL != "" {
 			// Auto-register on startup: saved email + hub but no machine credentials yet
@@ -308,8 +354,14 @@ func (a *App) domReady(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.stopHubTicker != nil {
+		close(a.stopHubTicker)
+	}
 	if a.mdnsScanner != nil {
 		a.mdnsScanner.Stop()
+	}
+	if a.auditLog != nil {
+		a.auditLog.Close()
 	}
 	a.platformShutdown()
 }
@@ -2319,6 +2371,15 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 			a.ensureRemoteInfra()
 			hubClient := NewRemoteHubClient(a, a.remoteSessions)
 			a.remoteSessions.SetHubClient(hubClient)
+			if a.capabilityGapDetector != nil {
+				hubClient.imHandler.SetCapabilityGapDetector(a.capabilityGapDetector)
+			}
+			if a.toolDefGenerator != nil {
+				hubClient.imHandler.SetToolDefGenerator(a.toolDefGenerator)
+			}
+			if a.toolRouter != nil {
+				hubClient.imHandler.SetToolRouter(a.toolRouter)
+			}
 			_ = hubClient.Connect()
 		}
 
@@ -5073,4 +5134,43 @@ func (a *App) OpenSystemUrl(url string) error {
 		return fmt.Errorf("unsupported platform")
 	}
 	return cmd.Start()
+}
+
+// PingSkillHub tests whether a SkillHUB URL is reachable.
+// Returns a JSON-friendly struct with online status and latency.
+func (a *App) PingSkillHub(url string) map[string]interface{} {
+	result := map[string]interface{}{
+		"url":    url,
+		"online": false,
+		"ms":     0,
+		"error":  "",
+	}
+	if strings.TrimSpace(url) == "" {
+		result["error"] = "empty URL"
+		return result
+	}
+	target := strings.TrimRight(strings.TrimSpace(url), "/")
+	start := time.Now()
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		result["error"] = err.Error()
+		return result
+	}
+	req.Header.Set("User-Agent", "MaClaw/1.0")
+	resp, err := client.Do(req)
+	elapsed := time.Since(start).Milliseconds()
+	result["ms"] = elapsed
+	if err != nil {
+		result["error"] = err.Error()
+		return result
+	}
+	defer resp.Body.Close()
+	// Any response (2xx, 3xx, 4xx) means the server is reachable
+	if resp.StatusCode < 500 {
+		result["online"] = true
+	} else {
+		result["error"] = fmt.Sprintf("HTTP %d", resp.StatusCode)
+	}
+	return result
 }

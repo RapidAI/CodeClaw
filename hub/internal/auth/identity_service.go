@@ -30,6 +30,11 @@ type InvitationCodeValidator interface {
 	ValidateAndConsume(ctx context.Context, code string, email string) error
 }
 
+// LoginNotifier sends login confirmation links to bound IM channels.
+type LoginNotifier interface {
+	BroadcastLoginLink(ctx context.Context, email, confirmURL string) []string
+}
+
 const (
 	systemKeyEnrollmentMode = "identity_enrollment_mode"
 	systemKeyPublicBaseURL  = "server_public_base_url"
@@ -49,6 +54,7 @@ type EmailLoginRequestResult struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
 	PollID  string `json:"poll_id,omitempty"`
+	SentTo  string `json:"sent_to,omitempty"`
 }
 
 type EmailPollResult struct {
@@ -97,6 +103,7 @@ type IdentityService struct {
 	allowSelfEnroll bool
 	mailer          mail.Mailer
 	publicBaseURL   string
+	loginNotifier   LoginNotifier
 }
 
 func (s *IdentityService) UsersRepo() store.UserRepository {
@@ -150,6 +157,12 @@ func NewIdentityService(
 		mailer:          mailer,
 		publicBaseURL:   strings.TrimRight(publicBaseURL, "/"),
 	}
+}
+
+// SetLoginNotifier wires the cross-IM login link broadcaster.
+// Called from bootstrap after the IM Adapter is fully assembled.
+func (s *IdentityService) SetLoginNotifier(n LoginNotifier) {
+	s.loginNotifier = n
 }
 
 func (s *IdentityService) StartEnrollment(ctx context.Context, email, machineName, platform, clientID, invitationCode string) (*EnrollmentResult, error) {
@@ -330,20 +343,46 @@ func (s *IdentityService) createLoginTokenAndNotify(ctx context.Context, email s
 	}
 
 	confirmURL := s.buildConfirmURL(rawToken)
+	var channels []string
+	var emailErr error
+
+	// 1. Send via email (best-effort — don't block IM delivery on email failure)
 	if s.mailer != nil {
 		if err := s.mailer.SendLoginConfirmation(ctx, email, confirmURL); err != nil {
-			return nil, err
+			emailErr = err
+		} else {
+			channels = append(channels, "邮箱")
 		}
 	}
 
-	message := "A sign-in email has been sent"
-	if s.mailer == nil {
-		message = fmt.Sprintf("Use this confirm URL for development: %s", confirmURL)
+	// 2. Send to bound IM channels
+	if s.loginNotifier != nil {
+		imChannels := s.loginNotifier.BroadcastLoginLink(ctx, email, confirmURL)
+		channels = append(channels, imChannels...)
+	}
+
+	// If no channel succeeded, return the email error (or a generic one).
+	if len(channels) == 0 {
+		if emailErr != nil {
+			return nil, emailErr
+		}
+		// No mailer and no IM channels — dev mode fallback
+		return &EmailLoginRequestResult{
+			Status:  "pending_email_confirmation",
+			Message: fmt.Sprintf("Use this confirm URL for development: %s", confirmURL),
+			PollID:  rawPollToken,
+		}, nil
+	}
+
+	sentTo := channels[0]
+	for _, ch := range channels[1:] {
+		sentTo += " + " + ch
 	}
 	return &EmailLoginRequestResult{
 		Status:  "pending_email_confirmation",
-		Message: message,
+		Message: fmt.Sprintf("验证链接已发送到: %s", sentTo),
 		PollID:  rawPollToken,
+		SentTo:  sentTo,
 	}, nil
 }
 

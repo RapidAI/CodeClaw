@@ -13,6 +13,7 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
+	"github.com/RapidAI/CodeClaw/hub/internal/skill"
 	"github.com/RapidAI/CodeClaw/hub/internal/store"
 	"github.com/RapidAI/CodeClaw/hub/internal/ws"
 )
@@ -30,6 +31,7 @@ func NewRouter(
 	feishuNotifier *feishu.Notifier,
 	openclawIMPlugin *im.WebhookIMPlugin,
 	qqbotPlugin *qqbot.Plugin,
+	skillStore *skill.SkillStore,
 	staticDir string,
 	routePrefix string,
 ) http.Handler {
@@ -116,6 +118,14 @@ func NewRouter(
 	mux.HandleFunc("/ws", gateway.HandleWS)
 	mux.HandleFunc("GET /api/shortcuts", GetShortcutsHandler(identity, system))
 	mux.HandleFunc("PUT /api/shortcuts", PutShortcutsHandler(identity, system))
+	// Skill Catalog API
+	skillHandlers := NewSkillHandlers(skillStore)
+	mux.HandleFunc("GET /api/v1/skills/search", skillHandlers.SearchSkills)
+	mux.HandleFunc("GET /api/v1/skills/{id}", skillHandlers.GetSkill)
+	mux.HandleFunc("GET /api/v1/skills/{id}/download", skillHandlers.DownloadSkill)
+	mux.HandleFunc("GET /api/v1/skills/popular", skillHandlers.PopularSkills)
+	mux.HandleFunc("POST /api/v1/skills", skillHandlers.PublishSkill)
+
 	registerPWAStaticRoutes(mux, staticDir, routePrefix)
 	registerAdminStaticRoutes(mux, "./web/admin", "/admin")
 	return mux

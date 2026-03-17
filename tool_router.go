@@ -18,6 +18,7 @@ const (
 // tools and selects the top dynamic tools ranked by TF-IDF similarity.
 type ToolRouter struct {
 	generator *ToolDefinitionGenerator
+	hubClient *SkillHubClient
 }
 
 // NewToolRouter creates a new ToolRouter.
@@ -25,9 +26,14 @@ func NewToolRouter(generator *ToolDefinitionGenerator) *ToolRouter {
 	return &ToolRouter{generator: generator}
 }
 
+// SetHubClient sets the SkillHubClient used for recommendation matching.
+func (r *ToolRouter) SetHubClient(client *SkillHubClient) {
+	r.hubClient = client
+}
+
 // Route filters allTools based on relevance to userMessage.
 // - If len(allTools) <= 20, returns allTools unchanged.
-// - Otherwise, keeps the first 12 builtins + top 15 dynamic tools ranked
+// - Otherwise, keeps the first 14 builtins + top 15 dynamic tools ranked
 //   by keyword match + TF-IDF similarity to the user message.
 func (r *ToolRouter) Route(userMessage string, allTools []map[string]interface{}) []map[string]interface{} {
 	if len(allTools) <= routeThreshold {
@@ -90,12 +96,66 @@ func (r *ToolRouter) Route(userMessage string, allTools []map[string]interface{}
 		limit = len(scores)
 	}
 
-	result := make([]map[string]interface{}, len(builtins), len(builtins)+limit)
+	result := make([]map[string]interface{}, len(builtins), len(builtins)+limit+1)
 	copy(result, builtins)
 	for i := 0; i < limit; i++ {
 		result = append(result, dynamicTools[scores[i].index])
 	}
+
+	// Check recommended Skills from Hub for keyword overlap with user message.
+	if r.hubClient != nil {
+		if hint := r.matchRecommendations(msgTokens); hint != nil {
+			result = append(result, hint)
+		}
+	}
+
 	return result
+}
+
+// matchRecommendations checks if any recommended Skill from the Hub matches
+// the user message tokens via simple keyword overlap. Returns a tool hint
+// map if a match is found, nil otherwise.
+func (r *ToolRouter) matchRecommendations(msgTokens []string) map[string]interface{} {
+	if len(msgTokens) == 0 {
+		return nil
+	}
+
+	recommendations := r.hubClient.GetRecommendations()
+	if len(recommendations) == 0 {
+		return nil
+	}
+
+	msgSet := make(map[string]struct{}, len(msgTokens))
+	for _, t := range msgTokens {
+		msgSet[t] = struct{}{}
+	}
+
+	for _, rec := range recommendations {
+		recTokens := tokenize(rec.Name + " " + rec.Description)
+		for _, rt := range recTokens {
+			if _, ok := msgSet[rt]; ok {
+				return searchAndInstallSkillHint()
+			}
+		}
+	}
+
+	return nil
+}
+
+// searchAndInstallSkillHint returns a tool definition map for the
+// search_and_install_skill hint that the LLM can invoke.
+func searchAndInstallSkillHint() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "function",
+		"function": map[string]interface{}{
+			"name":        "search_and_install_skill",
+			"description": "Search SkillHub for a matching Skill and install it. Use this when the user's request might be handled by a Skill available on the Hub.",
+			"parameters": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+	}
 }
 
 

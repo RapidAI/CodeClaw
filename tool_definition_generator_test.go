@@ -21,6 +21,8 @@ func makeBuiltinDefs() []map[string]interface{} {
 		toolDef("call_mcp_tool", "调用MCP工具", nil, nil),
 		toolDef("list_skills", "列出Skills", nil, nil),
 		toolDef("run_skill", "执行Skill", nil, nil),
+		toolDef("parallel_execute", "并行执行多个工具", nil, nil),
+		toolDef("recommend_tool", "推荐工具", nil, nil),
 	}
 }
 

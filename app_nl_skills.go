@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,8 +16,11 @@ type NLSkillEntry struct {
 	Steps         []NLSkillStep `json:"steps"`
 	Status        string        `json:"status"` // "active", "disabled"
 	CreatedAt     string        `json:"created_at"`
-	Source        string        `json:"source"`         // "manual" | "learned"
+	Source        string        `json:"source"`         // "manual" | "learned" | "hub"
 	SourceProject string        `json:"source_project"` // originating project path
+	HubSkillID    string        `json:"hub_skill_id,omitempty"`
+	HubVersion    string        `json:"hub_version,omitempty"`
+	TrustLevel    string        `json:"trust_level,omitempty"`
 }
 
 // NLSkillStep represents a single action within an NL Skill.
@@ -36,6 +40,9 @@ type NLSkillDefinition struct {
 	CreatedAt     time.Time     `json:"created_at"`
 	Source        string        `json:"source"`
 	SourceProject string        `json:"source_project"`
+	HubSkillID    string        `json:"hub_skill_id,omitempty"`
+	HubVersion    string        `json:"hub_version,omitempty"`
+	TrustLevel    string        `json:"trust_level,omitempty"`
 }
 
 // SkillExecutor manages and executes locally-defined NL Skills.
@@ -121,6 +128,77 @@ func (e *SkillExecutor) Update(entry NLSkillEntry) error {
 	return fmt.Errorf("skill %q not found", entry.Name)
 }
 
+// UpdateFromHub checks for a newer version of a Hub Skill and updates it locally.
+// It preserves Name, Source, HubSkillID, SourceProject, Status, and CreatedAt.
+// Network calls are made outside the mutex to avoid blocking other skill operations.
+func (e *SkillExecutor) UpdateFromHub(name string) error {
+	// Phase 1: Read skill info under read lock.
+	e.mu.RLock()
+	skills := e.loadSkills()
+	var skill NLSkillEntry
+	found := false
+	for _, s := range skills {
+		if s.Name == name {
+			skill = s
+			found = true
+			break
+		}
+	}
+	e.mu.RUnlock()
+
+	if !found {
+		return fmt.Errorf("skill %q not found", name)
+	}
+	if skill.Source != "hub" || skill.HubSkillID == "" {
+		return fmt.Errorf("skill %q is not a hub skill", name)
+	}
+	if e.app.skillHubClient == nil {
+		return fmt.Errorf("skill hub client not initialized")
+	}
+
+	// Phase 2: Network calls without holding the lock.
+	ctx := context.Background()
+
+	meta, err := e.app.skillHubClient.CheckUpdate(ctx, skill.HubSkillID, skill.HubVersion)
+	if err != nil {
+		return fmt.Errorf("failed to check update for skill %q: %w", name, err)
+	}
+	if meta == nil {
+		return nil // already up to date
+	}
+
+	updated, err := e.app.skillHubClient.Install(ctx, skill.HubSkillID, meta.HubURL)
+	if err != nil {
+		return fmt.Errorf("failed to download update for skill %q: %w", name, err)
+	}
+
+	// Phase 3: Apply update under write lock.
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Re-read skills in case they changed while we were doing network I/O.
+	skills = e.loadSkills()
+	idx := -1
+	for i, s := range skills {
+		if s.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("skill %q was removed during update", name)
+	}
+
+	// Replace mutable fields, preserve identity fields.
+	skills[idx].Description = updated.Description
+	skills[idx].Triggers = updated.Triggers
+	skills[idx].Steps = updated.Steps
+	skills[idx].HubVersion = updated.HubVersion
+	skills[idx].TrustLevel = updated.TrustLevel
+
+	return e.saveSkills(skills)
+}
+
 // Delete removes a Skill by name.
 func (e *SkillExecutor) Delete(name string) error {
 	e.mu.Lock()
@@ -152,6 +230,9 @@ func (e *SkillExecutor) List() []NLSkillDefinition {
 			Status:        s.Status,
 			Source:        s.Source,
 			SourceProject: s.SourceProject,
+			HubSkillID:    s.HubSkillID,
+			HubVersion:    s.HubVersion,
+			TrustLevel:    s.TrustLevel,
 		}
 		if t, err := time.Parse(time.RFC3339, s.CreatedAt); err == nil {
 			d.CreatedAt = t

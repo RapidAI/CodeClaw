@@ -182,3 +182,14 @@ export function SaveMaclawLLMProviders(arg1:any, arg2:string):Promise<void>;
 export function TestMaclawLLM(arg1:any):Promise<string>;
 
 export function PingMaclawLLM():Promise<any>;
+
+export function PingSkillHub(arg1:string):Promise<any>;
+
+// SkillHub market bindings
+export function SearchSkillHub(arg1:string):Promise<Array<any>>;
+
+export function InstallHubSkill(arg1:string, arg2:string):Promise<void>;
+
+export function CheckHubSkillUpdates():Promise<Array<any>>;
+
+export function UpdateHubSkill(arg1:string):Promise<void>;

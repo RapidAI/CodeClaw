@@ -1,9 +1,13 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
     ListNLSkills,
     CreateNLSkill,
     UpdateNLSkill,
     DeleteNLSkill,
+    SearchSkillHub,
+    InstallHubSkill,
+    CheckHubSkillUpdates,
+    UpdateHubSkill,
 } from "../../../wailsjs/go/main/App";
 
 interface NLSkillStep {
@@ -19,6 +23,28 @@ interface NLSkillDefinition {
     steps: NLSkillStep[];
     status: string;
     created_at: string;
+    source?: string;
+    hub_skill_id?: string;
+    hub_version?: string;
+}
+
+interface HubSkillUpdateInfo {
+    skill_name: string;
+    current_version: string;
+    latest_version: string;
+    hub_url: string;
+}
+
+interface HubSkillMeta {
+    id: string;
+    name: string;
+    description: string;
+    tags: string[];
+    version: string;
+    author: string;
+    trust_level: string;
+    downloads: number;
+    hub_url: string;
 }
 
 type Props = {
@@ -35,10 +61,23 @@ const emptySkill: NLSkillDefinition = {
 };
 
 export function SkillsManagementPanel({ translate }: Props) {
+    const [activeTab, setActiveTab] = useState<"local" | "hub">("local");
     const [skills, setSkills] = useState<NLSkillDefinition[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const [busy, setBusy] = useState(false);
+
+    // Hub market state
+    const [hubSearchQuery, setHubSearchQuery] = useState("");
+    const [hubResults, setHubResults] = useState<HubSkillMeta[]>([]);
+    const [hubSearching, setHubSearching] = useState(false);
+    const [hubError, setHubError] = useState("");
+    const [hubSearched, setHubSearched] = useState(false);
+
+    // Install/update state
+    const [installingSkills, setInstallingSkills] = useState<string[]>([]);
+    const [updatingSkills, setUpdatingSkills] = useState<string[]>([]);
+    const [hubUpdates, setHubUpdates] = useState<HubSkillUpdateInfo[]>([]);
 
     // Form state
     const [showForm, setShowForm] = useState(false);
@@ -67,6 +106,94 @@ export function SkillsManagementPanel({ translate }: Props) {
     useEffect(() => {
         loadData();
     }, [loadData]);
+
+    const handleHubSearch = useCallback(async () => {
+        const q = hubSearchQuery.trim();
+        if (!q) return;
+        setHubSearching(true);
+        setHubError("");
+        setHubSearched(true);
+        try {
+            const results = await SearchSkillHub(q);
+            setHubResults(Array.isArray(results) ? results : []);
+        } catch (err) {
+            setHubError(String(err));
+            setHubResults([]);
+        } finally {
+            setHubSearching(false);
+        }
+    }, [hubSearchQuery]);
+
+    // Compute installed Hub Skill IDs from local skills (memoized)
+    const installedSkillIds = useMemo(
+        () => new Set(
+            skills.filter((s) => s.source === "hub" && s.hub_skill_id).map((s) => s.hub_skill_id!)
+        ),
+        [skills]
+    );
+
+    // Map skill_name -> HubSkillUpdateInfo for quick lookup (memoized)
+    const updatesMap = useMemo(
+        () => new Map(hubUpdates.map((u) => [u.skill_name, u])),
+        [hubUpdates]
+    );
+
+    // Find the local skill name for a given hub skill ID (for update lookup, memoized)
+    const localSkillByHubId = useMemo(() => {
+        const map = new Map<string, NLSkillDefinition>();
+        for (const s of skills) {
+            if (s.source === "hub" && s.hub_skill_id) {
+                map.set(s.hub_skill_id, s);
+            }
+        }
+        return map;
+    }, [skills]);
+
+    const getLocalSkillForHubId = (hubId: string): NLSkillDefinition | undefined =>
+        localSkillByHubId.get(hubId);
+
+    // Check for Hub Skill updates
+    const checkUpdates = useCallback(async () => {
+        try {
+            const updates = await CheckHubSkillUpdates();
+            setHubUpdates(Array.isArray(updates) ? updates : []);
+        } catch {
+            // Silently ignore update check failures
+        }
+    }, []);
+
+    // When switching to Hub tab, check for updates
+    useEffect(() => {
+        if (activeTab === "hub") {
+            checkUpdates();
+        }
+    }, [activeTab, checkUpdates]);
+
+    const handleInstall = useCallback(async (skill: HubSkillMeta) => {
+        setInstallingSkills((prev) => [...prev, skill.id]);
+        try {
+            await InstallHubSkill(skill.id, skill.hub_url);
+            await loadData();
+            await checkUpdates();
+        } catch (err) {
+            setHubError(String(err));
+        } finally {
+            setInstallingSkills((prev) => prev.filter((id) => id !== skill.id));
+        }
+    }, [loadData, checkUpdates]);
+
+    const handleUpdate = useCallback(async (skillName: string) => {
+        setUpdatingSkills((prev) => [...prev, skillName]);
+        try {
+            await UpdateHubSkill(skillName);
+            await loadData();
+            await checkUpdates();
+        } catch (err) {
+            setHubError(String(err));
+        } finally {
+            setUpdatingSkills((prev) => prev.filter((n) => n !== skillName));
+        }
+    }, [loadData, checkUpdates]);
 
     const stepsToYaml = (steps: NLSkillStep[]): string => {
         if (!steps || steps.length === 0) return "";
@@ -201,79 +328,275 @@ export function SkillsManagementPanel({ translate }: Props) {
 
     return (
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-            {/* Header with create and upload buttons */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: "0.78rem", color: "#5a6577" }}>
-                    {skills.length} {translate("skillsRegistered") || "个已注册 Skill"}
-                </span>
-                <div style={{ display: "flex", gap: "6px" }}>
-                    <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={openCreateForm} disabled={busy}>
-                        + 新建 Skill
-                    </button>
-                </div>
+            {/* Tab switcher */}
+            <div style={{ display: "flex", gap: "0", borderBottom: "1px solid #e1e4e8" }}>
+                <button
+                    style={{
+                        ...tabBtnStyle,
+                        ...(activeTab === "local" ? tabBtnActiveStyle : {}),
+                    }}
+                    onClick={() => setActiveTab("local")}
+                >
+                    本地 Skills
+                </button>
+                <button
+                    style={{
+                        ...tabBtnStyle,
+                        ...(activeTab === "hub" ? tabBtnActiveStyle : {}),
+                    }}
+                    onClick={() => setActiveTab("hub")}
+                >
+                    Hub 市场
+                </button>
             </div>
 
-            {/* Loading */}
-            {loading && (
-                <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>
-                    加载中...
-                </div>
+            {/* === Local Skills Tab === */}
+            {activeTab === "local" && (
+                <>
+                    {/* Header with create button */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: "0.78rem", color: "#5a6577" }}>
+                            {skills.length} {translate("skillsRegistered") || "个已注册 Skill"}
+                        </span>
+                        <div style={{ display: "flex", gap: "6px" }}>
+                            <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={openCreateForm} disabled={busy}>
+                                + 新建 Skill
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Loading */}
+                    {loading && (
+                        <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>
+                            加载中...
+                        </div>
+                    )}
+
+                    {/* Error */}
+                    {error && (
+                        <div style={{ fontSize: "0.78rem", color: "#c53030", background: "#fff5f5", padding: "6px 10px", borderRadius: "4px", border: "1px solid #fecdd3" }}>
+                            {error}
+                        </div>
+                    )}
+
+                    {/* Skills table */}
+                    {!loading && skills.length > 0 && (
+                        <div style={{ border: "1px solid #e1e4e8", borderRadius: "6px", overflow: "hidden" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.76rem" }}>
+                                <thead>
+                                    <tr style={{ background: "#f4f5f7" }}>
+                                        <th style={thStyle}>名称</th>
+                                        <th style={thStyle}>描述</th>
+                                        <th style={thStyle}>触发短语</th>
+                                        <th style={thStyle}>状态</th>
+                                        <th style={{ ...thStyle, width: "100px" }}>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {skills.map((s) => (
+                                        <tr key={s.name} style={{ borderTop: "1px solid #e1e4e8" }}>
+                                            <td style={tdStyle}>{s.name}</td>
+                                            <td style={tdStyle}>{s.description || "—"}</td>
+                                            <td style={tdStyle}>
+                                                <div style={{ display: "flex", flexWrap: "wrap", gap: "3px" }}>
+                                                    {(s.triggers || []).map((t, i) => (
+                                                        <span key={i} style={tagStyle}>{t}</span>
+                                                    ))}
+                                                </div>
+                                            </td>
+                                            <td style={tdStyle}>
+                                                <span style={{ ...statusBadgeStyle, ...(s.status === "active" ? activeBadge : disabledBadge) }}>
+                                                    {s.status === "active" ? "启用" : s.status}
+                                                </span>
+                                            </td>
+                                            <td style={tdStyle}>
+                                                <div style={{ display: "flex", gap: "4px" }}>
+                                                    <button className="btn-secondary" style={smallBtnStyle} onClick={() => openEditForm(s)} disabled={busy}>编辑</button>
+                                                    <button className="btn-secondary btn-danger" style={smallBtnStyle} onClick={() => setDeleteTarget(s.name)} disabled={busy}>删除</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    {!loading && skills.length === 0 && !error && (
+                        <div style={{ textAlign: "center", padding: "20px", fontSize: "0.78rem", color: "#8b95a5" }}>
+                            暂无已注册的 Skill
+                        </div>
+                    )}
+                </>
             )}
 
-            {/* Error */}
-            {error && (
-                <div style={{ fontSize: "0.78rem", color: "#c53030", background: "#fff5f5", padding: "6px 10px", borderRadius: "4px", border: "1px solid #fecdd3" }}>
-                    {error}
-                </div>
-            )}
+            {/* === Hub Market Tab === */}
+            {activeTab === "hub" && (
+                <>
+                    {/* Search input */}
+                    <div style={{ display: "flex", gap: "6px" }}>
+                        <input
+                            className="form-input"
+                            value={hubSearchQuery}
+                            onChange={(e) => setHubSearchQuery(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") handleHubSearch(); }}
+                            placeholder="搜索 Hub Skill..."
+                            spellCheck={false}
+                            style={{ flex: 1, fontSize: "0.78rem" }}
+                        />
+                        <button
+                            className="btn-primary"
+                            style={{ fontSize: "0.78rem", padding: "4px 12px", flexShrink: 0 }}
+                            disabled={!hubSearchQuery.trim() || hubSearching}
+                            onClick={handleHubSearch}
+                        >
+                            {hubSearching ? "搜索中..." : "搜索"}
+                        </button>
+                    </div>
 
-            {/* Skills table */}
-            {!loading && skills.length > 0 && (
-                <div style={{ border: "1px solid #e1e4e8", borderRadius: "6px", overflow: "hidden" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.76rem" }}>
-                        <thead>
-                            <tr style={{ background: "#f4f5f7" }}>
-                                <th style={thStyle}>名称</th>
-                                <th style={thStyle}>描述</th>
-                                <th style={thStyle}>触发短语</th>
-                                <th style={thStyle}>状态</th>
-                                <th style={{ ...thStyle, width: "100px" }}>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {skills.map((s) => (
-                                <tr key={s.name} style={{ borderTop: "1px solid #e1e4e8" }}>
-                                    <td style={tdStyle}>{s.name}</td>
-                                    <td style={tdStyle}>{s.description || "—"}</td>
-                                    <td style={tdStyle}>
-                                        <div style={{ display: "flex", flexWrap: "wrap", gap: "3px" }}>
-                                            {(s.triggers || []).map((t, i) => (
-                                                <span key={i} style={tagStyle}>{t}</span>
-                                            ))}
+                    {/* Hub error */}
+                    {hubError && (
+                        <div style={{ fontSize: "0.78rem", color: "#c53030", background: "#fff5f5", padding: "6px 10px", borderRadius: "4px", border: "1px solid #fecdd3" }}>
+                            {hubError}
+                        </div>
+                    )}
+
+                    {/* Loading state */}
+                    {hubSearching && (
+                        <div style={{
+                            border: "1px solid #e1e4e8",
+                            borderRadius: "6px",
+                            padding: "24px",
+                            textAlign: "center",
+                            fontSize: "0.78rem",
+                            color: "#8b95a5",
+                            minHeight: "120px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                        }}>
+                            正在搜索 SkillHub...
+                        </div>
+                    )}
+
+                    {/* Results */}
+                    {!hubSearching && hubSearched && hubResults.length === 0 && !hubError && (
+                        <div style={{
+                            border: "1px solid #e1e4e8",
+                            borderRadius: "6px",
+                            padding: "24px",
+                            textAlign: "center",
+                            fontSize: "0.78rem",
+                            color: "#8b95a5",
+                            minHeight: "120px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                        }}>
+                            无搜索结果
+                        </div>
+                    )}
+
+                    {!hubSearching && hubResults.length > 0 && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {hubResults.map((skill) => (
+                                <div key={skill.id} style={hubCardStyle}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                                                <span style={{ fontWeight: 600, fontSize: "0.82rem", color: "#1a202c" }}>{skill.name}</span>
+                                                <span style={trustBadgeStyle(skill.trust_level)}>
+                                                    {skill.trust_level === "official" ? "官方" : skill.trust_level === "community" ? "社区" : "未知"}
+                                                </span>
+                                                <span style={{ fontSize: "0.68rem", color: "#8b95a5" }}>v{skill.version}</span>
+                                            </div>
+                                            <div style={{ fontSize: "0.76rem", color: "#5a6577", marginTop: "4px", lineHeight: 1.4 }}>
+                                                {skill.description || "暂无描述"}
+                                            </div>
+                                            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "6px", flexWrap: "wrap" }}>
+                                                {(skill.tags || []).map((tag, i) => (
+                                                    <span key={i} style={tagStyle}>{tag}</span>
+                                                ))}
+                                                <span style={{ fontSize: "0.68rem", color: "#8b95a5", marginLeft: "auto" }}>
+                                                    ⬇ {formatDownloads(skill.downloads)}
+                                                </span>
+                                            </div>
                                         </div>
-                                    </td>
-                                    <td style={tdStyle}>
-                                        <span style={{ ...statusBadgeStyle, ...(s.status === "active" ? activeBadge : disabledBadge) }}>
-                                            {s.status === "active" ? "启用" : s.status}
-                                        </span>
-                                    </td>
-                                    <td style={tdStyle}>
-                                        <div style={{ display: "flex", gap: "4px" }}>
-                                            <button className="btn-secondary" style={smallBtnStyle} onClick={() => openEditForm(s)} disabled={busy}>编辑</button>
-                                            <button className="btn-secondary btn-danger" style={smallBtnStyle} onClick={() => setDeleteTarget(s.name)} disabled={busy}>删除</button>
-                                        </div>
-                                    </td>
-                                </tr>
+                                        {(() => {
+                                            const isInstalling = installingSkills.includes(skill.id);
+                                            const isInstalled = installedSkillIds.has(skill.id);
+                                            const localSkill = getLocalSkillForHubId(skill.id);
+                                            const updateInfo = localSkill ? updatesMap.get(localSkill.name) : undefined;
+                                            const isUpdating = localSkill ? updatingSkills.includes(localSkill.name) : false;
+
+                                            if (isInstalling) {
+                                                return (
+                                                    <button
+                                                        className="btn-primary"
+                                                        style={{ fontSize: "0.74rem", padding: "4px 14px", flexShrink: 0, alignSelf: "center", opacity: 0.7 }}
+                                                        disabled
+                                                    >
+                                                        安装中...
+                                                    </button>
+                                                );
+                                            }
+                                            if (isInstalled && updateInfo) {
+                                                return (
+                                                    <button
+                                                        className="btn-primary"
+                                                        style={{ fontSize: "0.74rem", padding: "4px 14px", flexShrink: 0, alignSelf: "center" }}
+                                                        disabled={isUpdating}
+                                                        onClick={() => handleUpdate(localSkill!.name)}
+                                                    >
+                                                        {isUpdating ? "更新中..." : "更新"}
+                                                    </button>
+                                                );
+                                            }
+                                            if (isInstalled) {
+                                                return (
+                                                    <button
+                                                        className="btn-secondary"
+                                                        style={{ fontSize: "0.74rem", padding: "4px 14px", flexShrink: 0, alignSelf: "center", opacity: 0.6 }}
+                                                        disabled
+                                                    >
+                                                        已安装
+                                                    </button>
+                                                );
+                                            }
+                                            return (
+                                                <button
+                                                    className="btn-primary"
+                                                    style={{ fontSize: "0.74rem", padding: "4px 14px", flexShrink: 0, alignSelf: "center" }}
+                                                    onClick={() => handleInstall(skill)}
+                                                >
+                                                    安装
+                                                </button>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
                             ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
+                        </div>
+                    )}
 
-            {!loading && skills.length === 0 && !error && (
-                <div style={{ textAlign: "center", padding: "20px", fontSize: "0.78rem", color: "#8b95a5" }}>
-                    暂无已注册的 Skill
-                </div>
+                    {/* Initial state — no search performed yet */}
+                    {!hubSearching && !hubSearched && !hubError && (
+                        <div style={{
+                            border: "1px solid #e1e4e8",
+                            borderRadius: "6px",
+                            padding: "24px",
+                            textAlign: "center",
+                            fontSize: "0.78rem",
+                            color: "#8b95a5",
+                            minHeight: "120px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                        }}>
+                            输入关键词搜索 SkillHub 上的 Skill
+                        </div>
+                    )}
+                </>
             )}
 
             {/* Delete confirmation dialog */}
@@ -434,3 +757,53 @@ const smallBtnStyle: React.CSSProperties = {
     fontSize: "0.72rem",
     padding: "2px 8px",
 };
+
+const tabBtnStyle: React.CSSProperties = {
+    background: "none",
+    border: "none",
+    borderBottom: "2px solid transparent",
+    padding: "6px 14px",
+    fontSize: "0.78rem",
+    color: "#5a6577",
+    cursor: "pointer",
+    fontWeight: 500,
+    transition: "color 0.15s, border-color 0.15s",
+};
+
+const tabBtnActiveStyle: React.CSSProperties = {
+    color: "#2563eb",
+    borderBottomColor: "#2563eb",
+    fontWeight: 600,
+};
+
+const hubCardStyle: React.CSSProperties = {
+    border: "1px solid #e1e4e8",
+    borderRadius: "6px",
+    padding: "10px 12px",
+    background: "#fff",
+};
+
+const trustBadgeStyle = (level: string): React.CSSProperties => {
+    const colors: Record<string, { bg: string; color: string; border: string }> = {
+        official: { bg: "#f0fdf4", color: "#2f855a", border: "#86efac" },
+        community: { bg: "#eff6ff", color: "#2563eb", border: "#93c5fd" },
+        unknown: { bg: "#f4f5f7", color: "#8b95a5", border: "#e1e4e8" },
+    };
+    const c = colors[level] || colors.unknown;
+    return {
+        display: "inline-block",
+        padding: "0px 6px",
+        borderRadius: "999px",
+        fontSize: "0.66rem",
+        fontWeight: 600,
+        background: c.bg,
+        color: c.color,
+        border: `1px solid ${c.border}`,
+    };
+};
+
+function formatDownloads(n: number): string {
+    if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, "") + "w";
+    if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return String(n);
+}

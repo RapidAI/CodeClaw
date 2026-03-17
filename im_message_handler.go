@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -195,6 +196,9 @@ type IMMessageHandler struct {
 	cachedTools    []map[string]interface{}
 	toolsCacheTime time.Time
 	toolsMu        sync.RWMutex
+
+	// Capability gap detection (lazily initialized via setter).
+	capabilityGapDetector *CapabilityGapDetector
 }
 
 // NewIMMessageHandler creates a new handler.
@@ -216,6 +220,11 @@ func (h *IMMessageHandler) SetToolDefGenerator(gen *ToolDefinitionGenerator) {
 	// Invalidate cache so next call regenerates.
 	h.cachedTools = nil
 	h.toolsCacheTime = time.Time{}
+}
+
+// SetCapabilityGapDetector configures the capability gap detector.
+func (h *IMMessageHandler) SetCapabilityGapDetector(detector *CapabilityGapDetector) {
+	h.capabilityGapDetector = detector
 }
 
 // SetToolRouter configures the tool router for context-aware tool filtering.
@@ -453,6 +462,20 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 
 		// No tool calls → final response.
 		if len(choice.Message.ToolCalls) == 0 || choice.FinishReason == "stop" {
+			// Check for capability gap before returning.
+			if h.capabilityGapDetector != nil && h.capabilityGapDetector.Detect(choice.Message.Content) {
+				skillName, result, err := h.capabilityGapDetector.Resolve(
+					context.Background(), userText, nil,
+					func(status string) {
+						// Status updates are logged but not sent to user in this context.
+					},
+				)
+				if skillName != "" && err == nil {
+					finalText := fmt.Sprintf("✅ 已自动安装并执行 Skill「%s」\n%s", skillName, result)
+					h.memory.save(userID, trimHistory(history))
+					return &IMAgentResponse{Text: finalText}
+				}
+			}
 			h.memory.save(userID, trimHistory(history))
 			return &IMAgentResponse{Text: choice.Message.Content}
 		}

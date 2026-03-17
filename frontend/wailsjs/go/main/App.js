@@ -360,3 +360,24 @@ export function TestMaclawLLM(arg1) {
 export function PingMaclawLLM() {
   return window['go']['main']['App']['PingMaclawLLM']();
 }
+
+export function PingSkillHub(arg1) {
+  return window['go']['main']['App']['PingSkillHub'](arg1);
+}
+
+// SkillHub market bindings
+export function SearchSkillHub(arg1) {
+  return window['go']['main']['App']['SearchSkillHub'](arg1);
+}
+
+export function InstallHubSkill(arg1, arg2) {
+  return window['go']['main']['App']['InstallHubSkill'](arg1, arg2);
+}
+
+export function CheckHubSkillUpdates() {
+  return window['go']['main']['App']['CheckHubSkillUpdates']();
+}
+
+export function UpdateHubSkill(arg1) {
+  return window['go']['main']['App']['UpdateHubSkill'](arg1);
+}

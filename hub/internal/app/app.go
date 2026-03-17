@@ -12,6 +12,7 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/qqbot"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
+	"github.com/RapidAI/CodeClaw/hub/internal/skill"
 	"github.com/RapidAI/CodeClaw/hub/internal/store/sqlite"
 	"github.com/RapidAI/CodeClaw/hub/internal/ws"
 )
@@ -34,6 +35,9 @@ type App struct {
 	FeishuPlugin     *feishu.FeishuPlugin
 	OpenclawIMPlugin *im.WebhookIMPlugin
 	QQBotPlugin      *qqbot.Plugin
+
+	// Skill store
+	SkillStore *skill.SkillStore
 }
 
 func (a *App) StartBackgroundTasks() {

@@ -10,7 +10,7 @@ func makeDynamicTool(name, desc string) map[string]interface{} {
 	return toolDef(name, desc, nil, nil)
 }
 
-// makeAllTools creates a slice of 12 builtins + n dynamic tools.
+// makeAllTools creates a slice of 14 builtins + n dynamic tools.
 func makeAllTools(dynamicCount int) []map[string]interface{} {
 	builtins := makeBuiltinDefs()
 	for i := 0; i < dynamicCount; i++ {
@@ -23,7 +23,7 @@ func makeAllTools(dynamicCount int) []map[string]interface{} {
 }
 
 func TestToolRouter_BelowThreshold(t *testing.T) {
-	// 12 builtins + 5 dynamic = 17 total, below threshold of 20.
+	// 14 builtins + 5 dynamic = 19 total, below threshold of 20.
 	allTools := makeAllTools(5)
 	router := NewToolRouter(nil)
 	result := router.Route("hello world", allTools)
@@ -34,8 +34,8 @@ func TestToolRouter_BelowThreshold(t *testing.T) {
 }
 
 func TestToolRouter_ExactlyAtThreshold(t *testing.T) {
-	// 12 builtins + 8 dynamic = 20 total, at threshold.
-	allTools := makeAllTools(8)
+	// 14 builtins + 6 dynamic = 20 total, at threshold.
+	allTools := makeAllTools(6)
 	router := NewToolRouter(nil)
 	result := router.Route("test message", allTools)
 
@@ -45,22 +45,23 @@ func TestToolRouter_ExactlyAtThreshold(t *testing.T) {
 }
 
 func TestToolRouter_AboveThreshold_KeepsBuiltins(t *testing.T) {
-	// 12 builtins + 15 dynamic = 27 total, above threshold.
+	// 14 builtins + 15 dynamic = 29 total, above threshold.
 	allTools := makeAllTools(15)
 	router := NewToolRouter(nil)
 	result := router.Route("some query", allTools)
 
-	// Should have 12 builtins + up to 15 dynamic = 27 max.
+	// Should have 14 builtins + up to 15 dynamic = 29 max.
 	// Since we have exactly 15 dynamic, all should be kept.
-	if len(result) != 27 {
-		t.Errorf("expected 27 tools, got %d", len(result))
+	if len(result) != 29 {
+		t.Errorf("expected 29 tools, got %d", len(result))
 	}
 
-	// Verify first 12 are builtins.
+	// Verify first 14 are builtins.
 	builtinNames := []string{
 		"list_sessions", "create_session", "send_input", "get_session_output",
 		"get_session_events", "interrupt_session", "kill_session", "screenshot",
 		"list_mcp_tools", "call_mcp_tool", "list_skills", "run_skill",
+		"parallel_execute", "recommend_tool",
 	}
 	for i, expected := range builtinNames {
 		actual := extractToolName(result[i])
@@ -71,14 +72,14 @@ func TestToolRouter_AboveThreshold_KeepsBuiltins(t *testing.T) {
 }
 
 func TestToolRouter_AboveThreshold_LimitsDynamic(t *testing.T) {
-	// 12 builtins + 20 dynamic = 32 total.
+	// 14 builtins + 20 dynamic = 34 total.
 	allTools := makeAllTools(20)
 	router := NewToolRouter(nil)
 	result := router.Route("some query", allTools)
 
-	// Should have 12 builtins + 15 dynamic = 27.
-	if len(result) != 27 {
-		t.Errorf("expected 27 tools (12 builtin + 15 dynamic), got %d", len(result))
+	// Should have 14 builtins + 15 dynamic = 29.
+	if len(result) != 29 {
+		t.Errorf("expected 29 tools (14 builtin + 15 dynamic), got %d", len(result))
 	}
 }
 
@@ -101,12 +102,13 @@ func TestToolRouter_RelevanceRanking(t *testing.T) {
 	router := NewToolRouter(nil)
 	result := router.Route("search the web for golang tutorials", allTools)
 
-	// All tools should be returned since 22 > 20, but we have only 10 dynamic.
+	// All tools should be returned since 24 > 20, but we have only 10 dynamic
+	// (below maxDynamicRouted=15), so all are kept.
 	if len(result) != len(allTools) {
 		t.Errorf("expected %d tools, got %d", len(allTools), len(result))
 	}
 
-	// The "search_web" tool should be ranked higher (closer to position 12).
+	// The "search_web" tool should be ranked higher (closer to position 14).
 	// Find its position in the result.
 	searchIdx := -1
 	for i := builtinToolCount; i < len(result); i++ {
@@ -128,9 +130,9 @@ func TestToolRouter_EmptyMessage(t *testing.T) {
 	router := NewToolRouter(nil)
 	result := router.Route("", allTools)
 
-	// Empty message → should still return 12 + 15 = 27.
-	if len(result) != 27 {
-		t.Errorf("expected 27 tools, got %d", len(result))
+	// Empty message → should still return 14 + 15 = 29.
+	if len(result) != 29 {
+		t.Errorf("expected 29 tools, got %d", len(result))
 	}
 }
 
@@ -274,5 +276,60 @@ func TestTfidfSimilarity_EmptyInputs(t *testing.T) {
 	}
 	if sim := tfidfSimilarity([]string{"hello"}, nil, idf); sim != 0 {
 		t.Errorf("expected 0 for nil doc, got %.4f", sim)
+	}
+}
+
+
+// ---------------------------------------------------------------------------
+// Hub recommendation matching tests
+// ---------------------------------------------------------------------------
+
+func TestToolRouter_SetHubClient(t *testing.T) {
+	router := NewToolRouter(nil)
+	if router.hubClient != nil {
+		t.Error("expected nil hubClient initially")
+	}
+
+	// We can't create a real SkillHubClient without an App, but we can
+	// verify the setter works with a nil value (no panic).
+	router.SetHubClient(nil)
+	if router.hubClient != nil {
+		t.Error("expected nil hubClient after SetHubClient(nil)")
+	}
+}
+
+func TestToolRouter_MatchRecommendations_NilHubClient(t *testing.T) {
+	// When hubClient is nil, Route should not append any hint.
+	allTools := makeAllTools(20)
+	router := NewToolRouter(nil)
+	result := router.Route("deploy my application", allTools)
+
+	for _, tool := range result {
+		if extractToolName(tool) == "search_and_install_skill" {
+			t.Error("should not have search_and_install_skill hint when hubClient is nil")
+		}
+	}
+}
+
+func TestToolRouter_MatchRecommendations_NoTokens(t *testing.T) {
+	// matchRecommendations with empty tokens should return nil.
+	router := NewToolRouter(nil)
+	hint := router.matchRecommendations(nil)
+	if hint != nil {
+		t.Error("expected nil hint for empty tokens")
+	}
+}
+
+func TestSearchAndInstallSkillHint(t *testing.T) {
+	hint := searchAndInstallSkillHint()
+
+	name := extractToolName(hint)
+	if name != "search_and_install_skill" {
+		t.Errorf("expected name 'search_and_install_skill', got %q", name)
+	}
+
+	desc := extractToolDescription(hint)
+	if desc == "" {
+		t.Error("expected non-empty description for hint")
 	}
 }

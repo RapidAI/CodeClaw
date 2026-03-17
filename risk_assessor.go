@@ -189,3 +189,39 @@ func buildReason(level RiskLevel, factors []string) string {
 	}
 	return fmt.Sprintf("risk level: %s — %s", level, strings.Join(factors, "; "))
 }
+
+// AssessSkill evaluates the risk level of an entire Skill by scanning all
+// steps and taking the highest risk level. Trust level adjustments:
+// - official: medium → low
+// - unknown: low → medium
+func (a *RiskAssessor) AssessSkill(skill *NLSkillEntry, trustLevel string) RiskAssessment {
+	maxRisk := RiskLow
+	var factors []string
+
+	for _, step := range skill.Steps {
+		stepAssessment := a.Assess(RiskContext{
+			ToolName:  step.Action,
+			Arguments: step.Params,
+		})
+		if riskLevelOrder[stepAssessment.Level] > riskLevelOrder[maxRisk] {
+			maxRisk = stepAssessment.Level
+			factors = append(factors, stepAssessment.Factors...)
+		}
+	}
+
+	// Trust-level adjustments
+	if trustLevel == "official" && maxRisk == RiskMedium {
+		maxRisk = RiskLow
+		factors = append(factors, "official trust level: medium downgraded to low")
+	}
+	if trustLevel == "unknown" && maxRisk == RiskLow {
+		maxRisk = RiskMedium
+		factors = append(factors, "unknown trust level: low upgraded to medium")
+	}
+
+	return RiskAssessment{
+		Level:   maxRisk,
+		Reason:  buildReason(maxRisk, factors),
+		Factors: factors,
+	}
+}

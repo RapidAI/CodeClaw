@@ -107,6 +107,44 @@ func (b *NotifyBroadcaster) BroadcastVerifyCode(ctx context.Context, email, code
 	return joinChannels(channels), nil
 }
 
+// BroadcastLoginLink sends a login confirmation link to all IM channels where
+// the user (identified by email) is bound. Email is handled separately by the
+// caller (mailer.SendLoginConfirmation), so this only covers IM platforms.
+// Returns a list of channel display names where the link was sent.
+func (b *NotifyBroadcaster) BroadcastLoginLink(ctx context.Context, email, confirmURL string) []string {
+	if b.adapter == nil {
+		return nil
+	}
+
+	b.adapter.mu.RLock()
+	plugins := make(map[string]IMPlugin, len(b.adapter.plugins))
+	for k, v := range b.adapter.plugins {
+		plugins[k] = v
+	}
+	b.adapter.mu.RUnlock()
+
+	msg := fmt.Sprintf("🔐 MaClaw Hub 登录确认\n\n请点击以下链接完成登录:\n%s\n\n链接 15 分钟内有效，如非本人操作请忽略。", confirmURL)
+
+	var channels []string
+	for name, plugin := range plugins {
+		lookup, ok := plugin.(BindingLookup)
+		if !ok {
+			continue
+		}
+		uid := lookup.LookupByEmail(email)
+		if uid == "" {
+			continue
+		}
+		target := UserTarget{PlatformUID: uid}
+		if err := plugin.SendText(ctx, target, msg); err != nil {
+			log.Printf("[im/notify] send login link to %s (uid=%s) failed: %v", name, uid, err)
+		} else {
+			channels = append(channels, platformDisplayName(name))
+		}
+	}
+	return channels
+}
+
 // BroadcastText sends a plain text message to all channels where the user
 // (identified by email) is reachable. Useful for login confirmations, alerts, etc.
 func (b *NotifyBroadcaster) BroadcastText(ctx context.Context, email, subject, text string) {

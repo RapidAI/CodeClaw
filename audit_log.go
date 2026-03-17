@@ -12,11 +12,21 @@ import (
 	"time"
 )
 
+// AuditAction represents the type of auditable action.
+type AuditAction string
+
+const (
+	AuditActionHubSkillInstall AuditAction = "hub_skill_install"
+	AuditActionHubSkillUpdate  AuditAction = "hub_skill_update"
+	AuditActionHubSkillReject  AuditAction = "hub_skill_reject"
+)
+
 // AuditEntry represents a single audit log record for a tool invocation.
 type AuditEntry struct {
 	Timestamp    time.Time              `json:"timestamp"`
 	UserID       string                 `json:"user_id"`
 	SessionID    string                 `json:"session_id"`
+	Action       AuditAction            `json:"action,omitempty"`
 	ToolName     string                 `json:"tool_name"`
 	Arguments    map[string]interface{} `json:"arguments"`
 	RiskLevel    RiskLevel              `json:"risk_level"`
@@ -28,6 +38,7 @@ type AuditEntry struct {
 type AuditFilter struct {
 	StartTime  *time.Time
 	EndTime    *time.Time
+	Action     AuditAction
 	ToolName   string
 	RiskLevels []RiskLevel
 }
@@ -301,6 +312,9 @@ func matchesFilter(entry AuditEntry, filter AuditFilter) bool {
 		return false
 	}
 	if filter.EndTime != nil && entry.Timestamp.After(*filter.EndTime) {
+		return false
+	}
+	if filter.Action != "" && entry.Action != filter.Action {
 		return false
 	}
 	if filter.ToolName != "" && entry.ToolName != filter.ToolName {

@@ -12,7 +12,7 @@ import kiloIcon from './assets/images/KiloCode.png';
 import cursorIcon from './assets/images/qodercli.png';
 import lobsterOnline from './assets/images/lobster_online.svg';
 import lobsterOffline from './assets/images/lobster_offline.svg';
-import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM } from "../wailsjs/go/main/App";
+import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, PingSkillHub } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
 import ReactMarkdown from 'react-markdown';
@@ -132,6 +132,10 @@ const APP_VERSION = "5.0.0.9300"
 // Tool name constants to avoid repeated string arrays
 const TOOL_NAMES = ['claude', 'gemini', 'codex', 'opencode', 'codebuddy', 'cursor', 'iflow', 'kilo'] as const;
 const SKILL_TOOLS = ['claude', 'gemini', 'codex'] as const;
+const DEFAULT_SKILLHUB_ENTRIES = [
+    { label: 'OpenClaw Official', url: 'https://skillhub.openclaw.org' },
+    { label: '腾讯云镜像', url: 'https://skillhub.tencent.openclaw.org' },
+];
 const isToolTab = (tab: string): boolean => (TOOL_NAMES as readonly string[]).includes(tab);
 const isSkillTool = (tab: string): boolean => (SKILL_TOOLS as readonly string[]).includes(tab);
 
@@ -1309,7 +1313,7 @@ function App() {
     const [status, setStatus] = useState("");
     const [activeTab, setActiveTab] = useState(0);
     const [tabStartIndex, setTabStartIndex] = useState(0);
-    const [settingsTab, setSettingsTab] = useState<'general' | 'display' | 'remote' | 'skills' | 'mcp' | 'llm'>('general');
+    const [settingsTab, setSettingsTab] = useState<'general' | 'display' | 'remote' | 'skills' | 'mcp' | 'llm' | 'skillhub'>('general');
     const [installLocation, setInstallLocation] = useState<'user' | 'project'>('user');
     const [installProject, setInstallProject] = useState<string>("");
     const [isBatchInstalling, setIsBatchInstalling] = useState(false);
@@ -1323,6 +1327,55 @@ function App() {
     // MaClaw LLM online status (lobster indicator)
     const [maclawLLMOnline, setMaclawLLMOnline] = useState<boolean>(false);
     const [maclawLLMConfigured, setMaclawLLMConfigured] = useState<boolean>(false);
+
+    // SkillHUB management
+    const [skillHubEntries, setSkillHubEntries] = useState<{label: string; url: string}[]>([]);
+    const [skillHubStatus, setSkillHubStatus] = useState<Record<string, {online: boolean; ms: number; error: string; testing: boolean}>>({});
+    const [newSkillHubLabel, setNewSkillHubLabel] = useState('');
+    const [newSkillHubUrl, setNewSkillHubUrl] = useState('');
+    const skillHubEntriesRef = useRef(skillHubEntries);
+    skillHubEntriesRef.current = skillHubEntries;
+
+    // Initialise skillHubEntries from config (once config loads)
+    useEffect(() => {
+        if (!config) return;
+        const saved = (config as any).skill_hub_urls;
+        if (Array.isArray(saved) && saved.length > 0) {
+            setSkillHubEntries(saved);
+        } else if (skillHubEntries.length === 0) {
+            setSkillHubEntries([...DEFAULT_SKILLHUB_ENTRIES]);
+        }
+    }, [!!config]);
+
+    const pingOneSkillHub = async (url: string) => {
+        setSkillHubStatus(prev => ({ ...prev, [url]: { online: false, ms: 0, error: '', testing: true } }));
+        try {
+            const res = await PingSkillHub(url);
+            setSkillHubStatus(prev => ({ ...prev, [url]: { online: !!res.online, ms: res.ms || 0, error: res.error || '', testing: false } }));
+        } catch (err: any) {
+            setSkillHubStatus(prev => ({ ...prev, [url]: { online: false, ms: 0, error: String(err), testing: false } }));
+        }
+    };
+
+    const pingAllSkillHubs = () => {
+        skillHubEntriesRef.current.forEach(e => pingOneSkillHub(e.url));
+    };
+
+    const saveSkillHubEntries = (entries: {label: string; url: string}[]) => {
+        setSkillHubEntries(entries);
+        if (config) {
+            const newConfig = new main.AppConfig({ ...config, skill_hub_urls: entries });
+            setConfig(newConfig);
+            SaveConfig(newConfig);
+        }
+    };
+
+    // Auto-test when switching to skillhub tab
+    useEffect(() => {
+        if (settingsTab === 'skillhub' && skillHubEntriesRef.current.length > 0) {
+            pingAllSkillHubs();
+        }
+    }, [settingsTab]);
 
     // Ref to prevent multiple hide clicks
     const isHidingRef = useRef(false);
@@ -2791,19 +2844,14 @@ ${instruction}`;
             desc: lang === 'zh-Hans' ? '仅配置远程服务器地址' : lang === 'zh-Hant' ? '僅配置遠端伺服器位址' : 'Server addresses only',
         },
         {
-            id: 'skills' as const,
-            label: lang === 'zh-Hans' ? '技能管理' : lang === 'zh-Hant' ? '技能管理' : 'Skills',
-            desc: lang === 'zh-Hans' ? '查看与管理 Skill 定义' : lang === 'zh-Hant' ? '查看與管理 Skill 定義' : 'View and manage Skill definitions',
-        },
-        {
-            id: 'mcp' as const,
-            label: lang === 'zh-Hans' ? 'MCP 管理' : lang === 'zh-Hant' ? 'MCP 管理' : 'MCP',
-            desc: lang === 'zh-Hans' ? '注册与管理 MCP Server' : lang === 'zh-Hant' ? '註冊與管理 MCP Server' : 'Register and manage MCP Servers',
-        },
-        {
             id: 'llm' as const,
             label: lang === 'zh-Hans' ? 'LLM 配置' : lang === 'zh-Hant' ? 'LLM 配置' : 'LLM Config',
             desc: lang === 'zh-Hans' ? '配置 MaClaw 代理使用的 LLM' : lang === 'zh-Hant' ? '配置 MaClaw 代理使用的 LLM' : 'Configure LLM for MaClaw agent',
+        },
+        {
+            id: 'skillhub' as const,
+            label: 'SkillHUB',
+            desc: lang === 'zh-Hans' ? '配置 SkillHUB 地址，搜索与下载技能包' : lang === 'zh-Hant' ? '配置 SkillHUB 位址，搜尋與下載技能包' : 'Configure SkillHUB URL to search and download skill packages',
         },
     ];
     const isRemoteCapableActiveTool = remoteToolMetadata.some(
@@ -2848,46 +2896,7 @@ ${instruction}`;
                         display: 'inline-block',
                         width: '100%'
                     }}>MaClaw</div>
-                    <div
-                        title={maclawLLMOnline
-                            ? (lang?.startsWith('zh') ? 'MaClaw Agent 在线' : 'MaClaw Agent Online')
-                            : maclawLLMConfigured
-                                ? (lang?.startsWith('zh') ? 'MaClaw Agent 离线' : 'MaClaw Agent Offline')
-                                : (lang?.startsWith('zh') ? 'LLM 未配置' : 'LLM Not Configured')}
-                        style={{
-                            textAlign: 'center',
-                            marginBottom: '10px',
-                            cursor: 'pointer',
-                            opacity: maclawLLMOnline ? 1 : 0.6,
-                            transition: 'opacity 0.3s ease',
-                        }}
-                        onClick={() => { setNavTab('settings'); setSettingsTab('llm'); }}
-                    >
-                        <img
-                            src={maclawLLMOnline ? lobsterOnline : lobsterOffline}
-                            alt={maclawLLMOnline ? 'Online' : 'Offline'}
-                            style={{ width: '20px', height: '20px' }}
-                        />
-                    </div>
 
-                    <div
-                        className={`sidebar-item ${navTab === 'message' ? 'active' : ''}`}
-                        onClick={() => switchTool('message')}
-                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'message' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                        title={t("message")}
-                    >
-                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>💬</span>
-                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("message")}</span>
-                    </div>
-                    <div
-                        className={`sidebar-item ${navTab === 'tutorial' ? 'active' : ''}`}
-                        onClick={() => switchTool('tutorial')}
-                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'tutorial' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                        title={t("tutorial")}
-                    >
-                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>📚</span>
-                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("tutorial")}</span>
-                    </div>
                     <div
                         className={`sidebar-item ${navTab === 'remote' ? 'active' : ''}`}
                         onClick={() => switchTool('remote')}
@@ -2898,17 +2907,26 @@ ${instruction}`;
                         <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{lang === 'zh-Hans' ? '远程' : lang === 'zh-Hant' ? '遠端' : 'Remote'}</span>
                     </div>
 
-                    <div style={{ flex: 1 }}></div>
-
                     <div
                         className={`sidebar-item ${navTab === 'skills' ? 'active' : ''}`}
                         onClick={() => switchTool('skills')}
                         style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'skills' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                         title={t("skills")}
                     >
-                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🛠️</span>
+                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🧩</span>
                         <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("skills")}</span>
                     </div>
+                    <div
+                        className={`sidebar-item ${navTab === 'mcp' ? 'active' : ''}`}
+                        onClick={() => switchTool('mcp')}
+                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'mcp' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
+                        title="MCP"
+                    >
+                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🔌</span>
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>MCP</span>
+                    </div>
+
+                    <div style={{ flex: 1 }}></div>
 
                     <div
                         className={`sidebar-item ${navTab === 'settings' ? 'active' : ''}`}
@@ -2931,7 +2949,53 @@ ${instruction}`;
                 </div>
 
                 {/* Right Tool List */}
-                <div style={{ flex: 1, padding: '10px', overflowY: 'auto', backgroundColor: '#fafbff', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <div style={{ flex: 1, padding: '10px', overflowY: 'auto', backgroundColor: '#fafbff', display: 'flex', flexDirection: 'column' }}>
+                    {/* Lobster indicator + Message/Tutorial row */}
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
+                        <div
+                            title={maclawLLMOnline
+                                ? (lang?.startsWith('zh') ? 'MaClaw Agent 在线' : 'MaClaw Agent Online')
+                                : maclawLLMConfigured
+                                    ? (lang?.startsWith('zh') ? 'MaClaw Agent 离线' : 'MaClaw Agent Offline')
+                                    : (lang?.startsWith('zh') ? 'LLM 未配置' : 'LLM Not Configured')}
+                            style={{
+                                textAlign: 'center',
+                                marginBottom: '6px',
+                                cursor: 'pointer',
+                                opacity: maclawLLMOnline ? 1 : 0.6,
+                                transition: 'opacity 0.3s ease',
+                            }}
+                            onClick={() => { setNavTab('settings'); setSettingsTab('llm'); }}
+                        >
+                            <img
+                                src={maclawLLMOnline ? lobsterOnline : lobsterOffline}
+                                alt={maclawLLMOnline ? 'Online' : 'Offline'}
+                                style={{ width: '20px', height: '20px' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', gap: '2px', width: '100%' }}>
+                            <div
+                                className={`sidebar-item ${navTab === 'message' ? 'active' : ''}`}
+                                onClick={() => switchTool('message')}
+                                style={{ flexDirection: 'column', padding: '6px 0', flex: 1, gap: '2px', borderLeft: 'none', borderBottom: navTab === 'message' ? '2px solid var(--primary-color)' : '2px solid transparent', justifyContent: 'center', borderRight: 'none' }}
+                                title={t("message")}
+                            >
+                                <span className="sidebar-icon" style={{ margin: 0, fontSize: '1rem' }}>💬</span>
+                                <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{t("message")}</span>
+                            </div>
+                            <div
+                                className={`sidebar-item ${navTab === 'tutorial' ? 'active' : ''}`}
+                                onClick={() => switchTool('tutorial')}
+                                style={{ flexDirection: 'column', padding: '6px 0', flex: 1, gap: '2px', borderLeft: 'none', borderBottom: navTab === 'tutorial' ? '2px solid var(--primary-color)' : '2px solid transparent', justifyContent: 'center', borderRight: 'none' }}
+                                title={t("tutorial")}
+                            >
+                                <span className="sidebar-icon" style={{ margin: 0, fontSize: '1rem' }}>📚</span>
+                                <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{t("tutorial")}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div style={{ width: '80%', height: '1px', background: 'linear-gradient(90deg, transparent, #d4d4f7, transparent)', margin: '0 auto 8px', flexShrink: 0 }}></div>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                     <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '4px' }}>
                         <div className={`sidebar-item ${navTab === 'claude' ? 'active' : ''}`} onClick={() => switchTool('claude')}>
                             <span className="sidebar-icon">
@@ -2989,6 +3053,7 @@ ${instruction}`;
                         )}
 
                     </div>
+                    </div>
                 </div>
             </div>
 
@@ -3011,7 +3076,8 @@ ${instruction}`;
                                                                         navTab === 'tutorial' ? t("tutorial") :
                                                                             navTab === 'remote' ? (lang === 'zh-Hans' ? '远程管理' : lang === 'zh-Hant' ? '遠端管理' : 'Remote Management') :
                                                                                 navTab === 'api-store' ? t("apiStore") :
-                                                                                    navTab === 'settings' ? t("globalSettings") : t("about")}
+                                                                                    navTab === 'mcp' ? 'MCP' :
+                                                                                        navTab === 'settings' ? t("globalSettings") : t("about")}
                             </span>
                             {navTab === 'projects' && (
                                 <>
@@ -3141,49 +3207,6 @@ ${instruction}`;
                                         {t("apiStore")}
                                     </button>
                                 </>
-                            )}
-                            {navTab === 'skills' && (
-                                <div style={{ display: 'flex', gap: '10px', marginLeft: '10px', alignItems: 'center' }}>
-                                    <button
-                                        className="btn-link"
-                                        onClick={() => {
-                                            setNewSkillName("");
-                                            setNewSkillDesc("");
-                                            // Default to zip for gemini/codex
-                                            const isGeminiOrCodex = activeTool?.toLowerCase() === 'gemini' || activeTool?.toLowerCase() === 'codex';
-                                            setNewSkillType(isGeminiOrCodex ? "zip" : "address");
-                                            setNewSkillValue("");
-                                            setShowAddSkillModal(true);
-                                        }}
-                                        style={{
-                                            padding: '2px 8px',
-                                            fontSize: '0.8rem',
-                                            borderColor: '#6366f1',
-                                            color: '#6366f1',
-                                            '--wails-draggable': 'no-drag'
-                                        } as any}
-                                    >
-                                        {t("addSkill")}
-                                    </button>
-                                    <button
-                                        className="btn-link"
-                                        disabled={!selectedSkill}
-                                        style={{
-                                            padding: '2px 8px',
-                                            fontSize: '0.8rem',
-                                            opacity: selectedSkill ? 1 : 0.5,
-                                            cursor: selectedSkill ? 'pointer' : 'not-allowed',
-                                            borderColor: '#ef4444',
-                                            color: '#ef4444',
-                                            '--wails-draggable': 'no-drag'
-                                        } as any}
-                                        onClick={() => {
-                                            if (selectedSkill) handleDeleteSkill(selectedSkill);
-                                        }}
-                                    >
-                                        {t("delete")}
-                                    </button>
-                                </div>
                             )}
                         </h2>
                         <div style={{ display: 'flex', gap: '10px', '--wails-draggable': 'no-drag', marginRight: '5px', pointerEvents: 'auto', position: 'relative', zIndex: 10000 } as any}>
@@ -3487,199 +3510,6 @@ ${instruction}`;
                             </div>
                         </div>
                     )}
-                    {navTab === 'skills' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-                                {skills.length === 0 ? (
-                                    <div style={{ textAlign: 'center', color: '#6b7280', marginTop: '40px' }}>{t("noSkills")}</div>
-                                ) : (
-                                    <div className="skills-list" style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                        {skills.map((skill, idx) => (
-                                            <div
-                                                key={idx}
-                                                onClick={() => setSelectedSkill(skill.name)}
-                                                onContextMenu={(e) => handleSkillContext(e, skill.name)}
-                                                title={skill.description}
-                                                style={{
-                                                    border: selectedSkill === skill.name ? '2px solid var(--primary-color)' : '1px solid var(--border-color)',
-                                                    borderRadius: '8px',
-                                                    padding: '10px',
-                                                    backgroundColor: selectedSkill === skill.name ? '#eef2ff' : '#fff',
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                    gap: '4px',
-                                                    cursor: 'default',
-                                                    transition: 'all 0.2s',
-                                                    position: 'relative',
-                                                    marginTop: (skill.name === "Claude Official Documentation Skill Package" || skill.name === "超能力技能包") ? '6px' : '0px'
-                                                }}
-                                            >
-                                                {(skill.name === "Claude Official Documentation Skill Package" || skill.name === "超能力技能包") && (
-                                                    <span style={{
-                                                        position: 'absolute',
-                                                        top: '-8px',
-                                                        right: '4px',
-                                                        backgroundColor: '#6366f1',
-                                                        color: 'white',
-                                                        fontSize: '10px',
-                                                        padding: '1px 6px',
-                                                        borderRadius: '4px',
-                                                        fontWeight: 'bold',
-                                                        zIndex: 10,
-                                                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-                                                        transform: 'scale(0.9)'
-                                                    }}>
-                                                        {t("systemDefault")}
-                                                    </span>
-                                                )}
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                    <span style={{ fontWeight: 'bold', fontSize: '1.05rem' }}>{skill.name}</span>
-                                                </div>
-                                                <div style={{ fontSize: '0.75rem', color: '#9ca3af', display: 'flex', gap: '10px', marginTop: '2px' }}>
-                                                    <span style={{ backgroundColor: '#f3f4f6', padding: '2px 6px', borderRadius: '4px' }}>
-                                                        {skill.type === 'address' ? t("skillAddress") : t("skillZip")}
-                                                    </span>
-                                                    <span style={{ fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>
-                                                        {skill.value}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-
-                            {skillContextMenu.visible && (
-                                <div style={{
-                                    position: 'fixed',
-                                    top: skillContextMenu.y,
-                                    left: skillContextMenu.x,
-                                    backgroundColor: 'white',
-                                    border: '1px solid #e2e8f0',
-                                    borderRadius: '8px',
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                                    zIndex: 3000,
-                                    padding: '5px 0',
-                                    minWidth: '120px'
-                                }}>
-                                    <div className="context-menu-item" onClick={() => {
-                                        if (skillContextMenu.skillName) handleDeleteSkill(skillContextMenu.skillName);
-                                        setSkillContextMenu({ ...skillContextMenu, visible: false });
-                                    }}>
-                                        {t("delete")}
-                                    </div>
-                                </div>
-                            )}
-
-                            {showAddSkillModal && (
-                                <div className="modal-backdrop">
-                                    <div className="modal-content" style={{ width: '90%', maxWidth: '500px' }}>
-                                        <div className="modal-header">
-                                            <h3>{t("addSkill")}</h3>
-                                            <button onClick={() => setShowAddSkillModal(false)} className="btn-close">&times;</button>
-                                        </div>
-                                        <div className="modal-body">
-                                            <div className="form-group">
-                                                <label>{t("skillType")}</label>
-                                                <div style={{ display: 'flex', gap: '20px', marginTop: '5px' }}>
-                                                    {(activeTool?.toLowerCase() !== 'gemini' && activeTool?.toLowerCase() !== 'codex') && (
-                                                        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
-                                                            <input
-                                                                type="radio"
-                                                                checked={newSkillType === 'address'}
-                                                                onChange={() => setNewSkillType('address')}
-                                                            /> {t("skillAddress")}
-                                                        </label>
-                                                    )}
-                                                    <label style={{ display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
-                                                        <input
-                                                            type="radio"
-                                                            checked={newSkillType === 'zip'}
-                                                            onChange={() => setNewSkillType('zip')}
-                                                        /> {t("skillZip")}
-                                                    </label>
-                                                </div>
-                                            </div>
-
-                                            <div className="form-group">
-                                                <label>{t("skillName")}</label>
-                                                <input
-                                                    type="text"
-                                                    className="form-input"
-                                                    value={newSkillName}
-                                                    onChange={(e) => setNewSkillName(e.target.value)}
-                                                    placeholder={t("placeholderName")}
-                                                />
-                                            </div>
-
-                                            <div className="form-group">
-                                                <label>{t("skillDesc")}</label>
-                                                <textarea
-                                                    className="form-input"
-                                                    value={newSkillDesc}
-                                                    onChange={(e) => setNewSkillDesc(e.target.value)}
-                                                    rows={3}
-                                                    placeholder={t("placeholderDesc")}
-                                                />
-                                            </div>
-
-                                            <div className="form-group">
-                                                <label>{newSkillType === 'address' ? t("skillAddress") : t("skillPath")}</label>
-                                                {newSkillType === 'address' ? (
-                                                    <input
-                                                        type="text"
-                                                        className="form-input"
-                                                        value={newSkillValue}
-                                                        onChange={(e) => setNewSkillValue(e.target.value)}
-                                                        placeholder={t("placeholderAddress")}
-                                                    />
-                                                ) : (
-                                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                                        <input
-                                                            type="text"
-                                                            className="form-input"
-                                                            style={{ flex: 1, minWidth: '0' }}
-                                                            value={newSkillValue}
-                                                            readOnly
-                                                            placeholder={t("placeholderZip")}
-                                                        />
-                                                        <button
-                                                            className="btn-secondary"
-                                                            style={{ flexShrink: 0 }}
-                                                            onClick={async () => {
-                                                                const path = await SelectSkillFile();
-                                                                if (path) setNewSkillValue(path);
-                                                            }}
-                                                        >
-                                                            {t("browse")}
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                        <div className="modal-footer">
-                                            <button className="btn-secondary" onClick={() => setShowAddSkillModal(false)}>{t("cancel")}</button>
-                                            <button className="btn-primary" onClick={async () => {
-                                                if (!newSkillName || !newSkillValue) {
-                                                    showToastMessage(t("skillRequiredError"));
-                                                    return;
-                                                }
-                                                try {
-                                                    await AddSkill(newSkillName, newSkillDesc, newSkillType, newSkillValue, activeTool);
-                                                    setShowAddSkillModal(false);
-                                                    const list = await ListSkills(activeTool);
-                                                    setSkills(list || []);
-                                                    showToastMessage(t("skillAdded"));
-                                                } catch (err) {
-                                                    showToastMessage(t("skillAddError").replace("{error}", err as string));
-                                                }
-                                            }}>{t("confirm")}</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
                     {isToolTab(navTab) && (
                         <ToolConfiguration
                             toolName={navTab}
@@ -3803,6 +3633,18 @@ ${instruction}`;
                         </div>
                     )}
 
+                    {navTab === 'skills' && (
+                        <div style={{ padding: '10px' }}>
+                            <SkillsManagementPanel translate={translate} />
+                        </div>
+                    )}
+
+                    {navTab === 'mcp' && (
+                        <div style={{ padding: '10px' }}>
+                            <MCPManagementPanel translate={translate} />
+                        </div>
+                    )}
+
                     {navTab === 'settings' && (
                         <div className="settings-shell" style={{ padding: '10px' }}>
                             <div className="settings-top-tabs">
@@ -3870,16 +3712,113 @@ ${instruction}`;
                                 />
                             </div>
 
-                            <div className="settings-panel" style={{ display: settingsTab === 'skills' ? 'block' : 'none' }}>
-                                <SkillsManagementPanel translate={translate} />
-                            </div>
-
-                            <div className="settings-panel" style={{ display: settingsTab === 'mcp' ? 'block' : 'none' }}>
-                                <MCPManagementPanel translate={translate} />
-                            </div>
-
                             <div className="settings-panel" style={{ display: settingsTab === 'llm' ? 'block' : 'none' }}>
                                 <LLMConfigPanel lang={lang} codexModels={config?.codex?.models} />
+                            </div>
+
+                            <div className="settings-panel" style={{ display: settingsTab === 'skillhub' ? 'block' : 'none' }}>
+                                <div className="form-group" style={{ marginTop: '0', borderTop: 'none', paddingTop: '0' }}>
+                                    <h4 style={{ fontSize: '0.8rem', color: '#6366f1', marginBottom: '6px', marginTop: 0, textTransform: 'uppercase', letterSpacing: '0.025em' }}>SkillHUB</h4>
+                                    <p style={{ fontSize: '0.78rem', color: '#6b7280', marginBottom: '12px' }}>
+                                        {lang === 'zh-Hans' ? '管理 SkillHUB 源地址，可从远程仓库搜索与下载技能包。' :
+                                         lang === 'zh-Hant' ? '管理 SkillHUB 來源位址，可從遠端倉庫搜尋與下載技能包。' :
+                                         'Manage SkillHUB registry URLs to search and download skill packages.'}
+                                    </p>
+
+                                    {/* Existing entries */}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
+                                        {skillHubEntries.map((entry, idx) => {
+                                            const st = skillHubStatus[entry.url];
+                                            return (
+                                                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', border: '1px solid #e5e7eb', backgroundColor: '#fafbff' }}>
+                                                    {/* Status indicator */}
+                                                    <span style={{ fontSize: '0.9rem', flexShrink: 0 }}>
+                                                        {st?.testing ? '⏳' : st?.online ? '🟢' : st ? '🔴' : '⚪'}
+                                                    </span>
+                                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                                        <div style={{ fontSize: '0.8rem', fontWeight: 500, color: '#374151' }}>{entry.label}</div>
+                                                        <div style={{ fontSize: '0.72rem', color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.url}</div>
+                                                    </div>
+                                                    {st && !st.testing && (
+                                                        <span style={{ fontSize: '0.68rem', color: st.online ? '#10b981' : '#ef4444', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                                                            {st.online ? `${st.ms}ms` : (st.error || 'offline')}
+                                                        </span>
+                                                    )}
+                                                    <button
+                                                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.8rem', color: '#6366f1', padding: '2px 4px', flexShrink: 0 }}
+                                                        title={lang === 'zh-Hans' ? '测试' : 'Test'}
+                                                        onClick={() => pingOneSkillHub(entry.url)}
+                                                    >🔄</button>
+                                                    <button
+                                                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.8rem', color: '#ef4444', padding: '2px 4px', flexShrink: 0 }}
+                                                        title={lang === 'zh-Hans' ? '删除' : 'Delete'}
+                                                        onClick={() => {
+                                                            const next = skillHubEntries.filter((_, i) => i !== idx);
+                                                            saveSkillHubEntries(next);
+                                                        }}
+                                                    >✕</button>
+                                                </div>
+                                            );
+                                        })}
+                                        {skillHubEntries.length === 0 && (
+                                            <div style={{ textAlign: 'center', color: '#9ca3af', fontSize: '0.8rem', padding: '12px' }}>
+                                                {lang === 'zh-Hans' ? '暂无 SkillHUB 源' : 'No SkillHUB sources'}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Add new entry */}
+                                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <input
+                                            type="text"
+                                            value={newSkillHubLabel}
+                                            onChange={(e) => setNewSkillHubLabel(e.target.value)}
+                                            placeholder={lang === 'zh-Hans' ? '名称' : 'Label'}
+                                            style={{ width: '100px', padding: '6px 10px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.8rem', outline: 'none' }}
+                                            onContextMenu={(e) => handleContextMenu(e, e.target as HTMLInputElement)}
+                                        />
+                                        <input
+                                            type="text"
+                                            value={newSkillHubUrl}
+                                            onChange={(e) => setNewSkillHubUrl(e.target.value)}
+                                            placeholder="https://skillhub.example.com"
+                                            style={{ flex: 1, padding: '6px 10px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.8rem', outline: 'none', minWidth: '180px' }}
+                                            onContextMenu={(e) => handleContextMenu(e, e.target as HTMLInputElement)}
+                                        />
+                                        <button
+                                            className="btn-primary"
+                                            style={{ padding: '6px 14px', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                                            disabled={!newSkillHubUrl.trim()}
+                                            onClick={() => {
+                                                const url = newSkillHubUrl.trim();
+                                                let label = newSkillHubLabel.trim();
+                                                if (!label) {
+                                                    try { label = new URL(url).hostname; } catch { label = url; }
+                                                }
+                                                const next = [...skillHubEntries, { label, url }];
+                                                saveSkillHubEntries(next);
+                                                setNewSkillHubLabel('');
+                                                setNewSkillHubUrl('');
+                                                setTimeout(() => pingOneSkillHub(url), 300);
+                                            }}
+                                        >
+                                            + {lang === 'zh-Hans' ? '添加' : lang === 'zh-Hant' ? '新增' : 'Add'}
+                                        </button>
+                                    </div>
+
+                                    {/* Restore defaults */}
+                                    <div style={{ marginTop: '12px' }}>
+                                        <button
+                                            className="btn-link"
+                                            style={{ fontSize: '0.75rem' }}
+                                            onClick={() => {
+                                                saveSkillHubEntries([...DEFAULT_SKILLHUB_ENTRIES]);
+                                            }}
+                                        >
+                                            {lang === 'zh-Hans' ? '恢复默认源' : lang === 'zh-Hant' ? '恢復預設來源' : 'Restore defaults'}
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
 
                             <div className="settings-panel" style={{ display: settingsTab === 'display' ? 'block' : 'none' }}>
@@ -6065,6 +6004,26 @@ ${instruction}`;
                                     </select>
                                 )}
                             </div>
+
+                            <button
+                                onClick={() => { setShowInstallSkillModal(false); switchTool('skills'); }}
+                                style={{
+                                    background: 'none',
+                                    border: '1px solid #d1d5db',
+                                    borderRadius: '16px',
+                                    padding: '4px 10px',
+                                    fontSize: '0.8rem',
+                                    cursor: 'pointer',
+                                    color: '#6366f1',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    whiteSpace: 'nowrap',
+                                }}
+                                title={t("skills")}
+                            >
+                                🛠️ {t("skills")}
+                            </button>
 
                             <button onClick={() => setShowInstallSkillModal(false)} className="btn-close" style={{ marginLeft: 'auto' }}>&times;</button>
                         </div>
