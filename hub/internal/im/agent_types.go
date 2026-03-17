@@ -4,11 +4,14 @@ package im
 // It is sent from the MaClaw client to Hub via the "im.agent_response"
 // WebSocket message, then converted to GenericResponse for IM delivery.
 type AgentResponse struct {
-	Text     string           `json:"text"`               // Main reply text
-	Fields   []ResponseField  `json:"fields,omitempty"`   // Structured fields (optional)
-	Actions  []ResponseAction `json:"actions,omitempty"`  // Suggested actions (optional)
-	ImageKey string           `json:"image_key,omitempty"` // Image key (optional)
-	Error    string           `json:"error,omitempty"`    // Error message (optional)
+	Text         string           `json:"text"`                    // Main reply text
+	Fields       []ResponseField  `json:"fields,omitempty"`        // Structured fields (optional)
+	Actions      []ResponseAction `json:"actions,omitempty"`       // Suggested actions (optional)
+	ImageKey     string           `json:"image_key,omitempty"`     // Image key (optional)
+	FileData     string           `json:"file_data,omitempty"`     // Base64-encoded file data (optional)
+	FileName     string           `json:"file_name,omitempty"`     // File display name (optional)
+	FileMimeType string           `json:"file_mime_type,omitempty"` // File MIME type (optional)
+	Error        string           `json:"error,omitempty"`         // Error message (optional)
 }
 
 // IMUserMessage is sent from Hub to MaClaw client via WebSocket
@@ -43,12 +46,16 @@ func (r *AgentResponse) ToGenericResponse() *GenericResponse {
 	}
 
 	resp := &GenericResponse{
-		StatusCode: 200,
-		StatusIcon: "🤖",
-		Title:      "",
-		Body:       r.Text,
-		Fields:     r.Fields,
-		Actions:    r.Actions,
+		StatusCode:   200,
+		StatusIcon:   "🤖",
+		Title:        "",
+		Body:         r.Text,
+		Fields:       r.Fields,
+		Actions:      r.Actions,
+		ImageKey:     r.ImageKey,
+		FileData:     r.FileData,
+		FileName:     r.FileName,
+		FileMimeType: r.FileMimeType,
 	}
 
 	return resp

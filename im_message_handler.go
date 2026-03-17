@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -29,11 +31,14 @@ type IMUserMessage struct {
 
 // IMAgentResponse is the structured reply sent back to Hub.
 type IMAgentResponse struct {
-	Text     string             `json:"text"`
-	Fields   []IMResponseField  `json:"fields,omitempty"`
-	Actions  []IMResponseAction `json:"actions,omitempty"`
-	ImageKey string             `json:"image_key,omitempty"`
-	Error    string             `json:"error,omitempty"`
+	Text         string             `json:"text"`
+	Fields       []IMResponseField  `json:"fields,omitempty"`
+	Actions      []IMResponseAction `json:"actions,omitempty"`
+	ImageKey     string             `json:"image_key,omitempty"`
+	FileData     string             `json:"file_data,omitempty"`
+	FileName     string             `json:"file_name,omitempty"`
+	FileMimeType string             `json:"file_mime_type,omitempty"`
+	Error        string             `json:"error,omitempty"`
 }
 
 // IMResponseField is a key-value field in the agent response.
@@ -89,6 +94,7 @@ type conversationMemory struct {
 	mu       sync.RWMutex
 	sessions map[string]*conversationSession
 	stopCh   chan struct{}
+	archiver *ConversationArchiver
 }
 
 func newConversationMemory() *conversationMemory {
@@ -120,6 +126,11 @@ func (cm *conversationMemory) evictExpired() {
 	defer cm.mu.Unlock()
 	for uid, s := range cm.sessions {
 		if now.Sub(s.lastAccess) > memoryTTL {
+			if cm.archiver != nil {
+				if err := cm.archiver.Archive(uid, s.entries); err != nil {
+					fmt.Fprintf(os.Stderr, "conversation_archiver: failed to archive user %s: %v\n", uid, err)
+				}
+			}
 			delete(cm.sessions, uid)
 		}
 	}
@@ -183,6 +194,11 @@ func trimHistory(entries []conversationEntry) []conversationEntry {
 // When MCP_Registry changes, tools are regenerated within this window.
 const toolsCacheTTL = 5 * time.Second
 
+// ProgressCallback is called by the agent loop to send intermediate progress
+// updates to the user via IM while the agent is still working. This prevents
+// timeout on long-running tasks (e.g. file search, large builds).
+type ProgressCallback func(text string)
+
 // IMMessageHandler processes IM messages using the local LLM Agent.
 // It accesses mcpRegistry and skillExecutor via h.app at call time
 // (not captured at construction) to handle late initialization.
@@ -201,6 +217,20 @@ type IMMessageHandler struct {
 
 	// Capability gap detection (lazily initialized via setter).
 	capabilityGapDetector *CapabilityGapDetector
+
+	// Long-term memory store (lazily initialized via setter).
+	memoryStore *MemoryStore
+
+	// Session template manager (lazily initialized via setter).
+	templateManager *SessionTemplateManager
+
+	// Smart session startup components (lazily initialized via setters).
+	contextResolver *SessionContextResolver
+	sessionPrecheck *SessionPrecheck
+	startupFeedback *SessionStartupFeedback
+
+	// Configuration manager (lazily initialized via setter).
+	configManager *ConfigManager
 }
 
 // NewIMMessageHandler creates a new handler.
@@ -234,6 +264,37 @@ func (h *IMMessageHandler) SetToolRouter(router *ToolRouter) {
 	h.toolsMu.Lock()
 	defer h.toolsMu.Unlock()
 	h.toolRouter = router
+}
+
+// SetContextResolver configures the session context resolver for auto-detecting
+// project paths and recommending tools.
+func (h *IMMessageHandler) SetContextResolver(resolver *SessionContextResolver) {
+	h.contextResolver = resolver
+}
+
+// SetSessionPrecheck configures the session precheck for environment validation.
+func (h *IMMessageHandler) SetSessionPrecheck(precheck *SessionPrecheck) {
+	h.sessionPrecheck = precheck
+}
+
+// SetStartupFeedback configures the startup feedback monitor.
+func (h *IMMessageHandler) SetStartupFeedback(feedback *SessionStartupFeedback) {
+	h.startupFeedback = feedback
+}
+
+// SetConfigManager configures the configuration manager for config tools.
+func (h *IMMessageHandler) SetConfigManager(cm *ConfigManager) {
+	h.configManager = cm
+}
+
+// SetMemoryStore configures the long-term memory store.
+func (h *IMMessageHandler) SetMemoryStore(ms *MemoryStore) {
+	h.memoryStore = ms
+}
+
+// SetTemplateManager configures the session template manager.
+func (h *IMMessageHandler) SetTemplateManager(tm *SessionTemplateManager) {
+	h.templateManager = tm
 }
 
 // getTools returns the current tool definitions, using the generator with
@@ -281,6 +342,14 @@ func (h *IMMessageHandler) routeTools(userMessage string, allTools []map[string]
 
 // HandleIMMessage processes an IM user message and returns the Agent's response.
 func (h *IMMessageHandler) HandleIMMessage(msg IMUserMessage) *IMAgentResponse {
+	return h.HandleIMMessageWithProgress(msg, nil)
+}
+
+// HandleIMMessageWithProgress processes an IM message with an optional progress
+// callback. When onProgress is non-nil, the agent loop sends intermediate status
+// updates (e.g. "正在执行 bash 命令…") so the Hub can relay them to the user
+// and reset the response timeout — preventing 504 on long-running tasks.
+func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProgress ProgressCallback) *IMAgentResponse {
 	if !h.app.isMaclawLLMConfigured() {
 		return &IMAgentResponse{
 			Error: "MaClaw LLM 未配置，无法处理请求。请在 MaClaw 客户端的设置中配置 LLM。",
@@ -295,8 +364,13 @@ func (h *IMMessageHandler) HandleIMMessage(msg IMUserMessage) *IMAgentResponse {
 
 	history := h.memory.load(msg.UserID)
 	history = h.compactHistory(history)
-	systemPrompt := h.buildSystemPrompt()
-	return h.runAgentLoop(msg.UserID, systemPrompt, history, msg.Text)
+	var systemPrompt string
+	if h.memoryStore != nil {
+		systemPrompt = h.buildSystemPromptWithMemory(msg.Text)
+	} else {
+		systemPrompt = h.buildSystemPrompt()
+	}
+	return h.runAgentLoop(msg.UserID, systemPrompt, history, msg.Text, onProgress)
 }
 
 // compactHistory summarizes old conversation turns to stay within token limits.
@@ -415,13 +489,20 @@ func (h *IMMessageHandler) doLLMRequest(cfg MaclawLLMConfig, messages []interfac
 // Agentic Loop — multi-round tool calling
 // ---------------------------------------------------------------------------
 
-func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []conversationEntry, userText string) (result *IMAgentResponse) {
+func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []conversationEntry, userText string, onProgress ProgressCallback) (result *IMAgentResponse) {
 	// panic recovery — 防止工具执行异常导致 goroutine 崩溃
 	defer func() {
 		if r := recover(); r != nil {
 			result = &IMAgentResponse{Error: fmt.Sprintf("Agent 内部错误: %v", r)}
 		}
 	}()
+
+	// Helper to send progress if callback is set.
+	sendProgress := func(text string) {
+		if onProgress != nil {
+			onProgress(text)
+		}
+	}
 
 	cfg := h.app.GetMaclawLLMConfig()
 	allTools := h.getTools()
@@ -437,6 +518,9 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 	history = append(history, conversationEntry{Role: "user", Content: userText})
 
 	for iteration := 0; iteration < maxAgentIterations; iteration++ {
+		if iteration > 0 {
+			sendProgress(fmt.Sprintf("🔄 Agent 推理中（第 %d/%d 轮）…", iteration+1, maxAgentIterations))
+		}
 		resp, err := h.doLLMRequest(cfg, conversation, tools)
 		if err != nil {
 			return &IMAgentResponse{Error: fmt.Sprintf("LLM 调用失败: %s", err.Error())}
@@ -483,16 +567,64 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 		}
 
 		// Execute tool calls and feed results back.
+		var pendingImageKey string
+		var pendingFileData, pendingFileName, pendingFileMimeType string
 		for _, tc := range choice.Message.ToolCalls {
-			result := h.executeTool(tc.Function.Name, tc.Function.Arguments)
+			sendProgress(fmt.Sprintf("⚙️ 正在执行工具: %s", tc.Function.Name))
+			result := h.executeTool(tc.Function.Name, tc.Function.Arguments, onProgress)
+
+			// Intercept direct screenshot results: extract base64 image data
+			// so it can be delivered via IM image channel instead of text.
+			toolContent := result
+			if strings.HasPrefix(result, "[screenshot_base64]") {
+				pendingImageKey = strings.TrimPrefix(result, "[screenshot_base64]")
+				toolContent = "截图已成功捕获，将作为图片发送给用户。"
+			}
+
+			// Intercept file send results: extract base64 file data
+			// Format: [file_base64|filename|mimetype]data
+			if strings.HasPrefix(result, "[file_base64|") {
+				rest := strings.TrimPrefix(result, "[file_base64|")
+				if closeBracket := strings.Index(rest, "]"); closeBracket > 0 {
+					meta := rest[:closeBracket]
+					parts := strings.SplitN(meta, "|", 2)
+					if len(parts) == 2 {
+						pendingFileName = parts[0]
+						pendingFileMimeType = parts[1]
+						pendingFileData = rest[closeBracket+1:]
+						toolContent = fmt.Sprintf("文件 %s 已准备好，将发送给用户。", pendingFileName)
+					}
+				}
+			}
+
 			conversation = append(conversation, map[string]interface{}{
 				"role":         "tool",
 				"tool_call_id": tc.ID,
-				"content":      result,
+				"content":      toolContent,
 			})
 			history = append(history, conversationEntry{
-				Role: "tool", Content: result, ToolCallID: tc.ID,
+				Role: "tool", Content: toolContent, ToolCallID: tc.ID,
 			})
+		}
+
+		// If a direct screenshot was captured, return it immediately as an image response.
+		if pendingImageKey != "" {
+			h.memory.save(userID, trimHistory(history))
+			return &IMAgentResponse{
+				Text:     "",
+				ImageKey: pendingImageKey,
+			}
+		}
+
+		// If a file was prepared, return it immediately for IM delivery.
+		if pendingFileData != "" {
+			h.memory.save(userID, trimHistory(history))
+			return &IMAgentResponse{
+				Text:         "",
+				FileData:     pendingFileData,
+				FileName:     pendingFileName,
+				FileMimeType: pendingFileMimeType,
+			}
 		}
 	}
 
@@ -528,7 +660,9 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 ## 工具使用指南
 - 执行命令：用 bash 直接在本机执行 shell 命令（创建目录、安装软件、运行脚本等），不需要创建会话。
 - 文件操作：用 read_file 读文件、write_file 写文件、list_directory 列目录，这些都直接在本机执行。
-- 截屏：直接调用 screenshot 工具，如果只有一个会话会自动选择。
+- 发送文件：用 send_file 将本机文件直接发送给用户（通过 IM 通道），支持任意文件类型。
+- 打开文件/网址：用 open 工具，使用操作系统默认程序打开文件（如 PDF、Excel、图片等）或用默认浏览器打开网址。
+- 截屏：直接调用 screenshot 工具。无需活跃会话也能截取本机桌面，有会话时会自动选择。
 - 创建会话：用 create_session，创建后必须用 get_session_output 确认启动。
 - 发送命令：用 send_input，发送后必须用 get_session_output 确认结果。
 - 查看输出：用 get_session_output 获取会话最近输出。
@@ -537,6 +671,21 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 - Skill：用 list_skills 查看，用 run_skill 执行。
 
 注意：简单的文件操作和命令执行请直接用 bash/read_file/write_file/list_directory，不要绕道创建会话。
+
+## 会话恢复
+- 当用户发送"继续"、"恢复"、"resume"等意图时，调用 list_sessions 列出可恢复的会话（状态为 running 或 paused）
+- 展示最近 5 个可恢复会话的 ID、工具、项目和状态
+- 用户选择后，调用 get_session_output 获取最近输出摘要展示给用户
+- 恢复后自动进入该会话的交互模式，后续用户消息通过 send_input 转发
+- 如果会话已终止，提示用户并建议使用相同配置创建新会话
+
+## 自然语言启动
+当用户用自然语言描述编程任务时（如"帮我用 Claude 修复 myproject 的 bug"），你应该：
+1. 从消息中提取：工具名称（如 Claude/Codex/Gemini）、项目标识（项目名或路径）、任务描述
+2. 如果无法确定工具名称，使用 recommend_tool 工具推荐
+3. 如果无法确定项目路径，create_session 会自动推断（需求 1 自动项目检测）
+4. 在创建会话前，向用户确认解析出的参数（工具、项目、任务）
+5. 用户确认后，调用 create_session 创建会话，并将任务描述通过 send_input 发送到会话
 
 `)
 	b.WriteString("## 当前设备状态\n")
@@ -593,11 +742,99 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 		}
 	}
 
+	b.WriteString("\n## 配置管理\n")
+	b.WriteString("- 用户可以通过自然语言修改配置，如\"把默认工具改成 Gemini\"、\"关闭省电模式\"\n")
+	b.WriteString("- 使用 list_config_schema 了解所有可配置项\n")
+	b.WriteString("- 修改前使用 get_config 查看当前值，修改后确认变更\n")
+	b.WriteString("- 批量修改使用 batch_update_config，确保原子性\n")
+	b.WriteString("- 导出配置使用 export_config，导入使用 import_config\n")
+	b.WriteString("- 敏感信息（API Key、Token）在展示时会自动脱敏\n")
+
 	b.WriteString("\n## 对话管理\n")
 	b.WriteString("- 用户发送 /new 或 /reset 可重置对话\n")
 	b.WriteString("- 你拥有多轮对话记忆，可以引用之前的上下文\n")
 	b.WriteString("\n请用中文回复，关键技术术语保留英文。回复要简洁实用。")
+
+	// Inject long-term memory section if memoryStore is available.
+	h.appendMemorySection(&b, "")
+
 	return b.String()
+}
+
+// buildSystemPromptWithMemory builds the system prompt with memory recall
+// tailored to the user's current message for better relevance.
+func (h *IMMessageHandler) buildSystemPromptWithMemory(userMessage string) string {
+	var b strings.Builder
+	base := h.buildSystemPrompt()
+	b.WriteString(base)
+
+	// If buildSystemPrompt already appended a generic memory section (with
+	// empty query), we don't double-append. Instead, we replace it by
+	// rebuilding without the generic section. However, since
+	// buildSystemPrompt always calls appendMemorySection(""), we need to
+	// strip that and re-append with the real user message.
+	//
+	// Simpler approach: buildSystemPrompt already appended with empty query.
+	// If userMessage is non-empty, we do a targeted recall and append an
+	// additional "## 相关记忆补充" section with any extra entries the
+	// targeted recall found that the generic one missed.
+	//
+	// Actually, the cleanest approach: just return the base prompt as-is
+	// when userMessage is empty, and when non-empty, strip the generic
+	// memory section and re-append with the targeted query.
+
+	// For simplicity and correctness: the base prompt already has the
+	// generic memory section. When we have a real user message, we rebuild
+	// the memory section with better relevance.
+	if userMessage != "" && h.memoryStore != nil {
+		// Find and strip the existing memory section appended by buildSystemPrompt.
+		result := b.String()
+		if idx := strings.Index(result, "\n## 用户记忆\n"); idx >= 0 {
+			result = result[:idx]
+		}
+		// Re-build with targeted recall.
+		var b2 strings.Builder
+		b2.WriteString(result)
+		h.appendMemorySection(&b2, userMessage)
+		return b2.String()
+	}
+
+	return b.String()
+}
+
+// appendMemorySection appends the "## 用户记忆" section to the builder using
+// recalled memories. Pass an empty userMessage for a generic recall, or the
+// actual user message for relevance-ranked recall.
+func (h *IMMessageHandler) appendMemorySection(b *strings.Builder, userMessage string) {
+	if h.memoryStore == nil {
+		return
+	}
+
+	memories := h.memoryStore.Recall(userMessage)
+	if len(memories) == 0 {
+		return
+	}
+
+	b.WriteString("\n## 用户记忆\n")
+	b.WriteString("以下是关于用户的长期记忆，请在回复中参考这些信息：\n")
+	for _, m := range memories {
+		b.WriteString(fmt.Sprintf("- [%s] %s\n", string(m.Category), m.Content))
+	}
+
+	// Touch access counts for recalled memories.
+	ids := make([]string, len(memories))
+	for i, m := range memories {
+		ids[i] = m.ID
+	}
+	h.memoryStore.TouchAccess(ids)
+
+	b.WriteString("\n## 记忆管理指引\n")
+	b.WriteString("当你在对话中识别到以下信息时，请主动调用 save_memory 工具保存：\n")
+	b.WriteString("- 用户的个人信息（姓名、称呼、角色等）→ category: user_fact\n")
+	b.WriteString("- 用户的偏好（喜欢的工具、编码风格、语言偏好等）→ category: preference\n")
+	b.WriteString("- 项目相关知识（架构决策、技术栈、约定等）→ category: project_knowledge\n")
+	b.WriteString("- 用户的指令或规则（\"以后都用XX\"、\"不要做YY\"等）→ category: instruction\n")
+	b.WriteString("无需每次都询问用户是否保存，识别到有价值的信息时直接保存即可。\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -634,7 +871,7 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 			map[string]interface{}{
 				"session_id": map[string]string{"type": "string", "description": "会话 ID"},
 			}, []string{"session_id"}),
-		toolDef("screenshot", "截取会话的屏幕截图并发送给用户。如果只有一个活跃会话，可以省略 session_id 自动选择。",
+		toolDef("screenshot", "截取屏幕截图并发送给用户。如果有活跃会话可指定 session_id，没有活跃会话时会直接截取本机桌面屏幕（不需要创建会话）。",
 			map[string]interface{}{
 				"session_id": map[string]string{"type": "string", "description": "会话 ID（可选，只有一个会话时自动选择）"},
 			}, nil),
@@ -690,6 +927,70 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 			map[string]interface{}{
 				"path": map[string]string{"type": "string", "description": "目录路径（可选，默认为用户主目录）"},
 			}, nil),
+		toolDef("send_file", "读取本机文件并发送给用户（通过 IM 通道直接发送文件）",
+			map[string]interface{}{
+				"path":      map[string]string{"type": "string", "description": "文件的绝对路径或相对于主目录的路径"},
+				"file_name": map[string]string{"type": "string", "description": "发送时显示的文件名（可选，默认使用原文件名）"},
+			}, []string{"path"}),
+		toolDef("open", "用操作系统默认程序打开文件或网址。例如：打开 PDF 用默认阅读器、打开 .xlsx 用 Excel、打开 URL 用默认浏览器、打开文件夹用资源管理器。也支持 mailto: 链接。",
+			map[string]interface{}{
+				"target": map[string]string{"type": "string", "description": "要打开的文件路径、目录路径或 URL（如 C:\\Users\\test\\doc.pdf、https://example.com、mailto:test@example.com）"},
+			}, []string{"target"}),
+		// --- 长期记忆工具 ---
+		toolDef("save_memory", "保存一条记忆到长期记忆存储",
+			map[string]interface{}{
+				"content":  map[string]string{"type": "string", "description": "记忆内容"},
+				"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction"},
+				"tags": map[string]interface{}{
+					"type":        "array",
+					"description": "关联标签",
+					"items":       map[string]string{"type": "string"},
+				},
+			}, []string{"content", "category"}),
+		toolDef("list_memories", "列出或搜索长期记忆",
+			map[string]interface{}{
+				"category": map[string]string{"type": "string", "description": "按类别过滤"},
+				"keyword":  map[string]string{"type": "string", "description": "按关键词搜索"},
+			}, nil),
+		toolDef("delete_memory", "删除一条长期记忆",
+			map[string]interface{}{
+				"id": map[string]string{"type": "string", "description": "记忆条目 ID"},
+			}, []string{"id"}),
+		// --- 会话模板工具 ---
+		toolDef("create_template", "创建会话模板（快捷启动配置）",
+			map[string]interface{}{
+				"name":         map[string]string{"type": "string", "description": "模板名称"},
+				"tool":         map[string]string{"type": "string", "description": "工具名称"},
+				"project_path": map[string]string{"type": "string", "description": "项目路径"},
+				"model_config": map[string]string{"type": "string", "description": "模型配置"},
+				"yolo_mode":    map[string]string{"type": "boolean", "description": "是否开启 Yolo 模式"},
+			}, []string{"name", "tool"}),
+		toolDef("list_templates", "列出所有会话模板", nil, nil),
+		toolDef("launch_template", "使用模板启动会话",
+			map[string]interface{}{
+				"template_name": map[string]string{"type": "string", "description": "模板名称"},
+			}, []string{"template_name"}),
+		// --- 配置管理工具 ---
+		toolDef("get_config", "获取指定配置区域的当前值",
+			map[string]interface{}{
+				"section": map[string]string{"type": "string", "description": "配置区域名称（如 claude/gemini/remote/projects/maclaw_llm/proxy/general），为空或 all 返回概览"},
+			}, []string{"section"}),
+		toolDef("update_config", "修改单个配置项",
+			map[string]interface{}{
+				"section": map[string]string{"type": "string", "description": "配置区域名称"},
+				"key":     map[string]string{"type": "string", "description": "配置项名称"},
+				"value":   map[string]string{"type": "string", "description": "新值"},
+			}, []string{"section", "key", "value"}),
+		toolDef("batch_update_config", "批量修改配置（原子性，任一项失败则全部回滚）",
+			map[string]interface{}{
+				"changes": map[string]string{"type": "string", "description": "JSON 数组，每项包含 section/key/value，例如 [{\"section\":\"general\",\"key\":\"language\",\"value\":\"en\"}]"},
+			}, []string{"changes"}),
+		toolDef("list_config_schema", "列出所有可配置项的 schema 信息", nil, nil),
+		toolDef("export_config", "导出当前配置（敏感字段已脱敏）", nil, nil),
+		toolDef("import_config", "导入配置（JSON 格式，保留本机特有字段）",
+			map[string]interface{}{
+				"json_data": map[string]string{"type": "string", "description": "要导入的配置 JSON 字符串"},
+			}, []string{"json_data"}),
 	}
 }
 
@@ -717,7 +1018,7 @@ func toolDef(name, desc string, props map[string]interface{}, required []string)
 // Tool Execution
 // ---------------------------------------------------------------------------
 
-func (h *IMMessageHandler) executeTool(name, argsJSON string) (result string) {
+func (h *IMMessageHandler) executeTool(name, argsJSON string, onProgress ProgressCallback) (result string) {
 	defer func() {
 		if r := recover(); r != nil {
 			result = fmt.Sprintf("工具执行异常: %v", r)
@@ -763,13 +1064,41 @@ func (h *IMMessageHandler) executeTool(name, argsJSON string) (result string) {
 	case "recommend_tool":
 		return h.toolRecommendTool(args)
 	case "bash":
-		return h.toolBash(args)
+		return h.toolBash(args, onProgress)
 	case "read_file":
 		return h.toolReadFile(args)
 	case "write_file":
 		return h.toolWriteFile(args)
 	case "list_directory":
 		return h.toolListDirectory(args)
+	case "send_file":
+		return h.toolSendFile(args)
+	case "open":
+		return h.toolOpen(args)
+	case "save_memory":
+		return h.toolSaveMemory(args)
+	case "list_memories":
+		return h.toolListMemories(args)
+	case "delete_memory":
+		return h.toolDeleteMemory(args)
+	case "create_template":
+		return h.toolCreateTemplate(args)
+	case "list_templates":
+		return h.toolListTemplates()
+	case "launch_template":
+		return h.toolLaunchTemplate(args)
+	case "get_config":
+		return h.toolGetConfig(args)
+	case "update_config":
+		return h.toolUpdateConfig(args)
+	case "batch_update_config":
+		return h.toolBatchUpdateConfig(args)
+	case "list_config_schema":
+		return h.toolListConfigSchema()
+	case "export_config":
+		return h.toolExportConfig()
+	case "import_config":
+		return h.toolImportConfig(args)
 	default:
 		return fmt.Sprintf("未知工具: %s", name)
 	}
@@ -804,17 +1133,71 @@ func (h *IMMessageHandler) toolListSessions() string {
 
 func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string {
 	tool, _ := args["tool"].(string)
-	if tool == "" {
-		return "缺少 tool 参数"
-	}
 	projectPath, _ := args["project_path"].(string)
+
+	var hints []string
+
+	// Smart tool recommendation when tool is empty.
+	if tool == "" && h.contextResolver != nil {
+		recommended, reason := h.contextResolver.ResolveTool(projectPath, "")
+		if recommended != "" {
+			tool = recommended
+			hints = append(hints, fmt.Sprintf("🔧 自动推荐工具: %s（%s）", tool, reason))
+		}
+	}
+	if tool == "" {
+		return "缺少 tool 参数，且无法自动推荐工具"
+	}
+
+	// Smart project detection when project_path is empty.
+	if projectPath == "" && h.contextResolver != nil {
+		detected, reason := h.contextResolver.ResolveProject()
+		if detected != "" {
+			projectPath = detected
+			hints = append(hints, fmt.Sprintf("📁 自动检测项目: %s（%s）", projectPath, reason))
+		}
+	}
+
+	// Pre-launch environment check.
+	if h.sessionPrecheck != nil {
+		result := h.sessionPrecheck.Check(tool, projectPath)
+		if !result.ToolReady {
+			hints = append(hints, fmt.Sprintf("⚠️ 工具预检未通过: %s", result.ToolHint))
+		}
+		if !result.ProjectReady {
+			hints = append(hints, "⚠️ 项目路径不存在或无法访问")
+		}
+		if !result.ModelReady {
+			hints = append(hints, fmt.Sprintf("⚠️ 模型预检未通过: %s", result.ModelHint))
+		}
+		if result.AllPassed {
+			hints = append(hints, "✅ 环境预检全部通过")
+		}
+	}
+
 	view, err := h.app.StartRemoteSessionForProject(RemoteStartSessionRequest{
 		Tool: tool, ProjectPath: projectPath,
 	})
 	if err != nil {
 		return fmt.Sprintf("创建会话失败: %s", err.Error())
 	}
-	return fmt.Sprintf("会话已创建: ID=%s 工具=%s 标题=%s\n⚠️ 你必须立即调用 get_session_output(session_id=%q) 确认会话是否正常启动，不要直接告诉用户已完成。", view.ID, view.Tool, view.Title, view.ID)
+
+	// Start monitoring session startup progress in background.
+	if h.startupFeedback != nil {
+		h.startupFeedback.WatchStartup(view.ID, func(msg string) {
+			// Progress messages are logged; in a real IM context the
+			// onProgress callback from the agent loop would relay these.
+			fmt.Fprintf(os.Stderr, "startup_feedback[%s]: %s\n", view.ID, msg)
+		})
+	}
+
+	var b strings.Builder
+	for _, hint := range hints {
+		b.WriteString(hint)
+		b.WriteString("\n")
+	}
+	b.WriteString(fmt.Sprintf("会话已创建: ID=%s 工具=%s 标题=%s\n⚠️ 你必须立即调用 get_session_output(session_id=%q) 确认会话是否正常启动，不要直接告诉用户已完成。", view.ID, view.Tool, view.Title, view.ID))
+	return b.String()
 }
 
 func (h *IMMessageHandler) toolSendInput(args map[string]interface{}) string {
@@ -976,7 +1359,12 @@ func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {
 			}
 			return strings.Join(lines, "\n")
 		} else {
-			return "当前没有活跃会话，请先用 create_session 创建一个会话，然后再截屏"
+			// 没有活跃会话时，直接截屏本机屏幕（不依赖 session）
+			base64Data, err := h.manager.CaptureScreenshotDirect()
+			if err != nil {
+				return fmt.Sprintf("截图失败: %s", err.Error())
+			}
+			return fmt.Sprintf("[screenshot_base64]%s", base64Data)
 		}
 	}
 
@@ -1173,7 +1561,7 @@ func resolvePath(p string) string {
 	return filepath.Clean(p)
 }
 
-func (h *IMMessageHandler) toolBash(args map[string]interface{}) string {
+func (h *IMMessageHandler) toolBash(args map[string]interface{}, onProgress ProgressCallback) string {
 	command, _ := args["command"].(string)
 	if command == "" {
 		return "缺少 command 参数"
@@ -1207,8 +1595,40 @@ func (h *IMMessageHandler) toolBash(args map[string]interface{}) string {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	hideCommandWindow(cmd)
 
-	err := cmd.Run()
+	// Start the command and send periodic heartbeats for long-running ops.
+	err := cmd.Start()
+	if err != nil {
+		return fmt.Sprintf("[错误] 命令启动失败: %v", err)
+	}
+
+	// Heartbeat goroutine: send progress every 30s while the command runs.
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		elapsed := 0
+		for {
+			select {
+			case <-ticker.C:
+				elapsed += 30
+				// Truncate command for display.
+				displayCmd := command
+				if len(displayCmd) > 60 {
+					displayCmd = displayCmd[:60] + "…"
+				}
+				if onProgress != nil {
+					onProgress(fmt.Sprintf("⏳ 命令仍在执行中（已 %ds）: %s", elapsed, displayCmd))
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	err = cmd.Wait()
+	close(done)
 
 	var b strings.Builder
 	if stdout.Len() > 0 {
@@ -1341,6 +1761,366 @@ func (h *IMMessageHandler) toolListDirectory(args map[string]interface{}) string
 			b.WriteString(fmt.Sprintf("  📄 %s\n", entry.Name()))
 		}
 		shown++
+	}
+	return b.String()
+}
+
+const sendFileMaxSize = 50 << 20 // 50 MB
+
+func (h *IMMessageHandler) toolSendFile(args map[string]interface{}) string {
+	p, _ := args["path"].(string)
+	if p == "" {
+		return "缺少 path 参数"
+	}
+	absPath := resolvePath(p)
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Sprintf("文件不存在或无法访问: %s", err.Error())
+	}
+	if info.IsDir() {
+		return fmt.Sprintf("%s 是目录，不能作为文件发送", absPath)
+	}
+	if info.Size() > sendFileMaxSize {
+		return fmt.Sprintf("文件过大（%d 字节），最大允许 %d 字节", info.Size(), sendFileMaxSize)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return fmt.Sprintf("读取文件失败: %s", err.Error())
+	}
+
+	fileName, _ := args["file_name"].(string)
+	if fileName == "" {
+		fileName = filepath.Base(absPath)
+	}
+
+	mimeType := mime.TypeByExtension(filepath.Ext(absPath))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	b64 := base64.StdEncoding.EncodeToString(data)
+	// Use | as delimiter to avoid conflicts with : in filenames or MIME types.
+	return fmt.Sprintf("[file_base64|%s|%s]%s", fileName, mimeType, b64)
+}
+
+func (h *IMMessageHandler) toolOpen(args map[string]interface{}) string {
+	target, _ := args["target"].(string)
+	if target == "" {
+		return "缺少 target 参数"
+	}
+
+	// Detect URLs (http, https, file, mailto, etc.)
+	isURL := strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:")
+	if !isURL {
+		target = resolvePath(target)
+		// Verify the path exists before attempting to open.
+		if _, err := os.Stat(target); err != nil {
+			return fmt.Sprintf("路径不存在或无法访问: %s", err.Error())
+		}
+	}
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		// Use rundll32 url.dll,FileProtocolHandler — opens files/URLs with
+		// the default handler without spawning a visible console window.
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
+	case "darwin":
+		cmd = exec.Command("open", target)
+	default:
+		cmd = exec.Command("xdg-open", target)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Sprintf("打开失败: %s", err.Error())
+	}
+
+	// Don't wait for the process — it's a GUI application.
+	go cmd.Wait()
+
+	if isURL {
+		return fmt.Sprintf("已用默认浏览器打开: %s", target)
+	}
+	return fmt.Sprintf("已用默认程序打开: %s", target)
+}
+
+// ---------------------------------------------------------------------------
+// Memory Tools
+// ---------------------------------------------------------------------------
+
+func (h *IMMessageHandler) toolSaveMemory(args map[string]interface{}) string {
+	if h.memoryStore == nil {
+		return "长期记忆未初始化"
+	}
+
+	content := stringVal(args, "content")
+	if content == "" {
+		return "缺少 content 参数"
+	}
+	category := stringVal(args, "category")
+	if category == "" {
+		category = "user_fact"
+	}
+
+	var tags []string
+	if rawTags, ok := args["tags"]; ok {
+		if tagSlice, ok := rawTags.([]interface{}); ok {
+			for _, t := range tagSlice {
+				if s, ok := t.(string); ok && s != "" {
+					tags = append(tags, s)
+				}
+			}
+		}
+	}
+
+	entry := MemoryEntry{
+		Content:  content,
+		Category: MemoryCategory(category),
+		Tags:     tags,
+	}
+	if err := h.memoryStore.Save(entry); err != nil {
+		return fmt.Sprintf("保存记忆失败: %s", err.Error())
+	}
+
+	summary := content
+	if len(summary) > 50 {
+		summary = summary[:50] + "..."
+	}
+	return fmt.Sprintf("已保存记忆: %s", summary)
+}
+
+func (h *IMMessageHandler) toolListMemories(args map[string]interface{}) string {
+	if h.memoryStore == nil {
+		return "长期记忆未初始化"
+	}
+
+	category := MemoryCategory(stringVal(args, "category"))
+	keyword := stringVal(args, "keyword")
+
+	entries := h.memoryStore.List(category, keyword)
+	if len(entries) == 0 {
+		return "没有找到匹配的记忆条目。"
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("找到 %d 条记忆:\n", len(entries)))
+	for _, e := range entries {
+		b.WriteString(fmt.Sprintf("- [%s] (%s) %s", e.ID, e.Category, e.Content))
+		if len(e.Tags) > 0 {
+			b.WriteString(fmt.Sprintf(" 标签=%v", e.Tags))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (h *IMMessageHandler) toolDeleteMemory(args map[string]interface{}) string {
+	if h.memoryStore == nil {
+		return "长期记忆未初始化"
+	}
+
+	id := stringVal(args, "id")
+	if id == "" {
+		return "缺少 id 参数"
+	}
+
+	if err := h.memoryStore.Delete(id); err != nil {
+		return fmt.Sprintf("删除记忆失败: %s", err.Error())
+	}
+	return fmt.Sprintf("已删除记忆: %s", id)
+}
+
+// ---------------------------------------------------------------------------
+// Template Tools
+// ---------------------------------------------------------------------------
+
+func (h *IMMessageHandler) toolCreateTemplate(args map[string]interface{}) string {
+	if h.templateManager == nil {
+		return "模板管理器未初始化"
+	}
+
+	name := stringVal(args, "name")
+	tool := stringVal(args, "tool")
+	if name == "" || tool == "" {
+		return "缺少 name 或 tool 参数"
+	}
+
+	tpl := SessionTemplate{
+		Name:        name,
+		Tool:        tool,
+		ProjectPath: stringVal(args, "project_path"),
+		ModelConfig: stringVal(args, "model_config"),
+	}
+
+	// Parse yolo_mode (can arrive as bool or string).
+	if yolo, ok := args["yolo_mode"].(bool); ok {
+		tpl.YoloMode = yolo
+	} else if yoloStr, ok := args["yolo_mode"].(string); ok {
+		tpl.YoloMode = yoloStr == "true"
+	}
+
+	if err := h.templateManager.Create(tpl); err != nil {
+		return fmt.Sprintf("创建模板失败: %s", err.Error())
+	}
+	return fmt.Sprintf("模板已创建: %s（工具=%s, 项目=%s）", name, tool, tpl.ProjectPath)
+}
+
+func (h *IMMessageHandler) toolListTemplates() string {
+	if h.templateManager == nil {
+		return "模板管理器未初始化"
+	}
+
+	templates := h.templateManager.List()
+	if len(templates) == 0 {
+		return "当前没有会话模板。"
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("共 %d 个模板:\n", len(templates)))
+	for _, t := range templates {
+		b.WriteString(fmt.Sprintf("- %s: 工具=%s 项目=%s", t.Name, t.Tool, t.ProjectPath))
+		if t.ModelConfig != "" {
+			b.WriteString(fmt.Sprintf(" 模型=%s", t.ModelConfig))
+		}
+		if t.YoloMode {
+			b.WriteString(" [Yolo]")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (h *IMMessageHandler) toolLaunchTemplate(args map[string]interface{}) string {
+	if h.templateManager == nil {
+		return "模板管理器未初始化"
+	}
+
+	name := stringVal(args, "template_name")
+	if name == "" {
+		return "缺少 template_name 参数"
+	}
+
+	tpl, err := h.templateManager.Get(name)
+	if err != nil {
+		return fmt.Sprintf("获取模板失败: %s", err.Error())
+	}
+
+	// Build args from template config and delegate to toolCreateSession.
+	sessionArgs := map[string]interface{}{
+		"tool":         tpl.Tool,
+		"project_path": tpl.ProjectPath,
+	}
+	return h.toolCreateSession(sessionArgs)
+}
+
+// ---------------------------------------------------------------------------
+// Config Tools
+// ---------------------------------------------------------------------------
+
+func (h *IMMessageHandler) toolGetConfig(args map[string]interface{}) string {
+	if h.configManager == nil {
+		return "配置管理器未初始化"
+	}
+
+	section := stringVal(args, "section")
+	result, err := h.configManager.GetConfig(section)
+	if err != nil {
+		return fmt.Sprintf("读取配置失败: %s", err.Error())
+	}
+	return result
+}
+
+func (h *IMMessageHandler) toolUpdateConfig(args map[string]interface{}) string {
+	if h.configManager == nil {
+		return "配置管理器未初始化"
+	}
+
+	section := stringVal(args, "section")
+	key := stringVal(args, "key")
+	value := stringVal(args, "value")
+	if section == "" || key == "" {
+		return "缺少 section 或 key 参数"
+	}
+
+	oldValue, err := h.configManager.UpdateConfig(section, key, value)
+	if err != nil {
+		return fmt.Sprintf("修改配置失败: %s", err.Error())
+	}
+	return fmt.Sprintf("配置已更新: %s.%s\n旧值: %s\n新值: %s", section, key, oldValue, value)
+}
+
+func (h *IMMessageHandler) toolBatchUpdateConfig(args map[string]interface{}) string {
+	if h.configManager == nil {
+		return "配置管理器未初始化"
+	}
+
+	changesStr := stringVal(args, "changes")
+	if changesStr == "" {
+		return "缺少 changes 参数"
+	}
+
+	var changes []ConfigChange
+	if err := json.Unmarshal([]byte(changesStr), &changes); err != nil {
+		return fmt.Sprintf("解析 changes 参数失败: %s", err.Error())
+	}
+	if len(changes) == 0 {
+		return "changes 列表为空"
+	}
+
+	if err := h.configManager.BatchUpdate(changes); err != nil {
+		return fmt.Sprintf("批量更新配置失败: %s", err.Error())
+	}
+	return fmt.Sprintf("批量更新成功，共应用 %d 项变更", len(changes))
+}
+
+func (h *IMMessageHandler) toolListConfigSchema() string {
+	if h.configManager == nil {
+		return "配置管理器未初始化"
+	}
+
+	result, err := h.configManager.SchemaJSON()
+	if err != nil {
+		return fmt.Sprintf("获取配置 Schema 失败: %s", err.Error())
+	}
+	return result
+}
+
+func (h *IMMessageHandler) toolExportConfig() string {
+	if h.configManager == nil {
+		return "配置管理器未初始化"
+	}
+
+	result, err := h.configManager.ExportConfig()
+	if err != nil {
+		return fmt.Sprintf("导出配置失败: %s", err.Error())
+	}
+	return result
+}
+
+func (h *IMMessageHandler) toolImportConfig(args map[string]interface{}) string {
+	if h.configManager == nil {
+		return "配置管理器未初始化"
+	}
+
+	jsonData := stringVal(args, "json_data")
+	if jsonData == "" {
+		return "缺少 json_data 参数"
+	}
+
+	report, err := h.configManager.ImportConfig(jsonData)
+	if err != nil {
+		return fmt.Sprintf("导入配置失败: %s", err.Error())
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("配置导入完成: 应用 %d 项, 跳过 %d 项", report.Applied, report.Skipped))
+	if len(report.Warnings) > 0 {
+		b.WriteString("\n警告:")
+		for _, w := range report.Warnings {
+			b.WriteString(fmt.Sprintf("\n  - %s", w))
+		}
 	}
 	return b.String()
 }

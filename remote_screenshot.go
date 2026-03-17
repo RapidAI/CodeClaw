@@ -336,29 +336,32 @@ func buildWindowsScreenshotCommand() string {
 		`$capturedAny = $false; ` +
 		`foreach ($win in $windows) { ` +
 		`try { ` +
-		`$wBmp = New-Object System.Drawing.Bitmap($win.Width, $win.Height); ` +
-		`$wg = [System.Drawing.Graphics]::FromImage($wBmp); ` +
-		`$whdc = $wg.GetHdc(); ` +
-		// PW_RENDERFULLCONTENT = 0x2 for DWM-aware capture.
-		`$pwOk = [ScreenUtil]::PrintWindow($win.Handle, $whdc, 2); ` +
-		`$wg.ReleaseHdc($whdc); $wg.Dispose(); ` +
-		`if ($pwOk) { ` +
-		// Quick check: is this window capture non-blank?
-		`$samplePx = $wBmp.GetPixel([Math]::Min(10, $win.Width-1), [Math]::Min(10, $win.Height-1)); ` +
-		`$midPx = $wBmp.GetPixel([int]($win.Width/2), [int]($win.Height/2)); ` +
-		`if (($samplePx.R + $samplePx.G + $samplePx.B + $midPx.R + $midPx.G + $midPx.B) -gt 5) { ` +
-		// Draw this window onto the composite at its screen position.
+		// PW_RENDERFULLCONTENT = 0x2, PW_CLIENTONLY = 0x1.
+		// Try flag 2 first (DWM-aware), then 3 (client+DWM), then 0 (classic WM_PRINT).
+		// Different apps respond differently to these flags, especially on locked screens.
+		`$pwFlags = @(2, 3, 0); ` +
+		`$gotWin = $false; ` +
+		`foreach ($fl in $pwFlags) { ` +
+		`$wBmpT = New-Object System.Drawing.Bitmap($win.Width, $win.Height); ` +
+		`$wgT = [System.Drawing.Graphics]::FromImage($wBmpT); ` +
+		`$whdcT = $wgT.GetHdc(); ` +
+		`$res = [ScreenUtil]::PrintWindow($win.Handle, $whdcT, $fl); ` +
+		`$wgT.ReleaseHdc($whdcT); $wgT.Dispose(); ` +
+		`if ($res) { ` +
+		`$sp = $wBmpT.GetPixel([Math]::Min(10, $win.Width-1), [Math]::Min(10, $win.Height-1)); ` +
+		`$mp = $wBmpT.GetPixel([int]($win.Width/2), [int]($win.Height/2)); ` +
+		`if (($sp.R + $sp.G + $sp.B + $mp.R + $mp.G + $mp.B) -gt 5) { ` +
 		`$destX = $win.Left - $bounds.X; $destY = $win.Top - $bounds.Y; ` +
-		`$cg.DrawImage($wBmp, $destX, $destY, $win.Width, $win.Height); ` +
-		`$capturedAny = $true } }; ` +
-		`$wBmp.Dispose() ` +
+		`$cg.DrawImage($wBmpT, $destX, $destY, $win.Width, $win.Height); ` +
+		`$capturedAny = $true; $gotWin = $true; $wBmpT.Dispose(); break } }; ` +
+		`$wBmpT.Dispose() }; ` +
 		`} catch { } }; ` +
 		`$cg.Dispose(); ` +
 		`if ($capturedAny -and -not (Test-BlankBitmap $composite)) { ` +
 		`$b64 = ConvertTo-Base64Png $composite; $composite.Dispose(); [Console]::Out.Write($b64); exit 0 }; ` +
 		`$composite.Dispose(); ` +
 		// ========== All attempts failed ==========
-		`Write-Error "screen is blank - session may be locked or disconnected (no active desktop). Tried: CopyFromScreen, BitBlt+CAPTUREBLT, tscon reconnect, PrintWindow composite"; exit 1`
+		`Write-Error "screen is blank - all 4 capture methods failed (CopyFromScreen, BitBlt+CAPTUREBLT, tscon reconnect, PrintWindow composite). This usually means the Windows session is locked, disconnected via RDP, or running as a service without an interactive desktop. Try: (1) unlock the machine, (2) keep RDP connected, or (3) use a VNC-style connection that preserves the desktop session."; exit 1`
 }
 
 func buildDarwinScreenshotCommand() string {
@@ -590,15 +593,17 @@ func buildWindowsWindowScreenshotCommand(windowTitle string) string {
 			`if ($w -le 0 -or $h -le 0) { Write-Error 'Invalid window size'; exit 1 }; `+
 			// Attempt 1: PrintWindow — works even on locked/occluded windows
 			// because it asks the window to paint itself (WM_PRINT).
-			// Flag 0x2 = PW_RENDERFULLCONTENT for better DWM capture.
-			`$bmp = New-Object Drawing.Bitmap($w, $h); `+
-			`$g = [Drawing.Graphics]::FromImage($bmp); `+
-			`$hdc = $g.GetHdc(); `+
-			`$ok = [WinAPI]::PrintWindow($found, $hdc, 2); `+
-			`$g.ReleaseHdc($hdc); $g.Dispose(); `+
-			`if ($ok -and -not (Test-BlankBitmap $bmp)) { `+
-			`$b64 = ConvertTo-Base64Png $bmp; $bmp.Dispose(); [Console]::Out.Write($b64); exit 0 }; `+
-			`$bmp.Dispose(); `+
+			// Try multiple flags: 2 (DWM-aware), 3 (client+DWM), 0 (classic).
+			`$pwFlags = @(2, 3, 0); ` +
+			`foreach ($fl in $pwFlags) { ` +
+			`$bmpPW = New-Object Drawing.Bitmap($w, $h); ` +
+			`$gPW = [Drawing.Graphics]::FromImage($bmpPW); ` +
+			`$hdcPW = $gPW.GetHdc(); ` +
+			`$ok = [WinAPI]::PrintWindow($found, $hdcPW, $fl); ` +
+			`$gPW.ReleaseHdc($hdcPW); $gPW.Dispose(); ` +
+			`if ($ok -and -not (Test-BlankBitmap $bmpPW)) { ` +
+			`$b64 = ConvertTo-Base64Png $bmpPW; $bmpPW.Dispose(); [Console]::Out.Write($b64); exit 0 }; ` +
+			`$bmpPW.Dispose() }; ` +
 			// Attempt 2: CopyFromScreen for the window rect (works when unlocked).
 			`$bmp2 = New-Object Drawing.Bitmap($w, $h); `+
 			`$g2 = [Drawing.Graphics]::FromImage($bmp2); `+
@@ -728,6 +733,7 @@ func (m *RemoteSessionManager) captureAndSend(sessionID, label, cmdStr string) e
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	hideCommandWindow(cmd)
 
 	logLabel := "fullscreen"
 	if label != "" {
@@ -781,4 +787,74 @@ func (m *RemoteSessionManager) captureAndSend(sessionID, label, cmdStr string) e
 
 	m.app.log(fmt.Sprintf("[screenshot] successfully captured %s for session=%s", logLabel, sessionID))
 	return nil
+}
+
+// CaptureScreenshotDirect captures a screenshot of the local display without
+// requiring an active session. It returns the base64-encoded PNG data directly,
+// suitable for embedding in IM responses via ImageKey.
+//
+// On Windows, it uses PowerShell with multiple fallback strategies (CopyFromScreen,
+// BitBlt+CAPTUREBLT, tscon reconnect, PrintWindow composite) that work even when
+// the session is locked. On other platforms, it uses command-line tools.
+func (m *RemoteSessionManager) CaptureScreenshotDirect() (string, error) {
+	// Use command-line approach (PowerShell on Windows) which has multiple
+	// fallback strategies including PrintWindow composite that works even
+	// when the session is locked or the desktop compositor is inactive.
+	cmdStr := BuildScreenshotCommand()
+	if cmdStr == "" {
+		return "", fmt.Errorf("screenshot capture is not supported on %s", runtime.GOOS)
+	}
+
+	available, reason := DetectDisplayServer()
+	if !available {
+		return "", fmt.Errorf("screenshot requires a graphical display environment: %s", reason)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	var shellName string
+	var shellArgs []string
+	if runtime.GOOS == "windows" {
+		shellName = "powershell"
+		shellArgs = []string{"-NoProfile", "-NonInteractive", "-Command", cmdStr}
+	} else {
+		shellName = "bash"
+		shellArgs = []string{"-c", cmdStr}
+	}
+
+	cmd := exec.CommandContext(ctx, shellName, shellArgs...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	hideCommandWindow(cmd)
+
+	m.app.log("[screenshot-direct] capturing fullscreen via command-line")
+
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("screenshot command timed out after 45s")
+		}
+		m.app.log(fmt.Sprintf("[screenshot-direct] capture failed: %v, stderr: %s", err, stderr.String()))
+		return "", fmt.Errorf("screenshot command failed: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+
+	rawOut := stdout.String()
+	base64Data, err := ParseScreenshotOutput(rawOut)
+	if err != nil {
+		preview := rawOut
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		m.app.log(fmt.Sprintf("[screenshot-direct] parse error: %v (stdout_len=%d, preview=%q)", err, len(rawOut), preview))
+		return "", fmt.Errorf("screenshot output parse error: %w", err)
+	}
+
+	if isBlankImage(base64Data) {
+		m.app.log("[screenshot-direct] captured image is blank/black")
+		return "", fmt.Errorf("screenshot is blank (all black) — the display may be off or locked")
+	}
+
+	m.app.log("[screenshot-direct] successfully captured fullscreen via command-line")
+	return base64Data, nil
 }

@@ -316,7 +316,7 @@ func (a *App) RunRemoteToolSmoke(toolName, projectDir string, useProxy bool) (Re
 	}
 
 	if cfg.RemoteMachineID == "" || cfg.RemoteMachineToken == "" {
-		activation, err := a.ActivateRemote(cfg.RemoteEmail, "")
+		activation, err := a.ActivateRemote(cfg.RemoteEmail, "", "")
 		if err != nil {
 			return report, err
 		}

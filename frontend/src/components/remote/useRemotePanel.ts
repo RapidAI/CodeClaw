@@ -287,7 +287,7 @@ export function useRemotePanel(params: UseRemotePanelParams) {
         setRemoteBusy("activate");
         setInvitationCodeError("");
         try {
-            await ActivateRemote(config.remote_email.trim(), invitationCode.trim());
+            await ActivateRemote(config.remote_email.trim(), invitationCode.trim(), (config as any).remote_mobile?.trim() || "");
             await refreshRemotePanel();
             showToastMessage(translate("remoteActivationCompleted"), 3000);
             return true;

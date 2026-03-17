@@ -140,6 +140,8 @@ func TestOpenclawIMWebhookHandler_MissingPlatformUID(t *testing.T) {
 	body := []byte(`{"text":"hello","message_type":"text"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/openclaw_im/webhook", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	// loadOpenclawIMConfig defaults to DefaultOpenclawIMSecret, so sign with it.
+	req.Header.Set("X-OpenClaw-Signature", makeSignature(body, DefaultOpenclawIMSecret))
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -150,7 +152,8 @@ func TestOpenclawIMWebhookHandler_MissingPlatformUID(t *testing.T) {
 }
 
 func TestOpenclawIMWebhookHandler_NoSecretConfigured(t *testing.T) {
-	// When no secret is configured, signature verification should be skipped.
+	// When secret is empty in DB, loadOpenclawIMConfig fills DefaultOpenclawIMSecret.
+	// The handler will verify against that default, so we must sign with it.
 	cfg := OpenclawIMConfigState{Enabled: true, WebhookURL: "http://example.com/hook", Secret: ""}
 	cfgJSON, _ := json.Marshal(cfg)
 	sys := &stubSystemSettings{data: map[string]string{openclawIMConfigKey: string(cfgJSON)}}
@@ -166,7 +169,7 @@ func TestOpenclawIMWebhookHandler_NoSecretConfigured(t *testing.T) {
 	body := []byte(`{"platform_uid":"u1","text":"hello","message_type":"text"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/openclaw_im/webhook", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	// No signature header.
+	req.Header.Set("X-OpenClaw-Signature", makeSignature(body, DefaultOpenclawIMSecret))
 	w := httptest.NewRecorder()
 
 	handler(w, req)

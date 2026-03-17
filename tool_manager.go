@@ -780,6 +780,7 @@ func (tm *ToolManager) installCursorAgent() error {
 	defer os.RemoveAll(extractDir)
 
 	tarCmd := exec.Command("tar", "--strip-components=1", "-xzf", tmpPath, "-C", extractDir)
+	hideCommandWindow(tarCmd)
 	if out, err := tarCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to extract cursor agent package: %w\nOutput: %s", err, string(out))
 	}

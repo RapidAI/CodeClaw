@@ -59,6 +59,9 @@ type RemoteHubClient struct {
 
 	// IM message handler for Agent Passthrough.
 	imHandler *IMMessageHandler
+
+	// IO relay for multi-device session roaming cleanup on disconnect.
+	ioRelay *SessionIORelay
 }
 
 // pendingPreviewDelta accumulates preview lines for a session between flushes.
@@ -72,6 +75,11 @@ type pendingPreviewDelta struct {
 // previewFlushInterval controls how often accumulated preview deltas are sent
 // to the hub. Lower values = more responsive but more network traffic.
 const previewFlushInterval = 150 * time.Millisecond
+
+// hubPongWait is the maximum time the client waits for any incoming data or
+// pong from the hub before considering the connection dead. Must be greater
+// than the hub's ping interval (30s). Shared between connectLocked and readLoop.
+const hubPongWait = 90 * time.Second
 
 func NewRemoteHubClient(app *App, manager *RemoteSessionManager) *RemoteHubClient {
 	return &RemoteHubClient{
@@ -151,6 +159,14 @@ func (c *RemoteHubClient) connectLocked() error {
 	c.conn = conn
 	c.connected = true
 
+	// gorilla/websocket automatically replies to server pings with pongs.
+	// Set a generous read deadline that gets refreshed by the pong handler
+	// so the client detects a dead hub connection within a bounded time.
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(hubPongWait))
+		return nil
+	})
+
 	// Clear summary dedup cache on new connection so re-synced summaries
 	// are always sent to the hub.
 	c.summaryMu.Lock()
@@ -176,7 +192,7 @@ func (c *RemoteHubClient) connectLocked() error {
 		c.lastError = "failed to read auth response"
 		return fmt.Errorf("read auth response: %w", err)
 	}
-	_ = c.conn.SetReadDeadline(time.Time{}) // clear deadline
+	_ = c.conn.SetReadDeadline(time.Now().Add(hubPongWait)) // initial deadline; refreshed by pong handler
 
 	if authResp.Type == "error" {
 		_ = c.conn.Close()
@@ -530,17 +546,52 @@ func (c *RemoteHubClient) SyncLaunchProjects() {
 	_ = c.conn.WriteJSON(msg)
 }
 
+// SessionMetadata holds lightweight metadata about an active session,
+// used for multi-device session roaming via Hub heartbeats.
+type SessionMetadata struct {
+	ID          string `json:"id"`
+	Tool        string `json:"tool"`
+	ProjectPath string `json:"project_path"`
+	Status      string `json:"status"`
+}
+
+// collectSessionMetadata returns metadata for all active sessions managed
+// by the RemoteSessionManager. The caller must NOT hold c.mu.
+func (c *RemoteHubClient) collectSessionMetadata() []SessionMetadata {
+	if c.manager == nil {
+		return nil
+	}
+	sessions := c.manager.List()
+	if len(sessions) == 0 {
+		return nil
+	}
+	meta := make([]SessionMetadata, 0, len(sessions))
+	for _, s := range sessions {
+		if s == nil {
+			continue
+		}
+		meta = append(meta, SessionMetadata{
+			ID:          s.ID,
+			Tool:        s.Tool,
+			ProjectPath: s.ProjectPath,
+			Status:      string(s.Status),
+		})
+	}
+	return meta
+}
+
 func (c *RemoteHubClient) SendHeartbeat() error {
+	// Collect session metadata before acquiring the connection lock to
+	// avoid holding c.mu while iterating sessions (manager has its own lock).
+	sessions := c.collectSessionMetadata()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.connected || c.conn == nil {
 		return nil
 	}
 
-	activeSessions := 0
-	if c.manager != nil {
-		activeSessions = len(c.manager.List())
-	}
+	activeSessions := len(sessions)
 	cfg, _ := c.app.LoadConfig()
 	profile := c.app.currentRemoteMachineProfile(cfg.RemoteHeartbeatSec, activeSessions)
 
@@ -553,6 +604,7 @@ func (c *RemoteHubClient) SendHeartbeat() error {
 			"heartbeat_interval_sec": profile.HeartbeatSec,
 			"app_version":            profile.AppVersion,
 			"llm_configured":         c.app.isMaclawLLMConfigured(),
+			"sessions":               sessions,
 		},
 	}
 	return c.conn.WriteJSON(msg)
@@ -573,11 +625,18 @@ func (c *RemoteHubClient) readLoop() {
 			return
 		}
 
+		// Refresh read deadline on every incoming message so the connection
+		// stays alive as long as the hub is actively sending data, even if
+		// WebSocket-level pongs are slightly delayed.
+		_ = conn.SetReadDeadline(time.Now().Add(hubPongWait))
+
 		switch msg.Type {
 		case "error":
 			c.storeHubError(msg.Payload)
 		case "session.start":
-			c.handleSessionStart(msg)
+			// Run in a goroutine to avoid blocking the read loop during
+			// potentially slow session creation (e.g. full-disk scans).
+			go c.handleSessionStart(msg)
 		case "session.input":
 			c.handleSessionInput(msg)
 		case "session.interrupt":
@@ -589,7 +648,7 @@ func (c *RemoteHubClient) readLoop() {
 		case "session.screenshot":
 			c.handleSessionScreenshot(msg)
 		case "im.user_message":
-			c.handleIMUserMessage(msg)
+			go c.handleIMUserMessage(msg)
 		}
 	}
 }
@@ -732,7 +791,14 @@ func (c *RemoteHubClient) handleIMUserMessage(msg inboundHubEnvelope) {
 
 	requestID := msg.RequestID
 	go func() {
-		resp := c.imHandler.HandleIMMessage(payload)
+		// Create a progress callback that sends intermediate updates to Hub.
+		// Hub will relay these to the user via IM and reset the response timeout.
+		onProgress := func(text string) {
+			if err := c.sendIMAgentProgress(requestID, text); err != nil {
+				c.app.log(fmt.Sprintf("[im-progress] send error for request=%s: %s", requestID, err.Error()))
+			}
+		}
+		resp := c.imHandler.HandleIMMessageWithProgress(payload, onProgress)
 		if err := c.sendIMAgentResponse(requestID, resp); err != nil {
 			c.setLastError(fmt.Sprintf("im.agent_response send error: %s", err.Error()))
 		}
@@ -754,6 +820,29 @@ func (c *RemoteHubClient) sendIMAgentResponse(requestID string, resp *IMAgentRes
 		MachineID: c.machineID,
 		Payload: map[string]interface{}{
 			"response": resp,
+		},
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+// sendIMAgentProgress sends an intermediate progress update to Hub while the
+// Agent is still working. Hub uses this to (a) deliver a status message to the
+// user via IM and (b) reset the response timeout so long-running tasks don't
+// trigger a 504.
+func (c *RemoteHubClient) sendIMAgentProgress(requestID string, text string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return nil
+	}
+
+	msg := HubEnvelope{
+		Type:      "im.agent_progress",
+		RequestID: requestID,
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		Payload: map[string]interface{}{
+			"text": text,
 		},
 	}
 	return c.conn.WriteJSON(msg)
@@ -881,6 +970,7 @@ func (c *RemoteHubClient) Disconnect() error {
 
 func (c *RemoteHubClient) handleConnectionLoss(err error) {
 	c.stopPreviewFlusher()
+	c.cleanupIORelay()
 	c.mu.Lock()
 	if err != nil {
 		c.lastError = err.Error()
@@ -953,7 +1043,7 @@ func (c *RemoteHubClient) tryReEnroll() bool {
 	if err != nil || cfg.RemoteEmail == "" {
 		return false
 	}
-	result, err := c.app.ActivateRemote(cfg.RemoteEmail, "")
+	result, err := c.app.ActivateRemote(cfg.RemoteEmail, "", "")
 	if err != nil {
 		return false
 	}
@@ -962,4 +1052,31 @@ func (c *RemoteHubClient) tryReEnroll() bool {
 
 func (c *RemoteHubClient) appVersion() string {
 	return remoteAppVersion()
+}
+
+// SetIORelay sets the IO relay used for multi-device session roaming.
+func (c *RemoteHubClient) SetIORelay(relay *SessionIORelay) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ioRelay = relay
+}
+
+// cleanupIORelay unsubscribes this device from all active sessions in the
+// IO relay. This ensures a disconnected device stops receiving output while
+// sessions and other devices' subscriptions remain unaffected.
+func (c *RemoteHubClient) cleanupIORelay() {
+	if c.ioRelay == nil {
+		return
+	}
+	if c.manager == nil {
+		return
+	}
+
+	deviceID := c.machineID
+	for _, s := range c.manager.List() {
+		if s == nil {
+			continue
+		}
+		c.ioRelay.Unsubscribe(s.ID, deviceID)
+	}
 }

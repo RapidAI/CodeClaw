@@ -106,7 +106,7 @@ func (a *App) autoRegisterOnStartup(cfg AppConfig) {
 	if email == "" || hubURL == "" {
 		return
 	}
-	result, err := a.ActivateRemote(email, "")
+	result, err := a.ActivateRemote(email, "", "")
 	if err != nil {
 		fmt.Printf("auto-register on startup failed: %v\n", err)
 		return
@@ -116,7 +116,7 @@ func (a *App) autoRegisterOnStartup(cfg AppConfig) {
 	}
 }
 
-func (a *App) ActivateRemote(email string, invitationCode string) (RemoteActivationResult, error) {
+func (a *App) ActivateRemote(email string, invitationCode string, mobile string) (RemoteActivationResult, error) {
 	cfg, err := a.LoadConfig()
 	if err != nil {
 		return RemoteActivationResult{}, err
@@ -148,6 +148,9 @@ func (a *App) ActivateRemote(email string, invitationCode string) (RemoteActivat
 	body["heartbeat_interval_sec"] = profile.HeartbeatSec
 	if invitationCode != "" {
 		body["invitation_code"] = invitationCode
+	}
+	if mobile != "" {
+		body["mobile"] = strings.TrimSpace(mobile)
 	}
 
 	// Generate a stable client_id on first run so re-enrollment reuses the same machine record

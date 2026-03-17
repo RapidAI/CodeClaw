@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -95,9 +96,8 @@ var knownChannels = []KnownChannel{
 
 // ChannelState is the per-channel config stored in the DB and written to bridge config.json.
 type ChannelState struct {
-	Enabled bool                   `json:"enabled"`
-	Fields  map[string]string      `json:"fields,omitempty"`
-	Extra   map[string]interface{} `json:"-"`
+	Enabled bool              `json:"enabled"`
+	Fields  map[string]string `json:"fields,omitempty"`
 }
 
 // BridgeConfigJSON mirrors the bridge's config.json structure.
@@ -136,7 +136,7 @@ func GetBridgeChannelsHandler(system store.SystemSettingsRepository, bridgeDir s
 			if cr.Config == nil {
 				cr.Config = map[string]string{}
 			}
-			cr.Installed = isNpmPackageInstalled(bridgeDir, ch.Package)
+			cr.Installed = isNpmPackageInstalled(bridgeDir, ch.Package) || (ch.AltPackage != "" && isNpmPackageInstalled(bridgeDir, ch.AltPackage))
 			result = append(result, cr)
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"channels": result})
@@ -174,9 +174,19 @@ func SaveBridgeChannelHandler(system store.SystemSettingsRepository, bridgeDir s
 			return
 		}
 
-		// Load existing states, update this channel
+		// Load existing states, update this channel — only accept known field keys
+		validKeys := make(map[string]bool, len(known.Fields))
+		for _, f := range known.Fields {
+			validKeys[f.Key] = true
+		}
+		cleanFields := make(map[string]string, len(req.Fields))
+		for k, v := range req.Fields {
+			if validKeys[k] {
+				cleanFields[k] = v
+			}
+		}
 		saved := loadChannelStates(r, system)
-		saved[req.ID] = ChannelState{Enabled: req.Enabled, Fields: req.Fields}
+		saved[req.ID] = ChannelState{Enabled: req.Enabled, Fields: cleanFields}
 
 		// Persist to DB
 		data, _ := json.Marshal(saved)
@@ -190,7 +200,16 @@ func SaveBridgeChannelHandler(system store.SystemSettingsRepository, bridgeDir s
 		if req.Enabled && bridgeDir != "" {
 			if !isNpmPackageInstalled(bridgeDir, known.Package) {
 				if err := npmInstallPackage(bridgeDir, known.Package); err != nil {
-					installMsg = fmt.Sprintf("npm install %s failed: %v", known.Package, err)
+					// Try fallback package name
+					if known.AltPackage != "" {
+						if err2 := npmInstallPackage(bridgeDir, known.AltPackage); err2 != nil {
+							installMsg = fmt.Sprintf("npm install failed for both %s and %s", known.Package, known.AltPackage)
+						} else {
+							installMsg = fmt.Sprintf("npm install %s succeeded (fallback)", known.AltPackage)
+						}
+					} else {
+						installMsg = fmt.Sprintf("npm install %s failed: %v", known.Package, err)
+					}
 				} else {
 					installMsg = fmt.Sprintf("npm install %s succeeded", known.Package)
 				}
@@ -225,7 +244,16 @@ func BridgeStatusHandler(system store.SystemSettingsRepository) http.HandlerFunc
 		healthURL := strings.TrimSuffix(webhookURL, "/outbound") + "/health"
 
 		client := &http.Client{Timeout: 3 * time.Second}
-		resp, err := client.Get(healthURL)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, healthURL, nil)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"running":  false,
+				"error":    err.Error(),
+				"channels": []string{},
+			})
+			return
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"running":  false,
@@ -259,7 +287,9 @@ func InstallBridgeDepsHandler(bridgeDir string) http.HandlerFunc {
 		if runtime.GOOS == "windows" {
 			npmCmd = "npm.cmd"
 		}
-		cmd := exec.CommandContext(r.Context(), npmCmd, "install")
+		ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, npmCmd, "install")
 		cmd.Dir = bridgeDir
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -295,13 +325,7 @@ func isNpmPackageInstalled(bridgeDir, pkg string) bool {
 	if bridgeDir == "" {
 		return false
 	}
-	// Check node_modules for the package
-	pkgPath := pkg
-	if strings.HasPrefix(pkg, "@") {
-		// scoped package: @openclaw/telegram -> node_modules/@openclaw/telegram
-		pkgPath = pkg
-	}
-	info, err := os.Stat(filepath.Join(bridgeDir, "node_modules", pkgPath))
+	info, err := os.Stat(filepath.Join(bridgeDir, "node_modules", pkg))
 	return err == nil && info.IsDir()
 }
 
@@ -313,7 +337,9 @@ func npmInstallPackage(bridgeDir, pkg string) error {
 	if runtime.GOOS == "windows" {
 		npmCmd = "npm.cmd"
 	}
-	cmd := exec.Command(npmCmd, "install", pkg)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, npmCmd, "install", pkg)
 	cmd.Dir = bridgeDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

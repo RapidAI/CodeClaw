@@ -17,6 +17,11 @@ type GenericResponse struct {
 	Fields       []ResponseField  // Structured field list
 	Actions      []ResponseAction // Action button definitions
 	FallbackText string           // Explicit plain text fallback (optional override)
+	ImageKey     string           // Base64 image data or image key for IM delivery (optional)
+	ImageCaption string           // Caption for the image (optional)
+	FileData     string           // Base64-encoded file data for IM delivery (optional)
+	FileName     string           // File display name (optional)
+	FileMimeType string           // File MIME type (optional)
 }
 
 // ResponseField represents a structured key-value field in a response.

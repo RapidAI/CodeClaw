@@ -30,3 +30,9 @@ func (w *WSAgentResponder) HandleAgentResponse(requestID string, raw json.RawMes
 	resp := envelope.Response
 	w.Router.HandleAgentResponse(requestID, &resp)
 }
+
+// HandleAgentProgress delegates progress updates to the MessageRouter,
+// which resets the timeout and optionally delivers the text to the user.
+func (w *WSAgentResponder) HandleAgentProgress(requestID string, text string) {
+	w.Router.HandleAgentProgress(requestID, text)
+}

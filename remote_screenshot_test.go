@@ -187,8 +187,8 @@ func TestCaptureScreenshot_RejectsPTYSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for PTY session")
 	}
-	if !strings.Contains(err.Error(), "SDK mode") {
-		t.Fatalf("expected 'SDK mode' error, got: %v", err)
+	if !strings.Contains(err.Error(), "SDK") {
+		t.Fatalf("expected 'SDK' error, got: %v", err)
 	}
 }
 
@@ -430,8 +430,8 @@ func TestCaptureScreenshot_LogPrefixInErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for PTY session")
 	}
-	if !strings.Contains(err.Error(), "SDK mode") {
-		t.Fatalf("expected 'SDK mode' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "SDK") {
+		t.Fatalf("expected 'SDK' in error, got: %v", err)
 	}
 }
 

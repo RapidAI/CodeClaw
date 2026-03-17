@@ -1,9 +1,12 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image/png"
 	"log"
 	"strings"
 	"time"
@@ -124,13 +127,119 @@ func (p *FeishuPlugin) SendCard(ctx context.Context, target im.UserTarget, card 
 }
 
 // SendImage sends an image message to the target user via Feishu.
-// Reuses the existing sendImagePost logic.
+// If imageKey looks like base64-encoded PNG data (not a Feishu image_key),
+// it is decoded, uploaded to Feishu, and then sent.
 func (p *FeishuPlugin) SendImage(ctx context.Context, target im.UserTarget, imageKey string, caption string) error {
 	openID := target.PlatformUID
 	if openID == "" {
 		return fmt.Errorf("feishu: PlatformUID (open_id) is required")
 	}
+
+	// Detect base64 PNG data vs Feishu image_key.
+	// Feishu image_keys look like "img_v2_xxx" or "img_xxx".
+	if !strings.HasPrefix(imageKey, "img_") && len(imageKey) > 200 {
+		// Likely base64 image data — decode and upload to Feishu.
+		uploaded, err := p.uploadBase64Image(ctx, imageKey)
+		if err != nil {
+			return fmt.Errorf("feishu: upload image failed: %w", err)
+		}
+		imageKey = uploaded
+	}
+
 	sendImagePost(p.notifier, openID, imageKey, caption)
+	return nil
+}
+
+// uploadBase64Image decodes base64 PNG data and uploads it to Feishu,
+// returning the Feishu image_key.
+func (p *FeishuPlugin) uploadBase64Image(ctx context.Context, b64Data string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(b64Data)
+	if err != nil {
+		return "", fmt.Errorf("base64 decode: %w", err)
+	}
+
+	img, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return "", fmt.Errorf("png decode: %w", err)
+	}
+
+	bot := p.notifier.Bot()
+	if bot == nil {
+		return "", fmt.Errorf("feishu bot not initialized")
+	}
+
+	// Use a dedicated context with generous timeout for image upload.
+	uploadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	resp, err := bot.UploadImageObject(uploadCtx, img)
+	if err != nil {
+		return "", fmt.Errorf("upload to feishu: %w", err)
+	}
+	if resp.Code != 0 {
+		return "", fmt.Errorf("feishu API error: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+
+	return resp.Data.ImageKey, nil
+}
+
+// SendFile sends a file to the target user via Feishu.
+// It uploads the base64-encoded file data using the Feishu file upload API,
+// then sends it as a file message.
+func (p *FeishuPlugin) SendFile(ctx context.Context, target im.UserTarget, fileData, fileName, mimeType string) error {
+	openID := target.PlatformUID
+	if openID == "" {
+		return fmt.Errorf("feishu: PlatformUID (open_id) is required")
+	}
+
+	bot := p.notifier.Bot()
+	if bot == nil {
+		return fmt.Errorf("feishu bot not initialized")
+	}
+
+	raw, err := base64.StdEncoding.DecodeString(fileData)
+	if err != nil {
+		return fmt.Errorf("feishu: base64 decode: %w", err)
+	}
+
+	// Determine file type for Feishu API.
+	fileType := "stream"
+	if strings.HasPrefix(mimeType, "image/") {
+		// For images, use SendImage path instead.
+		return p.SendImage(ctx, target, fileData, fileName)
+	}
+
+	// Use a dedicated context with generous timeout for file upload,
+	// since the caller's context may have a shorter deadline that's
+	// insufficient for large file uploads to Feishu.
+	uploadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Upload file to Feishu.
+	uploadResp, err := bot.UploadFile(uploadCtx, lark.UploadFileRequest{
+		FileType: fileType,
+		FileName: fileName,
+		Reader:   bytes.NewReader(raw),
+	})
+	if err != nil {
+		return fmt.Errorf("feishu: upload file: %w", err)
+	}
+	if uploadResp.Code != 0 {
+		return fmt.Errorf("feishu: upload file API error: code=%d msg=%s", uploadResp.Code, uploadResp.Msg)
+	}
+
+	fileKey := uploadResp.Data.FileKey
+
+	// Send file message.
+	msg := lark.NewMsgBuffer(lark.MsgFile).
+		BindOpenID(openID).
+		File(fileKey).
+		Build()
+
+	if _, err := bot.PostMessage(ctx, msg); err != nil {
+		return fmt.Errorf("feishu: send file message: %w", err)
+	}
+
 	return nil
 }
 
@@ -157,9 +266,10 @@ func (p *FeishuPlugin) Capabilities() im.CapabilityDeclaration {
 		SupportsRichCard:    true,
 		SupportsMarkdown:    true,
 		SupportsImage:       true,
+		SupportsFile:        true,
 		SupportsButton:      true,
-		SupportsMessageEdit: false, // Feishu card updates are limited; keep false for safety.
-		MaxTextLength:       4000,  // Feishu post messages have practical limits.
+		SupportsMessageEdit: false,
+		MaxTextLength:       4000,
 	}
 }
 

@@ -67,6 +67,7 @@ type identityService interface {
 // IMAgentResponseHandler handles agent responses routed back from MaClaw clients.
 type IMAgentResponseHandler interface {
 	HandleAgentResponse(requestID string, resp json.RawMessage)
+	HandleAgentProgress(requestID string, text string)
 }
 
 type Gateway struct {
@@ -74,8 +75,9 @@ type Gateway struct {
 	Devices  DeviceBinder
 	Sessions SessionService
 
-	// IMResponder handles im.agent_response messages from MaClaw clients.
-	// Set via SetIMResponder after construction to avoid circular deps.
+	// IMResponder handles im.agent_response and im.agent_progress messages
+	// from MaClaw clients. Set via SetIMResponder after construction to
+	// avoid circular deps.
 	IMResponder IMAgentResponseHandler
 
 	mu                sync.RWMutex
@@ -110,10 +112,51 @@ func (g *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	log.Printf("[ws] HandleWS: new WebSocket connection from %s", r.RemoteAddr)
+
+	// Configure WebSocket-level ping-pong to keep the connection alive even
+	// when the application-level heartbeat is delayed by heavy workloads
+	// (e.g. full-disk scans). The read deadline is refreshed on every pong
+	// and on every normal message, so a busy machine that sends data but
+	// misses a pong still stays connected.
+	const (
+		pongWait   = 90 * time.Second // must be > client heartbeat interval
+		pingPeriod = 30 * time.Second // must be < pongWait
+	)
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
+	// Start a goroutine that sends periodic WebSocket pings.
+	pingDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(pingPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+					return
+				}
+			case <-pingDone:
+				return
+			}
+		}
+	}()
+
 	ctx := &ConnContext{Conn: conn}
-	defer g.cleanupConnection(ctx)
+	defer func() {
+		close(pingDone)
+		g.cleanupConnection(ctx)
+	}()
 
 	for {
+		// Refresh read deadline on every incoming message so that machines
+		// sending frequent data (summaries, preview deltas) don't time out
+		// even if the pong is slightly delayed.
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+
 		var msg Envelope
 		if err := conn.ReadJSON(&msg); err != nil {
 			log.Printf("[ws] HandleWS: ReadJSON error (role=%s machine_id=%s): %v", ctx.Role, ctx.MachineID, err)
@@ -199,6 +242,10 @@ func (g *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 			}
 		case "im.agent_response":
 			if err := g.handleIMAgentResponse(ctx, msg); err != nil {
+				return
+			}
+		case "im.agent_progress":
+			if err := g.handleIMAgentProgress(ctx, msg); err != nil {
 				return
 			}
 		default:
@@ -752,6 +799,30 @@ func (g *Gateway) handleIMAgentResponse(ctx *ConnContext, msg Envelope) error {
 		return nil
 	}
 	g.IMResponder.HandleAgentResponse(msg.RequestID, msg.Payload)
+	return nil
+}
+
+// handleIMAgentProgress handles im.agent_progress from a MaClaw client.
+// It resets the pending request timeout and optionally delivers the progress
+// text to the user via IM.
+func (g *Gateway) handleIMAgentProgress(ctx *ConnContext, msg Envelope) error {
+	if ctx.Role != "machine" {
+		return writeWSError(ctx.Conn, "FORBIDDEN", "Machine role required")
+	}
+	if g.IMResponder == nil {
+		return nil
+	}
+	if msg.RequestID == "" {
+		return nil
+	}
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		log.Printf("[ws] handleIMAgentProgress: parse error for request_id=%s: %v", msg.RequestID, err)
+		return nil
+	}
+	g.IMResponder.HandleAgentProgress(msg.RequestID, payload.Text)
 	return nil
 }
 

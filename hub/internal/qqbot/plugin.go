@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -93,6 +94,15 @@ type Plugin struct {
 	// by both the read loop and the heartbeat goroutine.
 	seqMu   sync.Mutex
 	lastSeq *int
+
+	// publicBaseURL is the hub's externally reachable URL, used to
+	// construct temporary download URLs for large file uploads.
+	publicBaseURL string
+
+	// tempFiles stores base64-encoded file data keyed by a random token.
+	// Entries expire after tempFileTTL and are cleaned up periodically.
+	tempMu    sync.Mutex
+	tempFiles map[string]*tempFileEntry
 }
 
 // Mailer is the interface for sending emails (satisfied by mail.Service).
@@ -111,6 +121,22 @@ type pendingBind struct {
 	Expiry time.Time
 }
 
+// tempFileEntry holds a base64-encoded file for temporary download.
+type tempFileEntry struct {
+	Data      []byte // raw file bytes
+	MimeType  string
+	ExpiresAt time.Time
+}
+
+const (
+	// tempFileTTL is how long a temp file is kept before cleanup.
+	tempFileTTL = 5 * time.Minute
+	// urlUploadThreshold: if base64 data exceeds this size (bytes), use URL
+	// mode instead of inline file_data to avoid QQ gateway 413 errors.
+	// QQ's stgw typically limits request bodies to ~10 MB.
+	urlUploadThreshold = 4 * 1024 * 1024 // 4 MB of base64 ≈ 3 MB raw
+)
+
 // wsPayload is the QQ Bot WebSocket payload structure.
 type wsPayload struct {
 	ID string          `json:"id,omitempty"`
@@ -127,12 +153,18 @@ func New(provider ConfigProvider, users store.UserRepository, system store.Syste
 		users:          users,
 		system:         system,
 		mailer:         mailer,
-		client:         &http.Client{Timeout: 15 * time.Second},
+		client:         &http.Client{Timeout: 60 * time.Second},
 		bindings:       make(map[string]string),
 		pending:        make(map[string]*pendingBind),
+		tempFiles:      make(map[string]*tempFileEntry),
 	}
 	p.loadBindings()
 	return p
+}
+
+// SetPublicBaseURL sets the hub's externally reachable URL for temp file downloads.
+func (p *Plugin) SetPublicBaseURL(url string) {
+	p.publicBaseURL = strings.TrimRight(url, "/")
 }
 
 // SetBroadcaster wires the cross-IM notification broadcaster.
@@ -193,11 +225,41 @@ func (p *Plugin) SendCard(ctx context.Context, target im.UserTarget, card im.Out
 }
 
 func (p *Plugin) SendImage(ctx context.Context, target im.UserTarget, imageKey string, caption string) error {
+	openID := target.PlatformUID
+	if openID == "" {
+		return fmt.Errorf("qqbot: PlatformUID (openid) is required")
+	}
+
+	// imageKey is base64-encoded PNG data from the screenshot pipeline.
+	if len(imageKey) > 200 {
+		return p.sendC2CMedia(ctx, openID, 1, imageKey, "", "image/png", caption) // 1 = image
+	}
+
 	text := caption
 	if text == "" {
 		text = "[图片]"
 	}
 	return p.SendText(ctx, target, text)
+}
+
+// SendFile sends a file to the target user via QQ rich media API.
+func (p *Plugin) SendFile(ctx context.Context, target im.UserTarget, fileData, fileName, mimeType string) error {
+	openID := target.PlatformUID
+	if openID == "" {
+		return fmt.Errorf("qqbot: PlatformUID (openid) is required")
+	}
+
+	// Determine file type based on mimeType.
+	fileType := 4 // default: file
+	if strings.HasPrefix(mimeType, "image/") {
+		fileType = 1
+	} else if strings.HasPrefix(mimeType, "video/") {
+		fileType = 2
+	} else if strings.HasPrefix(mimeType, "audio/") {
+		fileType = 3
+	}
+
+	return p.sendC2CMedia(ctx, openID, fileType, fileData, fileName, mimeType, "")
 }
 
 func (p *Plugin) ResolveUser(ctx context.Context, platformUID string) (string, error) {
@@ -218,7 +280,8 @@ func (p *Plugin) Capabilities() im.CapabilityDeclaration {
 	return im.CapabilityDeclaration{
 		SupportsRichCard:    false,
 		SupportsMarkdown:    false,
-		SupportsImage:       false,
+		SupportsImage:       true,
+		SupportsFile:        true,
 		SupportsButton:      false,
 		SupportsMessageEdit: false,
 		MaxTextLength:       4000,
@@ -345,6 +408,102 @@ func (p *Plugin) sendC2CMessage(ctx context.Context, openID, text string) error 
 	return nil
 }
 
+// sendC2CMedia uploads base64 data to QQ and sends it as a rich media message.
+// fileType: 1=image, 2=video, 3=voice, 4=file
+func (p *Plugin) sendC2CMedia(ctx context.Context, openID string, fileType int, base64Data, fileName, mimeType, caption string) error {
+	token, err := p.getAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Step 1: Upload media to get file_info.
+	uploadURL := fmt.Sprintf("%s/v2/users/%s/files", qqAPIBase, openID)
+	uploadPayload := map[string]any{
+		"file_type":    fileType,
+		"srv_send_msg": false,
+	}
+	if fileType == 4 && fileName != "" {
+		uploadPayload["file_name"] = fileName
+	}
+
+	// For large files, use URL mode to avoid QQ gateway 413 errors.
+	if len(base64Data) > urlUploadThreshold && p.publicBaseURL != "" {
+		tempURL, storeErr := p.storeTempFile(base64Data, mimeType)
+		if storeErr != nil {
+			log.Printf("[qqbot] failed to store temp file, falling back to inline: %v", storeErr)
+			uploadPayload["file_data"] = base64Data
+		} else {
+			log.Printf("[qqbot] large file (%d bytes base64), using URL mode: %s", len(base64Data), tempURL)
+			uploadPayload["url"] = tempURL
+		}
+	} else {
+		uploadPayload["file_data"] = base64Data
+	}
+
+	uploadBody, _ := json.Marshal(uploadPayload)
+
+	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(uploadBody))
+	if err != nil {
+		return fmt.Errorf("qqbot: create upload request: %w", err)
+	}
+	uploadReq.Header.Set("Content-Type", "application/json")
+	uploadReq.Header.Set("Authorization", "QQBot "+token)
+
+	uploadResp, err := p.client.Do(uploadReq)
+	if err != nil {
+		return fmt.Errorf("qqbot: upload media failed: %w", err)
+	}
+	defer uploadResp.Body.Close()
+
+	uploadRespBody, _ := io.ReadAll(io.LimitReader(uploadResp.Body, 8192))
+	if uploadResp.StatusCode >= 300 {
+		return fmt.Errorf("qqbot: upload media HTTP %d: %s", uploadResp.StatusCode, string(uploadRespBody))
+	}
+
+	var uploadResult struct {
+		FileInfo string `json:"file_info"`
+	}
+	if err := json.Unmarshal(uploadRespBody, &uploadResult); err != nil {
+		return fmt.Errorf("qqbot: parse upload response: %w", err)
+	}
+	if uploadResult.FileInfo == "" {
+		return fmt.Errorf("qqbot: upload returned empty file_info")
+	}
+
+	// Step 2: Send rich media message.
+	msgURL := fmt.Sprintf("%s/v2/users/%s/messages", qqAPIBase, openID)
+	msgBody, _ := json.Marshal(map[string]any{
+		"msg_type": 7,
+		"media": map[string]any{
+			"file_info": uploadResult.FileInfo,
+		},
+	})
+
+	msgReq, err := http.NewRequestWithContext(ctx, http.MethodPost, msgURL, bytes.NewReader(msgBody))
+	if err != nil {
+		return fmt.Errorf("qqbot: create message request: %w", err)
+	}
+	msgReq.Header.Set("Content-Type", "application/json")
+	msgReq.Header.Set("Authorization", "QQBot "+token)
+
+	msgResp, err := p.client.Do(msgReq)
+	if err != nil {
+		return fmt.Errorf("qqbot: send media message failed: %w", err)
+	}
+	defer msgResp.Body.Close()
+
+	if msgResp.StatusCode >= 300 {
+		msgRespBody, _ := io.ReadAll(io.LimitReader(msgResp.Body, 4096))
+		return fmt.Errorf("qqbot: send media message HTTP %d: %s", msgResp.StatusCode, string(msgRespBody))
+	}
+
+	// Send caption as a separate text message if provided.
+	if caption != "" {
+		_ = p.sendC2CMessage(ctx, openID, caption)
+	}
+
+	return nil
+}
 // ---------------------------------------------------------------------------
 // WebSocket Gateway — connects to QQ Bot gateway for real-time events
 // Protocol: Hello(op=10) → Identify(op=2) → Ready(op=0) → Heartbeat(op=1)
@@ -1036,4 +1195,78 @@ func truncate(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes]) + "…"
+}
+
+// ---------------------------------------------------------------------------
+// Temporary file store for large file uploads via URL mode
+// ---------------------------------------------------------------------------
+
+// storeTempFile decodes base64 data, stores it with a random token, and
+// returns a publicly accessible URL. The entry expires after tempFileTTL.
+func (p *Plugin) storeTempFile(base64Data, mimeType string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("decode base64: %w", err)
+	}
+
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	token := generateTempToken()
+
+	p.tempMu.Lock()
+	p.tempFiles[token] = &tempFileEntry{
+		Data:      raw,
+		MimeType:  mimeType,
+		ExpiresAt: time.Now().Add(tempFileTTL),
+	}
+	// Inline cleanup of any expired entries while we hold the lock.
+	now := time.Now()
+	for k, v := range p.tempFiles {
+		if now.After(v.ExpiresAt) {
+			delete(p.tempFiles, k)
+		}
+	}
+	p.tempMu.Unlock()
+
+	return fmt.Sprintf("%s/api/qqbot/tempfile/%s", p.publicBaseURL, token), nil
+}
+
+func generateTempToken() string {
+	b := make([]byte, 24)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// ServeTempFile is the HTTP handler for GET /api/qqbot/tempfile/{token}.
+// QQ's server fetches the file from this URL during the upload flow.
+func (p *Plugin) ServeTempFile(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	if token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+
+	p.tempMu.Lock()
+	entry, ok := p.tempFiles[token]
+	p.tempMu.Unlock()
+
+	if !ok {
+		http.Error(w, "file not found or expired", http.StatusNotFound)
+		return
+	}
+	if time.Now().After(entry.ExpiresAt) {
+		// Lazy cleanup.
+		p.tempMu.Lock()
+		delete(p.tempFiles, token)
+		p.tempMu.Unlock()
+		http.Error(w, "file expired", http.StatusGone)
+		return
+	}
+
+	w.Header().Set("Content-Type", entry.MimeType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(entry.Data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(entry.Data)
 }

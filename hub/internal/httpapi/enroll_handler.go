@@ -1,15 +1,20 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
+	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
 )
 
 type EnrollStartRequest struct {
 	Email                string `json:"email"`
+	Mobile               string `json:"mobile"`
 	MachineName          string `json:"machine_name"`
 	Platform             string `json:"platform"`
 	Hostname             string `json:"hostname"`
@@ -32,7 +37,7 @@ type EmailPollLoginRequest struct {
 	PollID string `json:"poll_id"`
 }
 
-func EnrollStartHandler(identity *auth.IdentityService) http.HandlerFunc {
+func EnrollStartHandler(identity *auth.IdentityService, feishuNotifier *feishu.Notifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req EnrollStartRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -75,6 +80,19 @@ func EnrollStartHandler(identity *auth.IdentityService) http.HandlerFunc {
 				AppVersion:           req.AppVersion,
 				HeartbeatIntervalSec: heartbeat,
 			})
+
+			// Auto-add user to Feishu organization so they can discover the bot.
+			if feishuNotifier != nil {
+				if ae := feishuNotifier.AutoEnroller(); ae != nil {
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						if err := ae.AddToFeishuOrg(ctx, req.Email, "", req.Mobile); err != nil {
+							log.Printf("[enroll] feishu auto-enroll failed for %s: %v", req.Email, err)
+						}
+					}()
+				}
+			}
 		}
 
 		writeJSON(w, http.StatusOK, resp)

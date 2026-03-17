@@ -217,7 +217,7 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 	}
 
 	// 3. Route to MaClaw Agent via MessageRouter
-	resp, err := a.messageRouter.RouteToAgent(ctx, unifiedID, msg.PlatformName, text)
+	resp, err := a.messageRouter.RouteToAgent(ctx, unifiedID, msg.PlatformName, msg.PlatformUID, text)
 	if err != nil {
 		a.sendResponse(ctx, plugin, target, &GenericResponse{
 			StatusCode: 500,
@@ -232,6 +232,24 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 	a.sendResponse(ctx, plugin, target, resp)
 }
 
+// DeliverProgress sends a progress text message to a user via the appropriate
+// IM plugin. This is used by the MessageRouter to relay intermediate status
+// updates from the Agent during long-running tasks.
+func (a *Adapter) DeliverProgress(ctx context.Context, platformName, userID, platformUID, text string) {
+	a.mu.RLock()
+	plugin, ok := a.plugins[platformName]
+	a.mu.RUnlock()
+	if !ok {
+		log.Printf("[IM Adapter] DeliverProgress: no plugin for platform %q", platformName)
+		return
+	}
+
+	target := UserTarget{PlatformUID: platformUID, UnifiedUserID: userID}
+	if err := plugin.SendText(ctx, target, text); err != nil {
+		log.Printf("[IM Adapter] DeliverProgress SendText failed for %s: %v", platformName, err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Response formatting & delivery (capability-based format selection)
 // ---------------------------------------------------------------------------
@@ -244,6 +262,44 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 //   - Otherwise → SendText with FallbackText
 func (a *Adapter) sendResponse(ctx context.Context, plugin IMPlugin, target UserTarget, resp *GenericResponse) {
 	caps := plugin.Capabilities()
+
+	// If the response contains an image, send it first via SendImage.
+	if resp.ImageKey != "" && caps.SupportsImage {
+		caption := resp.ImageCaption
+		if caption == "" && resp.Body != "" {
+			caption = resp.Body
+		}
+		if err := plugin.SendImage(ctx, target, resp.ImageKey, caption); err != nil {
+			log.Printf("[IM Adapter] SendImage failed for %s: %v, falling back to text", plugin.Name(), err)
+			// If image send fails and there's text, fall through to send text.
+			if resp.Body == "" {
+				_ = plugin.SendText(ctx, target, "截图发送失败: "+err.Error())
+				return
+			}
+		} else {
+			// Image sent successfully. If there's no additional text, we're done.
+			if resp.Body == "" {
+				return
+			}
+		}
+	}
+
+	// If the response contains a file, send it via SendFile.
+	if resp.FileData != "" && resp.FileName != "" && caps.SupportsFile {
+		if err := plugin.SendFile(ctx, target, resp.FileData, resp.FileName, resp.FileMimeType); err != nil {
+			log.Printf("[IM Adapter] SendFile failed for %s: %v, falling back to text", plugin.Name(), err)
+			if resp.Body == "" {
+				_ = plugin.SendText(ctx, target, "文件发送失败: "+err.Error())
+				return
+			}
+		} else {
+			// File sent successfully. If there's no additional text, we're done.
+			if resp.Body == "" {
+				return
+			}
+		}
+	}
+
 	out := resp.ToOutgoingMessage()
 
 	if caps.SupportsRichCard {

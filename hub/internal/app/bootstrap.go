@@ -72,6 +72,13 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	feishuNotifier := feishu.New(feishuAppID, feishuAppSecret, st.Users, st.System, mailer)
 	feishuNotifier.SetServices(&feishu.DeviceServiceAdapter{Svc: deviceService}, sessionService)
 
+	// Feishu auto-enrollment: when users register on the desktop client,
+	// automatically add them to the Feishu organization so they can discover
+	// and use the bot (requires contact:user write scope).
+	autoEnroller := feishu.NewAutoEnroller(feishuNotifier.Bot, feishuNotifier.BindOpenID)
+	autoEnroller.SetConfig(feishu.LoadAutoEnrollSetting(context.Background(), st.System))
+	feishuNotifier.SetAutoEnroller(autoEnroller)
+
 	// -----------------------------------------------------------------------
 	// Agent Passthrough IM modules
 	// -----------------------------------------------------------------------
@@ -92,6 +99,12 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	//    so im.agent_response messages from MaClaw clients are routed back.
 	wsResponder := &im.WSAgentResponder{Router: messageRouter}
 	gateway.SetIMResponder(wsResponder)
+
+	// 3b. Wire progress delivery so the MessageRouter can send intermediate
+	//     status updates to users via IM during long-running agent tasks.
+	messageRouter.SetProgressDelivery(func(ctx context.Context, userID, platformName, platformUID, text string) {
+		imAdapter.DeliverProgress(ctx, platformName, userID, platformUID, text)
+	})
 
 	// 4. Feishu_Plugin
 	feishuPlugin := feishu.NewPlugin(feishuNotifier)
@@ -141,6 +154,10 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	}, st.Users, st.System, mailer)
 	if err := imAdapter.RegisterPlugin(qqbotPlugin); err != nil {
 		log.Printf("[bootstrap] failed to register qqbot plugin: %v", err)
+	}
+	// Provide the hub's public URL so QQBot can serve temp files for large uploads.
+	if cfg.Server.PublicBaseURL != "" {
+		qqbotPlugin.SetPublicBaseURL(cfg.Server.PublicBaseURL)
 	}
 	// Start QQBot WebSocket gateway if configured
 	if err := qqbotPlugin.Start(context.Background()); err != nil {

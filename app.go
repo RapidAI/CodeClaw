@@ -57,6 +57,15 @@ type App struct {
 	skillHubClient         *SkillHubClient
 	capabilityGapDetector  *CapabilityGapDetector
 	stopHubTicker          chan struct{} // signals the 24h recommendation refresh goroutine to stop
+	// Smart session components
+	memoryStore          *MemoryStore
+	configManager        *ConfigManager
+	templateManager      *SessionTemplateManager
+	contextResolver      *SessionContextResolver
+	sessionPrecheck      *SessionPrecheck
+	conversationArchiver *ConversationArchiver
+	startupFeedback      *SessionStartupFeedback
+	ioRelay              *SessionIORelay
 }
 
 var OnConfigChanged func(AppConfig)
@@ -125,6 +134,7 @@ type AppConfig struct {
 	CurrentProject       string          `json:"current_project"` // ID of the current project
 	ActiveTool           string          `json:"active_tool"`     // "claude", "gemini", or "codex"
 	HideStartupPopup     bool            `json:"hide_startup_popup"`
+	HideMaclawLLMPopup   bool            `json:"hide_maclaw_llm_popup"`
 	ShowGemini           bool            `json:"show_gemini"`
 	ShowCodex            bool            `json:"show_codex"`
 	ShowOpenCode         bool            `json:"show_opencode"`
@@ -151,6 +161,7 @@ type AppConfig struct {
 	RemoteHubURL       string `json:"remote_hub_url"`
 	RemoteHubCenterURL string `json:"remote_hubcenter_url"`
 	RemoteEmail        string `json:"remote_email"`
+	RemoteMobile       string `json:"remote_mobile"`
 	RemoteSN           string `json:"remote_sn"`
 	RemoteUserID       string `json:"remote_user_id"`
 	RemoteMachineID    string `json:"remote_machine_id"`
@@ -276,6 +287,39 @@ func (a *App) ensureRemoteInfra() {
 			a, a.skillHubClient, a.skillExecutor, a.riskAssessor, a.auditLog, cfg,
 		)
 	}
+	// Initialize smart session components
+	if a.memoryStore == nil {
+		homeDir := a.GetUserHomeDir()
+		ms, err := NewMemoryStore(filepath.Join(homeDir, ".maclaw", "memories.json"))
+		if err == nil {
+			a.memoryStore = ms
+		}
+	}
+	if a.configManager == nil {
+		a.configManager = NewConfigManager(a)
+	}
+	if a.templateManager == nil {
+		homeDir := a.GetUserHomeDir()
+		tm, err := NewSessionTemplateManager(filepath.Join(homeDir, ".maclaw", "templates.json"))
+		if err == nil {
+			a.templateManager = tm
+		}
+	}
+	if a.contextResolver == nil {
+		a.contextResolver = NewSessionContextResolver(a)
+	}
+	if a.sessionPrecheck == nil {
+		a.sessionPrecheck = NewSessionPrecheck(a)
+	}
+	if a.conversationArchiver == nil && a.memoryStore != nil {
+		a.conversationArchiver = NewConversationArchiver(a.memoryStore, a)
+	}
+	if a.startupFeedback == nil && a.remoteSessions != nil {
+		a.startupFeedback = NewSessionStartupFeedback(a.remoteSessions)
+	}
+	if a.ioRelay == nil {
+		a.ioRelay = NewSessionIORelay()
+	}
 }
 
 // tryLockTool attempts to acquire a lock for installing a specific tool
@@ -336,6 +380,30 @@ func (a *App) startup(ctx context.Context) {
 			if a.toolRouter != nil {
 				hubClient.imHandler.SetToolRouter(a.toolRouter)
 			}
+			if a.memoryStore != nil {
+				hubClient.imHandler.SetMemoryStore(a.memoryStore)
+			}
+			if a.configManager != nil {
+				hubClient.imHandler.SetConfigManager(a.configManager)
+			}
+			if a.templateManager != nil {
+				hubClient.imHandler.SetTemplateManager(a.templateManager)
+			}
+			if a.contextResolver != nil {
+				hubClient.imHandler.SetContextResolver(a.contextResolver)
+			}
+			if a.sessionPrecheck != nil {
+				hubClient.imHandler.SetSessionPrecheck(a.sessionPrecheck)
+			}
+			if a.startupFeedback != nil {
+				hubClient.imHandler.SetStartupFeedback(a.startupFeedback)
+			}
+			if a.conversationArchiver != nil {
+				hubClient.imHandler.memory.archiver = a.conversationArchiver
+			}
+			if a.ioRelay != nil {
+				hubClient.SetIORelay(a.ioRelay)
+			}
 			_ = hubClient.Connect()
 		} else if config.RemoteEmail != "" && config.RemoteHubURL != "" {
 			// Auto-register on startup: saved email + hub but no machine credentials yet
@@ -355,6 +423,9 @@ func (a *App) domReady(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.memoryStore != nil {
+		a.memoryStore.Stop()
+	}
 	if a.stopHubTicker != nil {
 		close(a.stopHubTicker)
 	}
@@ -2380,6 +2451,30 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 			}
 			if a.toolRouter != nil {
 				hubClient.imHandler.SetToolRouter(a.toolRouter)
+			}
+			if a.memoryStore != nil {
+				hubClient.imHandler.SetMemoryStore(a.memoryStore)
+			}
+			if a.configManager != nil {
+				hubClient.imHandler.SetConfigManager(a.configManager)
+			}
+			if a.templateManager != nil {
+				hubClient.imHandler.SetTemplateManager(a.templateManager)
+			}
+			if a.contextResolver != nil {
+				hubClient.imHandler.SetContextResolver(a.contextResolver)
+			}
+			if a.sessionPrecheck != nil {
+				hubClient.imHandler.SetSessionPrecheck(a.sessionPrecheck)
+			}
+			if a.startupFeedback != nil {
+				hubClient.imHandler.SetStartupFeedback(a.startupFeedback)
+			}
+			if a.conversationArchiver != nil {
+				hubClient.imHandler.memory.archiver = a.conversationArchiver
+			}
+			if a.ioRelay != nil {
+				hubClient.SetIORelay(a.ioRelay)
 			}
 			_ = hubClient.Connect()
 		}

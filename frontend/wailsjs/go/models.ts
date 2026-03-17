@@ -105,6 +105,7 @@ export namespace main {
 	    current_project: string;
 	    active_tool: string;
 	    hide_startup_popup: boolean;
+	    hide_maclaw_llm_popup: boolean;
 	    show_gemini: boolean;
 	    show_codex: boolean;
 	    show_opencode: boolean;
@@ -130,6 +131,7 @@ export namespace main {
 	    remote_hub_url: string;
 	    remote_hubcenter_url: string;
 	    remote_email: string;
+	    remote_mobile: string;
 	    remote_sn: string;
 	    remote_user_id: string;
 	    remote_machine_id: string;
@@ -162,6 +164,7 @@ export namespace main {
 	        this.current_project = source["current_project"];
 	        this.active_tool = source["active_tool"];
 	        this.hide_startup_popup = source["hide_startup_popup"];
+	        this.hide_maclaw_llm_popup = source["hide_maclaw_llm_popup"];
 	        this.show_gemini = source["show_gemini"];
 	        this.show_codex = source["show_codex"];
 	        this.show_opencode = source["show_opencode"];
@@ -187,6 +190,7 @@ export namespace main {
 	        this.remote_hub_url = source["remote_hub_url"];
 	        this.remote_hubcenter_url = source["remote_hubcenter_url"];
 	        this.remote_email = source["remote_email"];
+	        this.remote_mobile = source["remote_mobile"];
 	        this.remote_sn = source["remote_sn"];
 	        this.remote_user_id = source["remote_user_id"];
 	        this.remote_machine_id = source["remote_machine_id"];

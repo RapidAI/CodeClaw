@@ -24,6 +24,9 @@ type IMPlugin interface {
 	SendCard(ctx context.Context, target UserTarget, card OutgoingMessage) error
 	// SendImage sends an image message to the target user.
 	SendImage(ctx context.Context, target UserTarget, imageKey string, caption string) error
+	// SendFile sends a file to the target user. fileData is base64-encoded,
+	// fileName is the display name, and mimeType hints the content type.
+	SendFile(ctx context.Context, target UserTarget, fileData, fileName, mimeType string) error
 	// ResolveUser maps a platform-specific user identifier to a unified internal user ID.
 	ResolveUser(ctx context.Context, platformUID string) (string, error)
 	// Capabilities returns the platform's capability declaration.
@@ -39,6 +42,7 @@ type CapabilityDeclaration struct {
 	SupportsRichCard    bool // Supports rich text cards
 	SupportsMarkdown    bool // Supports Markdown formatting
 	SupportsImage       bool // Supports image messages
+	SupportsFile        bool // Supports file messages
 	SupportsButton      bool // Supports button interactions
 	SupportsMessageEdit bool // Supports message editing/updating
 	MaxTextLength       int  // Maximum text length per message (0 = unlimited)

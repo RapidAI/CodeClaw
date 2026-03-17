@@ -113,6 +113,18 @@ func (p *WebhookIMPlugin) SendImage(ctx context.Context, target UserTarget, imag
 	return p.postToAdapter(ctx, "message", payload)
 }
 
+// SendFile sends a file to the adapter via webhook POST.
+func (p *WebhookIMPlugin) SendFile(ctx context.Context, target UserTarget, fileData, fileName, mimeType string) error {
+	payload := webhookOutPayload{
+		Type:     "file",
+		Target:   target,
+		FileName: fileName,
+		FileData: fileData,
+		MimeType: mimeType,
+	}
+	return p.postToAdapter(ctx, "message", payload)
+}
+
 // ResolveUser is a no-op for webhook plugins — identity resolution is handled
 // by the IM Adapter core using the IdentityResolver, not by the plugin itself.
 // External adapters include platform_uid in their inbound messages.
@@ -127,6 +139,7 @@ func (p *WebhookIMPlugin) Capabilities() CapabilityDeclaration {
 		SupportsRichCard:    true,
 		SupportsMarkdown:    true,
 		SupportsImage:       true,
+		SupportsFile:        true,
 		SupportsButton:      true,
 		SupportsMessageEdit: false,
 		MaxTextLength:       4000,
@@ -148,12 +161,15 @@ func (p *WebhookIMPlugin) Stop(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 
 type webhookOutPayload struct {
-	Type     string          `json:"type"`               // "text", "card", "image"
-	Target   UserTarget      `json:"target"`
-	Text     string          `json:"text,omitempty"`
+	Type     string           `json:"type"`               // "text", "card", "image", "file"
+	Target   UserTarget       `json:"target"`
+	Text     string           `json:"text,omitempty"`
 	Message  *OutgoingMessage `json:"message,omitempty"`
-	ImageKey string          `json:"image_key,omitempty"`
-	Caption  string          `json:"caption,omitempty"`
+	ImageKey string           `json:"image_key,omitempty"`
+	Caption  string           `json:"caption,omitempty"`
+	FileName string           `json:"file_name,omitempty"`
+	FileData string           `json:"file_data,omitempty"`
+	MimeType string           `json:"mime_type,omitempty"`
 }
 
 func (p *WebhookIMPlugin) postToAdapter(ctx context.Context, event string, payload any) error {

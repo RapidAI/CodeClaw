@@ -290,6 +290,7 @@ func sanitizeWorkspaceName(value string) string {
 
 func runGit(repoPath string, args ...string) error {
 	cmd := exec.Command("git", append([]string{"-C", repoPath}, args...)...)
+	hideCommandWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s", strings.TrimSpace(string(output)))
@@ -299,6 +300,7 @@ func runGit(repoPath string, args ...string) error {
 
 func runGitOutput(repoPath string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", repoPath}, args...)...)
+	hideCommandWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%s", strings.TrimSpace(string(output)))

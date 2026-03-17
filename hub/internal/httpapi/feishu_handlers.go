@@ -122,6 +122,41 @@ func loadFeishuConfig(r *http.Request, system store.SystemSettingsRepository) Fe
 	return cfg
 }
 
+// ---------------------------------------------------------------------------
+// Feishu Auto-Enroll
+// ---------------------------------------------------------------------------
+
+// GetFeishuAutoEnrollHandler returns the current auto-enroll setting.
+func GetFeishuAutoEnrollHandler(system store.SystemSettingsRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg := feishu.LoadAutoEnrollSetting(r.Context(), system)
+		writeJSON(w, http.StatusOK, cfg)
+	}
+}
+
+// UpdateFeishuAutoEnrollHandler toggles the auto-enroll setting and
+// hot-reloads the AutoEnroller on the notifier.
+func UpdateFeishuAutoEnrollHandler(system store.SystemSettingsRepository, notifier *feishu.Notifier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req feishu.AutoEnrollConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request body")
+			return
+		}
+		if err := feishu.SaveAutoEnrollSetting(r.Context(), system, req); err != nil {
+			writeError(w, http.StatusInternalServerError, "SAVE_FAILED", err.Error())
+			return
+		}
+		// Hot-reload the auto-enroller.
+		if notifier != nil {
+			if ae := notifier.AutoEnroller(); ae != nil {
+				ae.SetConfig(req)
+			}
+		}
+		writeJSON(w, http.StatusOK, req)
+	}
+}
+
 func maskSecret(s string) string {
 	if len(s) <= 6 {
 		return "******"

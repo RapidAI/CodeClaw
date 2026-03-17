@@ -134,7 +134,6 @@ const TOOL_NAMES = ['claude', 'gemini', 'codex', 'opencode', 'codebuddy', 'curso
 const SKILL_TOOLS = ['claude', 'gemini', 'codex'] as const;
 const DEFAULT_SKILLHUB_ENTRIES = [
     { label: 'OpenClaw Official', url: 'https://skillhub.openclaw.org' },
-    { label: '腾讯云镜像', url: 'https://skillhub.tencent.openclaw.org' },
     { label: '腾讯云 SkillHUB', url: 'https://skillhub.tencent.com/' },
 ];
 const isToolTab = (tab: string): boolean => (TOOL_NAMES as readonly string[]).includes(tab);
@@ -325,6 +324,12 @@ const translations: any = {
         "cancel": "Cancel",
         "confirm": "Confirm",
         "slogan": "Master your code, seize the machine.",
+        "maclawLLMPopupTitle": "MaClaw LLM Not Configured",
+        "maclawLLMPopupDesc": "MaClaw cannot respond to remote commands without an LLM configured.",
+        "maclawLLMApplyLobster": "Apply for Lobster Plan",
+        "maclawLLMGoSettings": "Configure LLM API",
+        "maclawLLMReadyHint": "When the lobster icon (top-left) lights up, MaClaw is ready.",
+        "maclawLLMRemoteHint": "Go to Settings → Remote Control, register with your email (invitation code may be required) to enable remote programming.",
         "proxySettings": "Proxy",
         "proxyHost": "Proxy Host",
         "proxyPort": "Proxy Port",
@@ -683,6 +688,12 @@ const translations: any = {
         "cancel": "取消",
         "confirm": "确定",
         "slogan": "让远程编程像品尝甜点一样丝滑。",
+        "maclawLLMPopupTitle": "MaClaw LLM 未配置",
+        "maclawLLMPopupDesc": "未配置 LLM，MaClaw 无法响应远程操作指令。",
+        "maclawLLMApplyLobster": "申请龙虾套餐",
+        "maclawLLMGoSettings": "设置 LLM API",
+        "maclawLLMReadyHint": "左上角的龙虾亮起，表明 MaClaw 已就绪。",
+        "maclawLLMRemoteHint": "在 设置→远程控制 中使用邮箱注册（可能需要邀请码），即可开通远程编程。",
         "proxySettings": "代理设置",
         "proxyHost": "代理主机",
         "proxyPort": "代理端口",
@@ -1019,6 +1030,12 @@ const translations: any = {
         "cancel": "取消",
         "confirm": "確定",
         "slogan": "讓遠程編程像品嚐甜點一樣絲滑。",
+        "maclawLLMPopupTitle": "MaClaw LLM 未配置",
+        "maclawLLMPopupDesc": "未配置 LLM，MaClaw 無法回應遠端操作指令。",
+        "maclawLLMApplyLobster": "申請龍蝦套餐",
+        "maclawLLMGoSettings": "設定 LLM API",
+        "maclawLLMReadyHint": "左上角的龍蝦亮起，表明 MaClaw 已就緒。",
+        "maclawLLMRemoteHint": "在 設定→遠端控制 中使用郵箱註冊（可能需要邀請碼），即可開通遠端編程。",
         "proxySettings": "代理設置",
         "proxyHost": "代理主機",
         "proxyPort": "代理端口",
@@ -1322,12 +1339,15 @@ function App() {
     const [isLoading, setIsLoading] = useState(true);
     const [isManualCheck, setIsManualCheck] = useState(false);
     const [showStartupPopup, setShowStartupPopup] = useState(false);
+    const [showMaclawLLMPopup, setShowMaclawLLMPopup] = useState(false);
     const [pythonEnvironments, setPythonEnvironments] = useState<any[]>([]);
     const [envCheckInterval, setEnvCheckInterval] = useState<number>(7);
 
     // MaClaw LLM online status (lobster indicator)
     const [maclawLLMOnline, setMaclawLLMOnline] = useState<boolean>(false);
     const [maclawLLMConfigured, setMaclawLLMConfigured] = useState<boolean>(false);
+    const maclawLLMFirstPingDone = useRef(false);
+    const maclawLLMFirstPingResult = useRef<{online: boolean; configured: boolean} | null>(null);
 
     // SkillHUB management
     const [skillHubEntries, setSkillHubEntries] = useState<{label: string; url: string}[]>([]);
@@ -1967,14 +1987,34 @@ function App() {
             PingMaclawLLM().then((s: any) => {
                 setMaclawLLMOnline(!!s.online);
                 setMaclawLLMConfigured(!!s.configured);
+                // Stash the first ping result; the separate config-aware effect will decide whether to show the popup.
+                if (!maclawLLMFirstPingDone.current) {
+                    maclawLLMFirstPingDone.current = true;
+                    maclawLLMFirstPingResult.current = { online: !!s.online, configured: !!s.configured };
+                }
             }).catch(() => {
                 setMaclawLLMOnline(false);
+                if (!maclawLLMFirstPingDone.current) {
+                    maclawLLMFirstPingDone.current = true;
+                    maclawLLMFirstPingResult.current = { online: false, configured: false };
+                }
             });
         };
         pingLLM();
         const timer = setInterval(pingLLM, 60000);
         return () => clearInterval(timer);
     }, [settingsTab]);
+
+    // Show the MaClaw LLM popup once both the first ping result AND config are available.
+    useEffect(() => {
+        if (!config || !maclawLLMFirstPingResult.current) return;
+        const { online } = maclawLLMFirstPingResult.current;
+        if (!online && !config.hide_maclaw_llm_popup) {
+            setShowMaclawLLMPopup(true);
+        }
+        // Clear so this only fires once.
+        maclawLLMFirstPingResult.current = null;
+    }, [config, maclawLLMOnline]);
 
     const checkTools = async () => {
         try {
@@ -5553,6 +5593,137 @@ ${instruction}`;
                                         onChange={(e) => {
                                             if (config) {
                                                 const newConfig = new main.AppConfig({ ...config, hide_startup_popup: e.target.checked });
+                                                setConfig(newConfig);
+                                                SaveConfig(newConfig);
+                                            }
+                                        }}
+                                    />
+                                    {t("dontShowAgain")}
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MaClaw LLM Not Configured Popup */}
+            {showMaclawLLMPopup && (
+                <div className="modal-overlay" style={{ backgroundColor: 'rgba(0, 0, 0, 0.4)', backdropFilter: 'blur(4px)' }}>
+                    <div className="modal-content" style={{
+                        width: '340px',
+                        textAlign: 'center',
+                        padding: 0,
+                        borderRadius: '16px',
+                        overflow: 'hidden',
+                        border: 'none',
+                        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+                    }}>
+                        <div style={{
+                            background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                            padding: '25px 20px',
+                            color: '#1e293b',
+                            position: 'relative',
+                            borderBottom: '1px solid #fbbf24'
+                        }}>
+                            <button
+                                className="modal-close"
+                                onClick={() => setShowMaclawLLMPopup(false)}
+                                style={{ color: '#9ca3af', opacity: 0.8, top: '10px', right: '15px', zIndex: 10 }}
+                            >&times;</button>
+                            <div style={{ fontSize: '2.5rem', marginBottom: '10px', lineHeight: 1 }}>🦞</div>
+                            <h3 style={{ margin: 0, color: '#92400e', fontSize: '1.1rem', fontWeight: 'bold' }}>{t("maclawLLMPopupTitle")}</h3>
+                            <p style={{ margin: '8px 0 0 0', fontSize: '0.85rem', color: '#a16207', fontWeight: '500' }}>
+                                {t("maclawLLMPopupDesc")}
+                            </p>
+                        </div>
+
+                        <div style={{ padding: '20px 25px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                                <button
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px',
+                                        borderRadius: '10px',
+                                        fontSize: '0.95rem',
+                                        fontWeight: '600',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '8px',
+                                        background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
+                                        color: '#92400e',
+                                        border: '1px solid #fbbf24',
+                                        boxShadow: '0 2px 4px rgba(251, 191, 36, 0.2)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                    onClick={() => {
+                                        BrowserOpenURL("https://bigmodel.cn/claw-plan-team");
+                                    }}
+                                >
+                                    <span>🦞</span> {t("maclawLLMApplyLobster")}
+                                </button>
+                                <button
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px',
+                                        borderRadius: '10px',
+                                        fontSize: '0.95rem',
+                                        fontWeight: '500',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '8px',
+                                        backgroundColor: '#ffffff',
+                                        color: '#6366f1',
+                                        border: '1px solid #c7d2fe',
+                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                    onClick={() => {
+                                        setShowMaclawLLMPopup(false);
+                                        setNavTab('settings');
+                                        setSettingsTab('llm');
+                                    }}
+                                >
+                                    <span>⚙️</span> {t("maclawLLMGoSettings")}
+                                </button>
+                            </div>
+
+                            <p style={{ fontSize: '0.78rem', color: '#94a3b8', margin: '0 0 14px 0', lineHeight: 1.5 }}>
+                                💡 {t("maclawLLMReadyHint")}
+                            </p>
+
+                            <p style={{ fontSize: '0.78rem', color: '#94a3b8', margin: '0 0 14px 0', lineHeight: 1.5 }}>
+                                📡 {t("maclawLLMRemoteHint")}
+                            </p>
+
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'flex-start',
+                                gap: '8px'
+                            }}>
+                                <label style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    cursor: 'pointer',
+                                    fontSize: '0.8rem',
+                                    color: '#94a3b8'
+                                }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={config?.hide_maclaw_llm_popup || false}
+                                        style={{
+                                            width: '14px',
+                                            height: '14px',
+                                            cursor: 'pointer'
+                                        }}
+                                        onChange={(e) => {
+                                            if (config) {
+                                                const newConfig = new main.AppConfig({ ...config, hide_maclaw_llm_popup: e.target.checked });
                                                 setConfig(newConfig);
                                                 SaveConfig(newConfig);
                                             }

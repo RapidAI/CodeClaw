@@ -27,12 +27,22 @@ type DeviceFinder interface {
 
 // PendingIMRequest represents a message waiting for the Agent's reply.
 type PendingIMRequest struct {
-	RequestID  string
-	UserID     string
-	Text       string
-	ResponseCh chan *AgentResponse
-	CreatedAt  time.Time
-	Timeout    time.Duration
+	RequestID   string
+	UserID      string
+	PlatformUID string // original platform-specific user ID for progress delivery
+	Text        string
+	ResponseCh  chan *AgentResponse
+	CreatedAt   time.Time
+	Timeout     time.Duration
+
+	// ProgressCh receives progress text updates from the Agent. Each update
+	// resets the response timeout so long-running tasks don't expire.
+	ProgressCh chan string
+
+	// LastActivity tracks the most recent progress or creation time.
+	// Used by cleanupExpired to avoid premature reaping of requests
+	// that are being kept alive by progress updates.
+	lastActivity time.Time
 }
 
 // defaultAgentTimeout is the maximum time to wait for an Agent response.
@@ -46,11 +56,15 @@ const cleanupInterval = 30 * time.Second
 // MessageRouter — routes IM messages to MaClaw Agent via WebSocket
 // ---------------------------------------------------------------------------
 
+// ProgressDeliveryFunc is called to deliver progress text to a user via IM.
+type ProgressDeliveryFunc func(ctx context.Context, userID, platformName, platformUID, text string)
+
 // MessageRouter replaces the old NL_Router + BridgeExecutor pipeline.
 // It transparently relays IM messages to the user's MaClaw client Agent
 // and waits for the Agent's response.
 type MessageRouter struct {
-	devices DeviceFinder
+	devices          DeviceFinder
+	progressDelivery ProgressDeliveryFunc
 
 	mu          sync.Mutex
 	pendingReqs map[string]*PendingIMRequest // requestID → pending
@@ -70,6 +84,12 @@ func NewMessageRouter(devices DeviceFinder) *MessageRouter {
 	return r
 }
 
+// SetProgressDelivery configures the function used to deliver progress
+// updates to users via IM. Called by the Adapter after construction.
+func (r *MessageRouter) SetProgressDelivery(fn ProgressDeliveryFunc) {
+	r.progressDelivery = fn
+}
+
 // Stop terminates the background cleanup goroutine.
 func (r *MessageRouter) Stop() {
 	r.stopOnce.Do(func() { close(r.stopCh) })
@@ -80,7 +100,7 @@ func (r *MessageRouter) Stop() {
 //
 // Preconditions: identity mapping and rate limiting have already been applied
 // by the Adapter before calling this method.
-func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, text string) (*GenericResponse, error) {
+func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, platformUID, text string) (*GenericResponse, error) {
 	// 1. Find the user's online device.
 	machineID, llmConfigured, found := r.devices.FindOnlineMachineForUser(ctx, userID)
 	if !found {
@@ -104,13 +124,17 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 
 	// 3. Create pending request.
 	requestID := fmt.Sprintf("im_%s_%d", userID, time.Now().UnixNano())
+	now := time.Now()
 	pending := &PendingIMRequest{
-		RequestID:  requestID,
-		UserID:     userID,
-		Text:       text,
-		ResponseCh: make(chan *AgentResponse, 1),
-		CreatedAt:  time.Now(),
-		Timeout:    defaultAgentTimeout,
+		RequestID:    requestID,
+		UserID:       userID,
+		PlatformUID:  platformUID,
+		Text:         text,
+		ResponseCh:   make(chan *AgentResponse, 1),
+		ProgressCh:   make(chan string, 8),
+		CreatedAt:    now,
+		Timeout:      defaultAgentTimeout,
+		lastActivity: now,
 	}
 
 	r.mu.Lock()
@@ -145,33 +169,63 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 		}, nil
 	}
 
-	// 5. Wait for Agent response with timeout.
-	// 使用 time.NewTimer 替代 time.After，确保提前返回时 timer 被正确回收
+	// 5. Wait for Agent response with resettable timeout.
+	// Progress updates from the Agent reset the timer, preventing 504 on
+	// long-running tasks like file search or large builds.
 	timer := time.NewTimer(pending.Timeout)
 	defer timer.Stop()
 
-	select {
-	case resp := <-pending.ResponseCh:
-		if resp == nil {
+	// progressTexts collects progress messages; lastDelivered throttles IM sends.
+	var progressTexts []string
+	var lastDelivered time.Time
+	const progressMinInterval = 10 * time.Second
+
+	for {
+		select {
+		case resp := <-pending.ResponseCh:
+			if resp == nil {
+				return &GenericResponse{
+					StatusCode: 500,
+					StatusIcon: "❌",
+					Title:      "Agent 返回空响应",
+					Body:       "Agent 未返回有效回复，请稍后重试。",
+				}, nil
+			}
+			return resp.ToGenericResponse(), nil
+
+		case progressText := <-pending.ProgressCh:
+			// Reset the timeout — the Agent is still alive and working.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(pending.Timeout)
+			progressTexts = append(progressTexts, progressText)
+
+			// Throttle IM delivery: at most once per progressMinInterval
+			// to avoid flooding the user with status messages.
+			if time.Since(lastDelivered) >= progressMinInterval {
+				lastDelivered = time.Now()
+				go r.deliverProgress(ctx, userID, platformName, platformUID, progressText)
+			}
+
+		case <-timer.C:
+			body := "Agent 在 180 秒内未回复，请稍后重试。\n\n可能原因：LLM 服务响应缓慢或不可用。"
+			if len(progressTexts) > 0 {
+				body = fmt.Sprintf("Agent 任务执行超时。最后状态：%s\n\n任务可能仍在后台运行，请稍后查询结果。", progressTexts[len(progressTexts)-1])
+			}
 			return &GenericResponse{
-				StatusCode: 500,
-				StatusIcon: "❌",
-				Title:      "Agent 返回空响应",
-				Body:       "Agent 未返回有效回复，请稍后重试。",
+				StatusCode: 504,
+				StatusIcon: "⏰",
+				Title:      "Agent 响应超时",
+				Body:       body,
 			}, nil
+
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		return resp.ToGenericResponse(), nil
-
-	case <-timer.C:
-		return &GenericResponse{
-			StatusCode: 504,
-			StatusIcon: "⏰",
-			Title:      "Agent 响应超时",
-			Body:       "Agent 在 180 秒内未回复，请稍后重试。\n\n可能原因：LLM 服务响应缓慢或不可用。",
-		}, nil
-
-	case <-ctx.Done():
-		return nil, ctx.Err()
 	}
 }
 
@@ -196,6 +250,38 @@ func (r *MessageRouter) HandleAgentResponse(requestID string, resp *AgentRespons
 	}
 }
 
+// HandleAgentProgress is called when the Hub receives an "im.agent_progress"
+// message from a MaClaw client. It delivers the progress text to the pending
+// request's ProgressCh, which resets the response timeout in RouteToAgent.
+func (r *MessageRouter) HandleAgentProgress(requestID string, text string) {
+	r.mu.Lock()
+	pending, ok := r.pendingReqs[requestID]
+	if ok {
+		pending.lastActivity = time.Now()
+	}
+	r.mu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	// Non-blocking send — drop if the channel is full (shouldn't happen
+	// with buffer size 8, but be safe).
+	select {
+	case pending.ProgressCh <- text:
+	default:
+		log.Printf("[MessageRouter] progress channel full for request_id=%s, dropping", requestID)
+	}
+}
+
+// deliverProgress sends a progress text message to the user via IM.
+// This is a best-effort delivery — errors are logged but not propagated.
+func (r *MessageRouter) deliverProgress(ctx context.Context, userID, platformName, platformUID, text string) {
+	if r.progressDelivery != nil {
+		r.progressDelivery(ctx, userID, platformName, platformUID, text)
+	}
+}
+
 // cleanupLoop periodically removes expired pending requests.
 func (r *MessageRouter) cleanupLoop() {
 	ticker := time.NewTicker(cleanupInterval)
@@ -211,14 +297,15 @@ func (r *MessageRouter) cleanupLoop() {
 	}
 }
 
-// cleanupExpired removes pending requests that have exceeded their timeout.
+// cleanupExpired removes pending requests that have exceeded their timeout
+// without any recent activity (creation or progress update).
 func (r *MessageRouter) cleanupExpired() {
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	for id, req := range r.pendingReqs {
-		if now.Sub(req.CreatedAt) > req.Timeout+10*time.Second {
+		if now.Sub(req.lastActivity) > req.Timeout+10*time.Second {
 			delete(r.pendingReqs, id)
 		}
 	}

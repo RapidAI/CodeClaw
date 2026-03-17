@@ -10,6 +10,7 @@ import (
 	_ "image/jpeg" // register JPEG decoder for image.Decode
 	_ "image/png"  // register PNG decoder for image.Decode
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,27 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/store"
 	"github.com/go-lark/lark/v2"
 )
+
+// larkHTTPClient wraps http.Client to satisfy lark.HTTPClient interface
+// with a longer timeout suitable for file uploads.
+type larkHTTPClient struct {
+	client *http.Client
+}
+
+func (c *larkHTTPClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	return c.client.Do(req.WithContext(ctx))
+}
+
+// newLarkBot creates a lark.Bot with a custom HTTP client that has a 2-minute
+// timeout, preventing "context deadline exceeded" errors during large file uploads.
+func newLarkBot(appID, appSecret string) *lark.Bot {
+	bot := lark.NewChatBot(appID, appSecret)
+	bot.SetAutoRenew(true)
+	bot.SetClient(&larkHTTPClient{
+		client: &http.Client{Timeout: 2 * time.Minute},
+	})
+	return bot
+}
 
 const openIDMapKey = "feishu_openid_map"
 
@@ -97,6 +119,12 @@ type Notifier struct {
 	dedupMu    sync.Mutex
 	lastPushed map[string]string // session_id → hash of last pushed content
 
+	// closedSessions tracks session IDs that have already received a
+	// session.closed notification. Any subsequent summary or important_event
+	// for a closed session is silently dropped to prevent duplicate cards.
+	closedMu       sync.RWMutex
+	closedSessions map[string]time.Time // session_id → closed time
+
 	// Short aliases for session IDs per user (open_id → {alias→sessionID, sessionID→alias}).
 	aliasMu   sync.RWMutex
 	aliasToID map[string]map[string]string // open_id → (alias → session_id)
@@ -109,6 +137,9 @@ type Notifier struct {
 
 	// broadcaster sends verification codes to all reachable channels (cross-IM).
 	broadcaster NotifyBroadcaster
+
+	// autoEnroller handles automatic user enrollment for Feishu users.
+	autoEnroller *AutoEnroller
 }
 
 // NotifyBroadcaster sends verification codes to all reachable channels.
@@ -133,14 +164,13 @@ func New(appID, appSecret string, users store.UserRepository, system store.Syste
 		previewTimers:   make(map[string]*time.Timer),
 		pending:         make(map[string]*pendingBind),
 		lastPushed:      make(map[string]string),
+		closedSessions:  make(map[string]time.Time),
 		aliasToID:       make(map[string]map[string]string),
 		idToAlias:       make(map[string]map[string]string),
 		aliasSeq:        make(map[string]int),
 	}
 	if appID != "" && appSecret != "" {
-		bot := lark.NewChatBot(appID, appSecret)
-		bot.SetAutoRenew(true)
-		n.bot = bot
+		n.bot = newLarkBot(appID, appSecret)
 		log.Printf("[feishu] notifier initialized (app_id=%s)", appID)
 	}
 	n.loadOpenIDMap()
@@ -159,8 +189,7 @@ func (n *Notifier) Reconfigure(appID, appSecret string) {
 		log.Printf("[feishu] notifier disabled (empty credentials)")
 		return
 	}
-	bot := lark.NewChatBot(appID, appSecret)
-	bot.SetAutoRenew(true)
+	bot := newLarkBot(appID, appSecret)
 	n.bot = bot
 	log.Printf("[feishu] notifier reconfigured (app_id=%s)", appID)
 }
@@ -182,6 +211,16 @@ func (n *Notifier) SetPlugin(p *FeishuPlugin) {
 // Called from bootstrap after the IM Adapter is fully assembled.
 func (n *Notifier) SetBroadcaster(b NotifyBroadcaster) {
 	n.broadcaster = b
+}
+
+// SetAutoEnroller wires the auto-enrollment handler.
+func (n *Notifier) SetAutoEnroller(ae *AutoEnroller) {
+	n.autoEnroller = ae
+}
+
+// AutoEnroller returns the auto-enroller, or nil if not configured.
+func (n *Notifier) AutoEnroller() *AutoEnroller {
+	return n.autoEnroller
 }
 
 // Bot returns the underlying lark.Bot for use by the webhook handler.
@@ -401,9 +440,9 @@ func (n *Notifier) buildAliasesForUser(openID string) {
 
 // HandleEvent is a session.Listener that forwards key events to Feishu.
 // Only high-value events are pushed to avoid notification fatigue:
-//   - session.summary: only when waiting for user or error/failed
-//   - session.important_event: only error/warning severity
-//   - session.closed: always (user needs to know the result)
+//   - session.summary: only when waiting for user action
+//   - session.important_event: only error/warning severity (excludes close-time events)
+//   - session.closed: always, with a single comprehensive card
 //   - session.created: not pushed (too noisy)
 //
 // When a user has an active session context (/use), summary and important_event
@@ -415,10 +454,16 @@ func (n *Notifier) HandleEvent(event session.Event) {
 	}
 	switch event.Type {
 	case "session.summary":
+		if n.isSessionClosed(event.SessionID) {
+			return
+		}
 		if !n.isSessionWatched(event.SessionID) {
 			n.onSessionSummary(event)
 		}
 	case "session.important_event":
+		if n.isSessionClosed(event.SessionID) {
+			return
+		}
 		if !n.isSessionWatched(event.SessionID) {
 			n.onImportantEvent(event)
 		}
@@ -442,6 +487,37 @@ func (n *Notifier) isSessionWatched(sessionID string) bool {
 		}
 	}
 	return false
+}
+
+// isSessionClosed returns true if a session.closed notification has already
+// been sent for this session. Subsequent summary/important_event messages
+// arriving after the close are silently dropped.
+func (n *Notifier) isSessionClosed(sessionID string) bool {
+	n.closedMu.RLock()
+	defer n.closedMu.RUnlock()
+	_, ok := n.closedSessions[sessionID]
+	return ok
+}
+
+// markSessionClosed records that a session.closed notification has been sent.
+// Returns false if the session was already marked (i.e. duplicate close).
+func (n *Notifier) markSessionClosed(sessionID string) bool {
+	n.closedMu.Lock()
+	defer n.closedMu.Unlock()
+	if _, ok := n.closedSessions[sessionID]; ok {
+		return false
+	}
+	n.closedSessions[sessionID] = time.Now()
+	// Prune entries older than 1 hour to avoid unbounded growth.
+	if len(n.closedSessions) > 200 {
+		cutoff := time.Now().Add(-1 * time.Hour)
+		for k, v := range n.closedSessions {
+			if v.Before(cutoff) {
+				delete(n.closedSessions, k)
+			}
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -473,9 +549,10 @@ func (n *Notifier) onSessionSummary(event session.Event) {
 	if s.Status == "" {
 		return
 	}
-	// Only push when the user needs to act or something went wrong.
-	isError := strings.EqualFold(s.Status, "error") || strings.EqualFold(s.Status, "failed")
-	if !s.WaitingForUser && !isError {
+	// Only push when the user needs to act (WaitingForUser=true).
+	// Close-time error summaries (WaitingForUser=false) are suppressed because
+	// onSessionClosed sends a single comprehensive card instead.
+	if !s.WaitingForUser {
 		return
 	}
 
@@ -511,6 +588,14 @@ func (n *Notifier) onImportantEvent(event session.Event) {
 		return
 	}
 	ie := event.Important
+
+	// Close-time important events (session.closed / session.failed) are
+	// emitted by runExitLoop just before the session.closed message.
+	// Suppress them — onSessionClosed sends a single comprehensive card.
+	if ie.Type == "session.closed" || ie.Type == "session.failed" {
+		return
+	}
+
 	// Only push error and warning severity events.
 	sev := strings.ToLower(ie.Severity)
 	if sev != "error" && sev != "critical" && sev != "warning" {
@@ -805,6 +890,11 @@ func sendImagePost(n *Notifier, openID, imageKey, caption string) {
 }
 
 func (n *Notifier) onSessionClosed(event session.Event) {
+	// Dedup: if we already processed a close for this session, skip entirely.
+	if !n.markSessionClosed(event.SessionID) {
+		return
+	}
+
 	// Collect watchers before clearing so we can notify them explicitly.
 	n.activeMu.Lock()
 	var watcherOIDs []string
@@ -827,8 +917,12 @@ func (n *Notifier) onSessionClosed(event session.Event) {
 	n.previewMu.Unlock()
 
 	status := ""
+	exitCodeStr := ""
 	if event.Payload != nil {
 		status, _ = event.Payload["status"].(string)
+		if ec, ok := event.Payload["exit_code"]; ok && ec != nil {
+			exitCodeStr = fmt.Sprintf("%v", ec)
+		}
 	}
 
 	// Notify watchers that their active session context was cleared.
@@ -836,10 +930,22 @@ func (n *Notifier) onSessionClosed(event session.Event) {
 		replyText(n, oid, fmt.Sprintf("⏹ 会话 %s 已结束，已自动退出会话上下文。", n.getAlias(oid, event.SessionID)))
 	}
 
-	cardJSON := buildCardJSON("✅ 会话已结束", "grey", []cardField{
+	// Build a comprehensive close card. Use red for errors, grey for normal exit.
+	isErr := strings.EqualFold(status, "error") || strings.EqualFold(status, "failed")
+	title := "✅ 会话已结束"
+	color := "grey"
+	if isErr {
+		title = "❌ 会话异常退出"
+		color = "red"
+	}
+	fields := []cardField{
 		{"状态", statusEmoji(status) + " " + status},
 		{"Session", shortID(event.SessionID)},
-	})
+	}
+	if exitCodeStr != "" {
+		fields = append(fields, cardField{"退出码", exitCodeStr})
+	}
+	cardJSON := buildCardJSON(title, color, fields)
 	n.sendToUser(event.UserID, cardJSON)
 
 	// Clean up dedup entries for this session.

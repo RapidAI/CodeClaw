@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	esContinuous     = 0x80000000
-	esSystemRequired = 0x00000001
+	esContinuous      = 0x80000000
+	esSystemRequired  = 0x00000001
+	esDisplayRequired = 0x00000002
 )
 
 // compareVersions compares two semantic version strings
@@ -102,7 +103,10 @@ func (a *App) setPowerOptimizationEnabled(enabled bool) {
 func (a *App) preventSystemSleep() {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	setThreadExecutionState := kernel32.NewProc("SetThreadExecutionState")
-	setThreadExecutionState.Call(uintptr(esContinuous | esSystemRequired))
+	// ES_DISPLAY_REQUIRED keeps the display on, preventing DWM from suspending
+	// desktop composition. Without it, screenshots return black after the
+	// display auto-off timeout, even though the system stays awake.
+	setThreadExecutionState.Call(uintptr(esContinuous | esSystemRequired | esDisplayRequired))
 }
 
 func (a *App) allowSystemSleep() {

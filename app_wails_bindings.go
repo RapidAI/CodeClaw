@@ -126,3 +126,84 @@ func (a *App) UpdateHubSkill(skillName string) error {
 	}
 	return a.skillExecutor.UpdateFromHub(skillName)
 }
+
+// ---------------------------------------------------------------------------
+// Memory management Wails bindings
+// ---------------------------------------------------------------------------
+
+// ListMemories returns memory entries filtered by category and keyword (Wails binding).
+func (a *App) ListMemories(category, keyword string) []MemoryEntry {
+	a.ensureRemoteInfra()
+	if a.memoryStore == nil {
+		return nil
+	}
+	return a.memoryStore.List(MemoryCategory(category), keyword)
+}
+
+// DeleteMemory removes the memory entry with the given ID (Wails binding).
+func (a *App) DeleteMemory(id string) error {
+	a.ensureRemoteInfra()
+	if a.memoryStore == nil {
+		return fmt.Errorf("memory store not initialized")
+	}
+	return a.memoryStore.Delete(id)
+}
+
+// ---------------------------------------------------------------------------
+// Session template Wails bindings
+// ---------------------------------------------------------------------------
+
+// ListTemplates returns all session templates (Wails binding).
+func (a *App) ListTemplates() []SessionTemplate {
+	a.ensureRemoteInfra()
+	if a.templateManager == nil {
+		return nil
+	}
+	return a.templateManager.List()
+}
+
+// CreateTemplate creates a new session template (Wails binding).
+func (a *App) CreateTemplate(name, tool, projectPath, modelConfig string, yoloMode bool) error {
+	a.ensureRemoteInfra()
+	if a.templateManager == nil {
+		return fmt.Errorf("template manager not initialized")
+	}
+	return a.templateManager.Create(SessionTemplate{
+		Name:        name,
+		Tool:        tool,
+		ProjectPath: projectPath,
+		ModelConfig: modelConfig,
+		YoloMode:    yoloMode,
+	})
+}
+
+// DeleteTemplate removes the session template with the given name (Wails binding).
+func (a *App) DeleteTemplate(name string) error {
+	a.ensureRemoteInfra()
+	if a.templateManager == nil {
+		return fmt.Errorf("template manager not initialized")
+	}
+	return a.templateManager.Delete(name)
+}
+
+// ---------------------------------------------------------------------------
+// Configuration management Wails bindings
+// ---------------------------------------------------------------------------
+
+// GetConfigSchema returns the configuration schema as JSON (Wails binding).
+func (a *App) GetConfigSchema() (string, error) {
+	a.ensureRemoteInfra()
+	if a.configManager == nil {
+		return "", fmt.Errorf("config manager not initialized")
+	}
+	return a.configManager.SchemaJSON()
+}
+
+// UpdateConfigBinding modifies a single configuration key and returns the old value (Wails binding).
+func (a *App) UpdateConfigBinding(section, key, value string) (string, error) {
+	a.ensureRemoteInfra()
+	if a.configManager == nil {
+		return "", fmt.Errorf("config manager not initialized")
+	}
+	return a.configManager.UpdateConfig(section, key, value)
+}

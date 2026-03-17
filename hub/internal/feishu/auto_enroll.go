@@ -1,0 +1,377 @@
+package feishu
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/RapidAI/CodeClaw/hub/internal/store"
+	"github.com/go-lark/lark/v2"
+)
+
+// ---------------------------------------------------------------------------
+// AutoEnroller — adds Hub users to the Feishu organization on enrollment
+// ---------------------------------------------------------------------------
+//
+// When a user registers on the desktop client (StartEnrollment), the
+// AutoEnroller calls the Feishu Contact v3 API to add them to the Feishu
+// organization. Once they are a member of the org, they can search for and
+// use the Feishu bot.
+//
+// Flow:
+//   Desktop enrollment (email) → AutoEnroller.AddToFeishuOrg(email, name)
+//     1. Check if user already exists in Feishu org (GET contact/v3/users)
+//     2. If not, create user via POST /open-apis/contact/v3/users
+//     3. Optionally bind the new open_id for IM notifications
+//
+// Required Feishu app permissions:
+//   - contact:user (read & write users)
+//   - contact:user.email:readonly (read email)
+
+const (
+	settingsKeyAutoEnroll    = "feishu_auto_enroll"
+	feishuAPIBase            = "https://open.feishu.cn"
+	larkAPIBase              = "https://open.larksuite.com"
+	addMemberCooldown        = 10 * time.Minute
+)
+
+// AutoEnrollConfig holds the auto-enroll settings persisted in the DB.
+type AutoEnrollConfig struct {
+	Enabled      bool   `json:"enabled"`
+	DepartmentID string `json:"department_id"`       // target department (default "0" = root)
+	UseLark      bool   `json:"use_lark"`            // true = Lark (overseas), false = Feishu (China)
+	EmployeeType int    `json:"employee_type"`       // 1=Regular, 2=Intern, etc. (default 1)
+}
+
+// AutoEnroller manages automatic addition of Hub users to the Feishu org.
+type AutoEnroller struct {
+	mu  sync.Mutex
+	cfg AutoEnrollConfig
+
+	// bot returns the current Feishu lark.Bot (may be nil if not configured).
+	bot func() *lark.Bot
+
+	// binder persists the email↔open_id mapping in the Notifier.
+	binder func(email, openID string)
+
+	// cooldown: email → last attempt time.
+	attempts map[string]time.Time
+}
+
+// NewAutoEnroller creates an AutoEnroller. Starts disabled.
+func NewAutoEnroller(botFunc func() *lark.Bot, binder func(email, openID string)) *AutoEnroller {
+	return &AutoEnroller{
+		bot:      botFunc,
+		binder:   binder,
+		attempts: make(map[string]time.Time),
+	}
+}
+
+// SetConfig updates the auto-enroll configuration.
+func (ae *AutoEnroller) SetConfig(cfg AutoEnrollConfig) {
+	ae.mu.Lock()
+	ae.cfg = cfg
+	ae.mu.Unlock()
+}
+
+// Config returns the current configuration.
+func (ae *AutoEnroller) Config() AutoEnrollConfig {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	return ae.cfg
+}
+
+// IsEnabled returns whether auto-enrollment is active.
+func (ae *AutoEnroller) IsEnabled() bool {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	return ae.cfg.Enabled
+}
+
+// SetEnabled is a convenience method to toggle the enabled flag.
+func (ae *AutoEnroller) SetEnabled(v bool) {
+	ae.mu.Lock()
+	ae.cfg.Enabled = v
+	ae.mu.Unlock()
+}
+
+// apiBase returns the correct API base URL based on the UseLark setting.
+func (ae *AutoEnroller) apiBase() string {
+	if ae.Config().UseLark {
+		return larkAPIBase
+	}
+	return feishuAPIBase
+}
+
+// AddToFeishuOrg is called after a user successfully enrolls on the desktop
+// client. It adds the user to the Feishu organization so they can discover
+// and interact with the bot.
+//
+// The method is safe to call even if the user already exists in Feishu — it
+// will detect duplicates and skip silently.
+func (ae *AutoEnroller) AddToFeishuOrg(ctx context.Context, email, displayName, mobile string) error {
+	if !ae.IsEnabled() {
+		return nil
+	}
+
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil
+	}
+
+	// Normalize mobile: for Feishu (China), ensure +86 prefix.
+	mobile = strings.TrimSpace(mobile)
+	if mobile != "" && !ae.Config().UseLark {
+		mobile = normalizeChinaMobile(mobile)
+	}
+
+	// Cooldown — avoid repeated API calls for the same email.
+	ae.mu.Lock()
+	if last, ok := ae.attempts[email]; ok && time.Since(last) < addMemberCooldown {
+		ae.mu.Unlock()
+		log.Printf("[feishu/auto-enroll] skipping %s (cooldown)", email)
+		return nil
+	}
+	ae.attempts[email] = time.Now()
+	// Evict stale entries.
+	for k, v := range ae.attempts {
+		if time.Since(v) > addMemberCooldown*2 {
+			delete(ae.attempts, k)
+		}
+	}
+	ae.mu.Unlock()
+
+	bot := ae.bot()
+	if bot == nil {
+		return fmt.Errorf("feishu bot not initialized")
+	}
+	token := bot.TenantAccessToken()
+	if token == "" {
+		return fmt.Errorf("feishu tenant access token is empty")
+	}
+
+	// Step 1: Check if user already exists in Feishu org by email.
+	existingOpenID, err := ae.lookupUserByEmail(ctx, token, email)
+	if err != nil {
+		log.Printf("[feishu/auto-enroll] lookup by email failed for %s: %v", email, err)
+		// Non-fatal — proceed to create.
+	}
+	if existingOpenID != "" {
+		// User already in org — just bind the open_id and return.
+		log.Printf("[feishu/auto-enroll] user %s already in Feishu org (open_id=%s), binding only", email, existingOpenID)
+		ae.binder(email, existingOpenID)
+		return nil
+	}
+
+	// Step 2: Create user in Feishu org.
+	deptID := ae.Config().DepartmentID
+	if deptID == "" {
+		deptID = "0" // root department
+	}
+
+	if displayName == "" {
+		// Use the local part of the email as a fallback name.
+		if idx := strings.Index(email, "@"); idx > 0 {
+			displayName = email[:idx]
+		} else {
+			displayName = email
+		}
+	}
+
+	openID, err := ae.createFeishuUser(ctx, token, email, displayName, deptID, mobile)
+	if err != nil {
+		// If the error indicates the user already exists, try to extract open_id.
+		if strings.Contains(err.Error(), "already exist") || strings.Contains(err.Error(), "40003") {
+			log.Printf("[feishu/auto-enroll] user %s may already exist, attempting lookup", email)
+			if oid, lookupErr := ae.lookupUserByEmail(ctx, token, email); lookupErr == nil && oid != "" {
+				ae.binder(email, oid)
+				return nil
+			}
+		}
+		return fmt.Errorf("create feishu user: %w", err)
+	}
+
+	// Step 3: Bind the new open_id.
+	if openID != "" {
+		ae.binder(email, openID)
+	}
+
+	log.Printf("[feishu/auto-enroll] ✅ added %s to Feishu org (open_id=%s, dept=%s)", email, openID, deptID)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Feishu Contact v3 API helpers
+// ---------------------------------------------------------------------------
+
+// feishuAPIResponse is the common response envelope for Feishu APIs.
+type feishuAPIResponse struct {
+	Code int             `json:"code"`
+	Msg  string          `json:"msg"`
+	Data json.RawMessage `json:"data"`
+}
+
+// lookupUserByEmail calls POST /open-apis/contact/v3/users/batch_get_id
+// to find a user's open_id by email.
+func (ae *AutoEnroller) lookupUserByEmail(ctx context.Context, token, email string) (string, error) {
+	apiURL := ae.apiBase() + "/open-apis/contact/v3/users/batch_get_id?user_id_type=open_id"
+
+	body, _ := json.Marshal(map[string]any{
+		"emails": []string{email},
+	})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result feishuAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode: %w", err)
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("API error: code=%d msg=%s", result.Code, result.Msg)
+	}
+
+	// Parse the user_list from response data.
+	var data struct {
+		UserList []struct {
+			UserID string `json:"user_id"`
+		} `json:"user_list"`
+	}
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		return "", fmt.Errorf("parse user_list: %w", err)
+	}
+	if len(data.UserList) > 0 && data.UserList[0].UserID != "" {
+		return data.UserList[0].UserID, nil
+	}
+	return "", nil
+}
+
+// createFeishuUser calls POST /open-apis/contact/v3/users to add a user
+// to the Feishu organization.
+//
+// Required fields:
+//   - name (always required)
+//   - department_ids (always required)
+//   - employee_type (always required, default 1 = Regular)
+//   - mobile (required for Feishu/China, optional for Lark/overseas)
+//   - email (optional, but at least one of email/mobile must be present)
+//
+// Since Hub only has the user's email (no phone number), this works
+// directly on Lark (overseas). For Feishu (China), the mobile parameter
+// must be provided — the API will return error 41010 ("mobile cannot be
+// empty") if it is missing.
+//
+// Required scope: contact:user (write).
+func (ae *AutoEnroller) createFeishuUser(ctx context.Context, token, email, name, departmentID, mobile string) (openID string, err error) {
+	apiURL := ae.apiBase() + "/open-apis/contact/v3/users?user_id_type=open_id&department_id_type=department_id"
+
+	empType := ae.Config().EmployeeType
+	if empType < 1 || empType > 5 {
+		empType = 1 // default: Regular
+	}
+
+	payload := map[string]any{
+		"name":            name,
+		"email":           email,
+		"department_ids":  []string{departmentID},
+		"employee_type":   empType,
+	}
+	if mobile != "" {
+		payload["mobile"] = mobile
+	}
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result feishuAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode: %w", err)
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("API error: code=%d msg=%s", result.Code, result.Msg)
+	}
+
+	// Extract the created user's open_id.
+	var data struct {
+		User struct {
+			OpenID string `json:"open_id"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		return "", fmt.Errorf("parse user: %w", err)
+	}
+	return data.User.OpenID, nil
+}
+
+var httpClient = &http.Client{Timeout: 15 * time.Second}
+
+// normalizeChinaMobile ensures a Chinese mobile number has the +86 prefix.
+// Accepts formats like "15646550398", "86 15646550398", "+86 15646550398",
+// "+8615646550398" and normalizes to "+8615646550398".
+func normalizeChinaMobile(mobile string) string {
+	// Strip spaces and dashes.
+	mobile = strings.ReplaceAll(mobile, " ", "")
+	mobile = strings.ReplaceAll(mobile, "-", "")
+
+	if strings.HasPrefix(mobile, "+86") {
+		return mobile // already correct
+	}
+	if strings.HasPrefix(mobile, "86") && len(mobile) == 13 {
+		return "+" + mobile
+	}
+	if len(mobile) == 11 && (mobile[0] == '1') {
+		return "+86" + mobile
+	}
+	// Unknown format — return as-is and let the API validate.
+	return mobile
+}
+
+// ---------------------------------------------------------------------------
+// Settings persistence
+// ---------------------------------------------------------------------------
+
+// LoadAutoEnrollSetting reads the auto-enroll config from system settings.
+func LoadAutoEnrollSetting(ctx context.Context, settings store.SystemSettingsRepository) AutoEnrollConfig {
+	raw, err := settings.Get(ctx, settingsKeyAutoEnroll)
+	if err != nil || raw == "" {
+		return AutoEnrollConfig{}
+	}
+	var cfg AutoEnrollConfig
+	if json.Unmarshal([]byte(raw), &cfg) != nil {
+		return AutoEnrollConfig{}
+	}
+	return cfg
+}
+
+// SaveAutoEnrollSetting persists the auto-enroll config to system settings.
+func SaveAutoEnrollSetting(ctx context.Context, settings store.SystemSettingsRepository, cfg AutoEnrollConfig) error {
+	data, _ := json.Marshal(cfg)
+	return settings.Set(ctx, settingsKeyAutoEnroll, string(data))
+}

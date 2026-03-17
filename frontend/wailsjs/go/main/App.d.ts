@@ -18,7 +18,7 @@ export function DeleteSkill(arg1:string,arg2:string):Promise<void>;
 
 export function DownloadUpdate(arg1:string,arg2:string):Promise<string>;
 
-export function ActivateRemote(arg1:string,arg2:string):Promise<any>;
+export function ActivateRemote(arg1:string,arg2:string,arg3:string):Promise<any>;
 
 export function ProbeRemoteHub(arg1:string,arg2:string):Promise<any>;
 

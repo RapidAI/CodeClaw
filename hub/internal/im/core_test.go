@@ -31,6 +31,9 @@ func (m *mockPlugin) ResolveUser(_ context.Context, _ string) (string, error) {
 func (m *mockPlugin) SendImage(_ context.Context, _ UserTarget, _ string, _ string) error {
 	return nil
 }
+func (m *mockPlugin) SendFile(_ context.Context, _ UserTarget, _, _, _ string) error {
+	return nil
+}
 
 func (m *mockPlugin) ReceiveMessage(handler func(msg IncomingMessage)) {
 	m.mu.Lock()
