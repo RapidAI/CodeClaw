@@ -1,0 +1,220 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// TaskSplitter decomposes user requirements or task lists into executable
+// SubTask slices. For Greenfield mode it calls an LLM; for Maintenance mode
+// it parses manual text or fetches from external sources.
+type TaskSplitter struct {
+	llmConfig MaclawLLMConfig
+}
+
+// NewTaskSplitter creates a TaskSplitter with the given LLM configuration.
+func NewTaskSplitter(cfg MaclawLLMConfig) *TaskSplitter {
+	return &TaskSplitter{llmConfig: cfg}
+}
+
+// SplitRequirements uses the configured LLM to decompose product requirements
+// into a list of SubTasks (Greenfield mode).
+func (s *TaskSplitter) SplitRequirements(requirements, techStack string) ([]SubTask, error) {
+	prompt := fmt.Sprintf(`You are a software architect. Decompose the following product requirements into independent development sub-tasks.
+Each sub-task must include:
+- description: what to implement
+- expected_files: list of files that will be created or modified
+- dependencies: indices of other tasks this depends on (use 0-based indexing)
+
+Tech stack: %s
+
+Requirements:
+%s
+
+Respond ONLY with a JSON array of objects with fields: description, expected_files, dependencies.`, techStack, requirements)
+
+	body, err := s.callLLM(prompt)
+	if err != nil {
+		return nil, fmt.Errorf("LLM call: %w", err)
+	}
+
+	var raw []struct {
+		Description   string   `json:"description"`
+		ExpectedFiles []string `json:"expected_files"`
+		Dependencies  []int    `json:"dependencies"`
+	}
+	if err := json.Unmarshal(extractJSON(body), &raw); err != nil {
+		return nil, fmt.Errorf("parse LLM response: %w", err)
+	}
+
+	tasks := make([]SubTask, len(raw))
+	for i, r := range raw {
+		tasks[i] = SubTask{
+			Index:         i,
+			Description:   r.Description,
+			ExpectedFiles: r.ExpectedFiles,
+			Dependencies:  r.Dependencies,
+		}
+	}
+	return tasks, nil
+}
+
+// ParseTaskList parses a task list from various sources (Maintenance mode).
+func (s *TaskSplitter) ParseTaskList(input TaskListInput) ([]SubTask, error) {
+	switch input.Source {
+	case "manual":
+		return s.parseManualInput(input.Text)
+	case "github":
+		return s.parseGitHubIssues(input.URL)
+	default:
+		return nil, fmt.Errorf("unsupported task source: %s", input.Source)
+	}
+}
+
+// parseManualInput splits text by newlines; each non-empty line becomes a SubTask.
+func (s *TaskSplitter) parseManualInput(text string) ([]SubTask, error) {
+	lines := strings.Split(text, "\n")
+	var tasks []SubTask
+	idx := 0
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		tasks = append(tasks, SubTask{
+			Index:         idx,
+			Description:   line,
+			ExpectedFiles: []string{}, // will be filled by LLM or conflict detector
+		})
+		idx++
+	}
+	return tasks, nil
+}
+
+// parseGitHubIssues fetches issues from a GitHub repo URL.
+// Expected URL format: https://github.com/{owner}/{repo}
+func (s *TaskSplitter) parseGitHubIssues(repoURL string) ([]SubTask, error) {
+	// Extract owner/repo from URL
+	repoURL = strings.TrimSuffix(repoURL, "/")
+	parts := strings.Split(repoURL, "/")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid GitHub URL: %s", repoURL)
+	}
+	owner := parts[len(parts)-2]
+	repo := parts[len(parts)-1]
+
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues?state=open&per_page=50", owner, repo)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch GitHub issues: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var issues []struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
+		return nil, fmt.Errorf("parse GitHub issues: %w", err)
+	}
+
+	tasks := make([]SubTask, len(issues))
+	for i, issue := range issues {
+		desc := issue.Title
+		if issue.Body != "" {
+			desc += "\n" + issue.Body
+		}
+		tasks[i] = SubTask{
+			Index:         i,
+			Description:   desc,
+			ExpectedFiles: []string{},
+		}
+	}
+	return tasks, nil
+}
+
+// callLLM sends a prompt to the configured LLM and returns the response text.
+func (s *TaskSplitter) callLLM(prompt string) ([]byte, error) {
+	if s.llmConfig.URL == "" {
+		return nil, fmt.Errorf("LLM not configured")
+	}
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"model": s.llmConfig.Model,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+		"temperature": 0.2,
+	})
+
+	req, err := http.NewRequest("POST", s.llmConfig.URL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if s.llmConfig.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+s.llmConfig.Key)
+	}
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract content from OpenAI-compatible response
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return body, nil // return raw if not standard format
+	}
+	if len(result.Choices) > 0 {
+		return []byte(result.Choices[0].Message.Content), nil
+	}
+	return body, nil
+}
+
+// extractJSON tries to find a JSON array in the text (handles markdown fences).
+func extractJSON(data []byte) []byte {
+	s := string(data)
+	// Strip markdown code fences
+	if idx := strings.Index(s, "```json"); idx >= 0 {
+		s = s[idx+7:]
+		if end := strings.Index(s, "```"); end >= 0 {
+			s = s[:end]
+		}
+	} else if idx := strings.Index(s, "```"); idx >= 0 {
+		s = s[idx+3:]
+		if end := strings.Index(s, "```"); end >= 0 {
+			s = s[:end]
+		}
+	}
+	// Find the first [ and last ]
+	start := strings.Index(s, "[")
+	end := strings.LastIndex(s, "]")
+	if start >= 0 && end > start {
+		return []byte(s[start : end+1])
+	}
+	return []byte(strings.TrimSpace(s))
+}

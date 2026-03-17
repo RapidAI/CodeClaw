@@ -1217,8 +1217,20 @@ func validateAndBuildImage(sessionID string, source *SDKImageSource, logPrefix s
 		return ImageTransferMessage{}, false
 	}
 	if len(decoded) > ImageOutputSizeLimit {
-		if app != nil {
-			app.log(fmt.Sprintf("[%s] session=%s: skipping image exceeding size limit (%d > %d)", logPrefix, sessionID, len(decoded), ImageOutputSizeLimit))
+		// Attempt to downsize PNG images instead of dropping them.
+		if source.MediaType == "image/png" {
+			downsized, dsErr := downsizeScreenshotBase64(source.Data, ImageOutputSizeLimit)
+			if dsErr == nil {
+				if app != nil {
+					app.log(fmt.Sprintf("[%s] session=%s: downsized image from %d to fit limit", logPrefix, sessionID, len(decoded)))
+				}
+				return NewImageTransferMessage(sessionID, source.MediaType, downsized), true
+			}
+			if app != nil {
+				app.log(fmt.Sprintf("[%s] session=%s: downsize failed: %v, skipping", logPrefix, sessionID, dsErr))
+			}
+		} else if app != nil {
+			app.log(fmt.Sprintf("[%s] session=%s: skipping non-PNG image exceeding size limit (%d > %d)", logPrefix, sessionID, len(decoded), ImageOutputSizeLimit))
 		}
 		return ImageTransferMessage{}, false
 	}

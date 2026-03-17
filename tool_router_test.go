@@ -10,7 +10,7 @@ func makeDynamicTool(name, desc string) map[string]interface{} {
 	return toolDef(name, desc, nil, nil)
 }
 
-// makeAllTools creates a slice of 18 builtins + n dynamic tools.
+// makeAllTools creates a slice of 20 builtins + n dynamic tools.
 func makeAllTools(dynamicCount int) []map[string]interface{} {
 	builtins := makeBuiltinDefs()
 	for i := 0; i < dynamicCount; i++ {
@@ -23,7 +23,7 @@ func makeAllTools(dynamicCount int) []map[string]interface{} {
 }
 
 func TestToolRouter_BelowThreshold(t *testing.T) {
-	// 18 builtins + 1 dynamic = 19 total, below threshold of 20.
+	// 20 builtins + 1 dynamic = 21 total, below threshold of 22.
 	allTools := makeAllTools(1)
 	router := NewToolRouter(nil)
 	result := router.Route("hello world", allTools)
@@ -34,33 +34,34 @@ func TestToolRouter_BelowThreshold(t *testing.T) {
 }
 
 func TestToolRouter_ExactlyAtThreshold(t *testing.T) {
-	// 18 builtins + 2 dynamic = 20 total, at threshold.
+	// 20 builtins + 2 dynamic = 22 total, at threshold.
 	allTools := makeAllTools(2)
 	router := NewToolRouter(nil)
 	result := router.Route("test message", allTools)
 
-	if len(result) != 20 {
-		t.Errorf("expected 20 tools (unchanged at threshold), got %d", len(result))
+	if len(result) != 22 {
+		t.Errorf("expected 22 tools (unchanged at threshold), got %d", len(result))
 	}
 }
 
 func TestToolRouter_AboveThreshold_KeepsBuiltins(t *testing.T) {
-	// 18 builtins + 15 dynamic = 33 total, above threshold.
+	// 20 builtins + 15 dynamic = 35 total, above threshold.
 	allTools := makeAllTools(15)
 	router := NewToolRouter(nil)
 	result := router.Route("some query", allTools)
 
-	// Should have 18 builtins + up to 15 dynamic = 33 max.
+	// Should have 20 builtins + up to 15 dynamic = 35 max.
 	// Since we have exactly 15 dynamic, all should be kept.
-	if len(result) != 33 {
-		t.Errorf("expected 33 tools, got %d", len(result))
+	if len(result) != 35 {
+		t.Errorf("expected 35 tools, got %d", len(result))
 	}
 
-	// Verify first 18 are builtins.
+	// Verify first 20 are builtins.
 	builtinNames := []string{
 		"list_sessions", "create_session", "send_input", "get_session_output",
 		"get_session_events", "interrupt_session", "kill_session", "screenshot",
-		"list_mcp_tools", "call_mcp_tool", "list_skills", "run_skill",
+		"list_mcp_tools", "call_mcp_tool", "list_skills", "search_skill_hub",
+		"install_skill_hub", "run_skill",
 		"parallel_execute", "recommend_tool",
 		"bash", "read_file", "write_file", "list_directory",
 	}
@@ -73,14 +74,14 @@ func TestToolRouter_AboveThreshold_KeepsBuiltins(t *testing.T) {
 }
 
 func TestToolRouter_AboveThreshold_LimitsDynamic(t *testing.T) {
-	// 18 builtins + 20 dynamic = 38 total.
+	// 20 builtins + 20 dynamic = 40 total.
 	allTools := makeAllTools(20)
 	router := NewToolRouter(nil)
 	result := router.Route("some query", allTools)
 
-	// Should have 18 builtins + 15 dynamic = 33.
-	if len(result) != 33 {
-		t.Errorf("expected 33 tools (18 builtin + 15 dynamic), got %d", len(result))
+	// Should have 20 builtins + 15 dynamic = 35.
+	if len(result) != 35 {
+		t.Errorf("expected 35 tools (20 builtin + 15 dynamic), got %d", len(result))
 	}
 }
 
@@ -131,9 +132,9 @@ func TestToolRouter_EmptyMessage(t *testing.T) {
 	router := NewToolRouter(nil)
 	result := router.Route("", allTools)
 
-	// Empty message → should still return 18 + 15 = 33.
-	if len(result) != 33 {
-		t.Errorf("expected 33 tools, got %d", len(result))
+	// Empty message → should still return 20 + 15 = 35.
+	if len(result) != 35 {
+		t.Errorf("expected 35 tools, got %d", len(result))
 	}
 }
 

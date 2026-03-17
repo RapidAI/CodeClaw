@@ -126,10 +126,14 @@ func (m *ConfigManager) GetConfig(section string) (string, error) {
 		return m.formatProjectsConfig(cfg), nil
 	case "maclaw_llm":
 		return m.formatMaclawLLMConfig(cfg), nil
+	case "maclaw_role":
+		return m.formatMaclawRoleConfig(cfg), nil
 	case "proxy":
 		return m.formatProxyConfig(cfg), nil
 	case "general":
 		return m.formatGeneralConfig(cfg), nil
+	case "power":
+		return m.formatPowerConfig(cfg), nil
 	default:
 		return "", fmt.Errorf("unknown config section: %s", section)
 	}
@@ -143,6 +147,11 @@ func (m *ConfigManager) configOverview(cfg AppConfig) string {
 	b.WriteString(fmt.Sprintf("项目数量: %d\n", len(cfg.Projects)))
 	b.WriteString(fmt.Sprintf("远程模式: %v\n", cfg.RemoteEnabled))
 	b.WriteString(fmt.Sprintf("Maclaw LLM: %s\n", cfg.MaclawLLMModel))
+	roleName := cfg.MaclawRoleName
+	if roleName == "" {
+		roleName = "MaClaw"
+	}
+	b.WriteString(fmt.Sprintf("MaClaw 角色: %s\n", roleName))
 	b.WriteString(fmt.Sprintf("Claude 当前模型: %s\n", cfg.Claude.CurrentModel))
 	b.WriteString(fmt.Sprintf("Gemini 当前模型: %s\n", cfg.Gemini.CurrentModel))
 	b.WriteString(fmt.Sprintf("Codex 当前模型: %s\n", cfg.Codex.CurrentModel))
@@ -194,6 +203,22 @@ func (m *ConfigManager) formatMaclawLLMConfig(cfg AppConfig) string {
 	return b.String()
 }
 
+func (m *ConfigManager) formatMaclawRoleConfig(cfg AppConfig) string {
+	var b strings.Builder
+	b.WriteString("=== MaClaw 角色配置 ===\n")
+	name := cfg.MaclawRoleName
+	if name == "" {
+		name = "MaClaw"
+	}
+	desc := cfg.MaclawRoleDescription
+	if desc == "" {
+		desc = "一个尽心尽责无所不能的软件开发管家"
+	}
+	b.WriteString(fmt.Sprintf("maclaw_role_name: %s\n", name))
+	b.WriteString(fmt.Sprintf("maclaw_role_description: %s\n", desc))
+	return b.String()
+}
+
 func (m *ConfigManager) formatProxyConfig(cfg AppConfig) string {
 	var b strings.Builder
 	b.WriteString("=== 代理设置 ===\n")
@@ -210,9 +235,18 @@ func (m *ConfigManager) formatGeneralConfig(cfg AppConfig) string {
 	b.WriteString(fmt.Sprintf("active_tool: %s\n", cfg.ActiveTool))
 	b.WriteString(fmt.Sprintf("language: %s\n", cfg.Language))
 	b.WriteString(fmt.Sprintf("power_optimization: %v\n", cfg.PowerOptimization))
+	b.WriteString(fmt.Sprintf("screen_dim_timeout_min: %d\n", cfg.ScreenDimTimeoutMin))
 	b.WriteString(fmt.Sprintf("check_update_on_startup: %v\n", cfg.CheckUpdateOnStartup))
 	b.WriteString(fmt.Sprintf("hide_startup_popup: %v\n", cfg.HideStartupPopup))
 	b.WriteString(fmt.Sprintf("hide_maclaw_llm_popup: %v\n", cfg.HideMaclawLLMPopup))
+	return b.String()
+}
+
+func (m *ConfigManager) formatPowerConfig(cfg AppConfig) string {
+	var b strings.Builder
+	b.WriteString("=== 电源管理 ===\n")
+	b.WriteString(fmt.Sprintf("power_optimization: %v\n", cfg.PowerOptimization))
+	b.WriteString(fmt.Sprintf("screen_dim_timeout_min: %d\n", cfg.ScreenDimTimeoutMin))
 	return b.String()
 }
 
@@ -532,10 +566,14 @@ func (m *ConfigManager) applyChange(cfg *AppConfig, section, key, value string) 
 		return m.applyProjectsChange(cfg, k, value)
 	case "maclaw_llm":
 		return m.applyMaclawLLMChange(cfg, k, value)
+	case "maclaw_role":
+		return m.applyMaclawRoleChange(cfg, k, value)
 	case "proxy":
 		return m.applyProxyChange(cfg, k, value)
 	case "general":
 		return m.applyGeneralChange(cfg, k, value)
+	case "power":
+		return m.applyPowerChange(cfg, k, value)
 	}
 	return "", fmt.Errorf("unknown section %q", section)
 }
@@ -602,6 +640,20 @@ func (m *ConfigManager) applyMaclawLLMChange(cfg *AppConfig, key, value string) 
 	return "", fmt.Errorf("unsupported maclaw_llm key %q", key)
 }
 
+func (m *ConfigManager) applyMaclawRoleChange(cfg *AppConfig, key, value string) (string, error) {
+	switch key {
+	case "maclaw_role_name":
+		old := cfg.MaclawRoleName
+		cfg.MaclawRoleName = value
+		return old, nil
+	case "maclaw_role_description":
+		old := cfg.MaclawRoleDescription
+		cfg.MaclawRoleDescription = value
+		return old, nil
+	}
+	return "", fmt.Errorf("unsupported maclaw_role key %q", key)
+}
+
 func (m *ConfigManager) applyProxyChange(cfg *AppConfig, key, value string) (string, error) {
 	switch key {
 	case "default_proxy_host":
@@ -638,6 +690,14 @@ func (m *ConfigManager) applyGeneralChange(cfg *AppConfig, key, value string) (s
 		old := fmt.Sprintf("%v", cfg.PowerOptimization)
 		cfg.PowerOptimization = strings.EqualFold(value, "true")
 		return old, nil
+	case "screen_dim_timeout_min":
+		old := fmt.Sprintf("%d", cfg.ScreenDimTimeoutMin)
+		var n int
+		if _, err := fmt.Sscanf(value, "%d", &n); err != nil {
+			return "", fmt.Errorf("invalid integer value %q for screen_dim_timeout_min", value)
+		}
+		cfg.ScreenDimTimeoutMin = n
+		return old, nil
 	case "check_update_on_startup":
 		old := fmt.Sprintf("%v", cfg.CheckUpdateOnStartup)
 		cfg.CheckUpdateOnStartup = strings.EqualFold(value, "true")
@@ -652,6 +712,24 @@ func (m *ConfigManager) applyGeneralChange(cfg *AppConfig, key, value string) (s
 		return old, nil
 	}
 	return "", fmt.Errorf("unsupported general key %q", key)
+}
+
+func (m *ConfigManager) applyPowerChange(cfg *AppConfig, key, value string) (string, error) {
+	switch key {
+	case "power_optimization":
+		old := fmt.Sprintf("%v", cfg.PowerOptimization)
+		cfg.PowerOptimization = strings.EqualFold(value, "true")
+		return old, nil
+	case "screen_dim_timeout_min":
+		old := fmt.Sprintf("%d", cfg.ScreenDimTimeoutMin)
+		var n int
+		if _, err := fmt.Sscanf(value, "%d", &n); err != nil {
+			return "", fmt.Errorf("invalid integer value %q for screen_dim_timeout_min", value)
+		}
+		cfg.ScreenDimTimeoutMin = n
+		return old, nil
+	}
+	return "", fmt.Errorf("unsupported power key %q", key)
 }
 
 // ---------------------------------------------------------------------------
@@ -727,7 +805,17 @@ func (m *ConfigManager) initSchema() {
 			},
 		},
 
-		// 6. General settings
+		// 6. Maclaw Role
+		{
+			Name:        "maclaw_role",
+			Description: "MaClaw 角色配置",
+			Keys: []ConfigKeySchema{
+				{Key: "maclaw_role_name", Description: "Agent 角色名称", Type: "string", Default: "MaClaw"},
+				{Key: "maclaw_role_description", Description: "Agent 角色描述", Type: "string", Default: "一个尽心尽责无所不能的软件开发管家"},
+			},
+		},
+
+		// 7. General settings
 		{
 			Name:        "general",
 			Description: "通用设置",
@@ -735,9 +823,20 @@ func (m *ConfigManager) initSchema() {
 				{Key: "active_tool", Description: "当前激活的编程工具", Type: "enum", ValidValues: []string{"claude", "gemini", "codex", "opencode", "iflow", "kilo", "cursor", "codebuddy"}},
 				{Key: "language", Description: "界面语言", Type: "enum", Default: "zh", ValidValues: []string{"zh", "en"}},
 				{Key: "power_optimization", Description: "是否启用省电优化", Type: "bool", Default: "false"},
+				{Key: "screen_dim_timeout_min", Description: "无操作多少分钟后熄屏（0=禁用）", Type: "int", Default: "3"},
 				{Key: "check_update_on_startup", Description: "启动时检查更新", Type: "bool", Default: "true"},
 				{Key: "hide_startup_popup", Description: "隐藏启动弹窗", Type: "bool", Default: "false"},
 				{Key: "hide_maclaw_llm_popup", Description: "隐藏MaClaw LLM未配置提示弹窗", Type: "bool", Default: "false"},
+			},
+		},
+
+		// 8. Power management
+		{
+			Name:        "power",
+			Description: "电源管理",
+			Keys: []ConfigKeySchema{
+				{Key: "power_optimization", Description: "是否启用防锁屏（远程任务运行时阻止系统锁屏）", Type: "bool", Default: "false"},
+				{Key: "screen_dim_timeout_min", Description: "无操作多少分钟后熄屏节能（0=禁用）", Type: "int", Default: "3"},
 			},
 		},
 	}

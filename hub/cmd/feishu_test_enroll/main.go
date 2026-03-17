@@ -1,8 +1,19 @@
+// Command feishu_test_enroll is a manual integration test for the Feishu
+// Contact v3 API. It verifies tenant token acquisition, department lookup,
+// user existence check, and user creation.
+//
+// Usage:
+//
+//	go run ./hub/cmd/feishu_test_enroll \
+//	  -app-id=cli_xxx -app-secret=xxx \
+//	  -email=user@example.com -mobile=+8613800138000 \
+//	  -name=TestUser -dept-id=0
 package main
 
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,38 +21,41 @@ import (
 	"time"
 )
 
-const (
-	appID     = "cli_a93c1bd53cb8dbcd"
-	appSecret = "mPzzw0JijylOwyFUBjDywcJzVkS133fa"
-	apiBase   = "https://open.feishu.cn"
-
-	testEmail   = "znsoft" + "@" + "gmail.com"
-	testMobile  = "+8615646550398"
-	testName    = "Daniel"
-	deptName    = "MaClaw"
-	deptID_     = "9d74g56d86ge523f" // MaClaw department ID (known)
+var (
+	flagAppID     = flag.String("app-id", "", "Feishu app ID (required)")
+	flagAppSecret = flag.String("app-secret", "", "Feishu app secret (required)")
+	flagEmail     = flag.String("email", "", "User email to enroll (required)")
+	flagMobile    = flag.String("mobile", "", "User mobile with country code, e.g. +8613800138000")
+	flagName      = flag.String("name", "", "Display name (defaults to email local part)")
+	flagDeptID    = flag.String("dept-id", "0", "Target department ID")
+	flagAPIBase   = flag.String("api-base", "https://open.feishu.cn", "Feishu API base URL")
 )
 
 var client = &http.Client{Timeout: 15 * time.Second}
 
 func main() {
+	flag.Parse()
+
+	if *flagAppID == "" || *flagAppSecret == "" || *flagEmail == "" {
+		fmt.Fprintln(os.Stderr, "Usage: feishu_test_enroll -app-id=... -app-secret=... -email=...")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	apiBase := *flagAPIBase
+
 	// Step 1: Get tenant_access_token
 	fmt.Println("=== Step 1: 获取 tenant_access_token ===")
-	token, err := getTenantToken()
+	token, err := getTenantToken(apiBase, *flagAppID, *flagAppSecret)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "获取 token 失败: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("✅ token: %s...%s\n\n", token[:8], token[len(token)-4:])
 
-	// Step 2: Use known MaClaw department ID
-	fmt.Println("=== Step 2: 使用 MaClaw 部门 ===")
-	deptID := deptID_
-	fmt.Printf("✅ 部门 %s ID: %s\n\n", deptName, deptID)
-
-	// Step 3: Check if user already exists
-	fmt.Println("=== Step 3: 检查用户是否已存在 ===")
-	openID, err := lookupByEmail(token, testEmail)
+	// Step 2: Check if user already exists
+	fmt.Println("=== Step 2: 检查用户是否已存在 ===")
+	openID, err := lookupByEmail(apiBase, token, *flagEmail)
 	if err != nil {
 		fmt.Printf("⚠️  邮箱查找失败: %v\n", err)
 	}
@@ -52,9 +66,22 @@ func main() {
 	}
 	fmt.Println("用户不存在，继续创建...")
 
-	// Step 4: Create user
-	fmt.Println("=== Step 4: 创建用户 ===")
-	newOpenID, err := createUser(token, testEmail, testMobile, testName, deptID)
+	// Step 3: Create user
+	name := *flagName
+	if name == "" {
+		for i, c := range *flagEmail {
+			if c == '@' {
+				name = (*flagEmail)[:i]
+				break
+			}
+		}
+		if name == "" {
+			name = *flagEmail
+		}
+	}
+
+	fmt.Println("=== Step 3: 创建用户 ===")
+	newOpenID, err := createUser(apiBase, token, *flagEmail, *flagMobile, name, *flagDeptID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ 创建用户失败: %v\n", err)
 		os.Exit(1)
@@ -62,7 +89,7 @@ func main() {
 	fmt.Printf("✅ 用户创建成功! open_id=%s\n", newOpenID)
 }
 
-func getTenantToken() (string, error) {
+func getTenantToken(apiBase, appID, appSecret string) (string, error) {
 	body, _ := json.Marshal(map[string]string{
 		"app_id":     appID,
 		"app_secret": appSecret,
@@ -86,48 +113,7 @@ func getTenantToken() (string, error) {
 	return result.TenantAccessToken, nil
 }
 
-func findDepartment(token, name string) (string, error) {
-	// Search departments under root (fetch_child=true to get names)
-	url := apiBase + "/open-apis/contact/v3/departments?parent_department_id=0&fetch_child=true&page_size=50"
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	fmt.Printf("部门列表响应: %s\n\n", string(raw))
-
-	var result struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-		Data struct {
-			Items []struct {
-				Name         string `json:"name"`
-				DepartmentID string `json:"department_id"`
-				OpenDeptID   string `json:"open_department_id"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return "", err
-	}
-	if result.Code != 0 {
-		return "", fmt.Errorf("code=%d msg=%s", result.Code, result.Msg)
-	}
-	for _, dept := range result.Data.Items {
-		if dept.Name == name {
-			if dept.OpenDeptID != "" {
-				return dept.OpenDeptID, nil
-			}
-			return dept.DepartmentID, nil
-		}
-	}
-	return "", fmt.Errorf("部门 %q 未找到", name)
-}
-
-func lookupByEmail(token, email string) (string, error) {
+func lookupByEmail(apiBase, token, email string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"emails": []string{email},
 	})
@@ -163,13 +149,15 @@ func lookupByEmail(token, email string) (string, error) {
 	return "", nil
 }
 
-func createUser(token, email, mobile, name, deptID string) (string, error) {
+func createUser(apiBase, token, email, mobile, name, deptID string) (string, error) {
 	payload := map[string]any{
 		"name":           name,
 		"email":          email,
-		"mobile":         mobile,
 		"department_ids": []string{deptID},
 		"employee_type":  1,
+	}
+	if mobile != "" {
+		payload["mobile"] = mobile
 	}
 	body, _ := json.Marshal(payload)
 	fmt.Printf("创建用户请求: %s\n", string(body))

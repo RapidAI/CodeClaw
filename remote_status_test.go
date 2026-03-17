@@ -377,7 +377,7 @@ func TestBuildRemoteLaunchSpecSupportsCodex(t *testing.T) {
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 
-	spec, err := app.buildRemoteLaunchSpec("codex", cfg, false, false, "", projectDir, false)
+	spec, err := app.buildRemoteLaunchSpec("codex", cfg, false, false, "", projectDir, false, "")
 	if err != nil {
 		t.Fatalf("buildRemoteLaunchSpec(codex) error = %v", err)
 	}
@@ -440,7 +440,7 @@ func TestStartRemoteSessionSupportsCodex(t *testing.T) {
 		return &fakeExecutionStrategy{handle: newFakeExecutionHandle(99)}, nil
 	}
 
-	session, err := app.StartRemoteSession("codex", projectDir, false)
+	session, err := app.StartRemoteSession("codex", projectDir, false, "")
 	if err != nil {
 		t.Fatalf("StartRemoteSession(codex) error = %v", err)
 	}
@@ -469,7 +469,7 @@ func TestBuildRemoteLaunchSpecSupportsOpencode(t *testing.T) {
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 
-	spec, err := app.buildRemoteLaunchSpec("opencode", cfg, false, false, "", projectDir, false)
+	spec, err := app.buildRemoteLaunchSpec("opencode", cfg, false, false, "", projectDir, false, "")
 	if err != nil {
 		t.Fatalf("buildRemoteLaunchSpec(opencode) error = %v", err)
 	}
@@ -527,7 +527,7 @@ func TestStartRemoteSessionSupportsOpencode(t *testing.T) {
 		return &fakeExecutionStrategy{handle: newFakeExecutionHandle(100)}, nil
 	}
 
-	session, err := app.StartRemoteSession("opencode", projectDir, false)
+	session, err := app.StartRemoteSession("opencode", projectDir, false, "")
 	if err != nil {
 		t.Fatalf("StartRemoteSession(opencode) error = %v", err)
 	}
@@ -556,7 +556,7 @@ func TestBuildRemoteLaunchSpecSupportsIFlow(t *testing.T) {
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 
-	spec, err := app.buildRemoteLaunchSpec("iflow", cfg, false, false, "", projectDir, false)
+	spec, err := app.buildRemoteLaunchSpec("iflow", cfg, false, false, "", projectDir, false, "")
 	if err != nil {
 		t.Fatalf("buildRemoteLaunchSpec(iflow) error = %v", err)
 	}
@@ -614,7 +614,7 @@ func TestStartRemoteSessionSupportsIFlow(t *testing.T) {
 		return &fakeExecutionStrategy{handle: newFakeExecutionHandle(101)}, nil
 	}
 
-	session, err := app.StartRemoteSession("iflow", projectDir, false)
+	session, err := app.StartRemoteSession("iflow", projectDir, false, "")
 	if err != nil {
 		t.Fatalf("StartRemoteSession(iflow) error = %v", err)
 	}
@@ -643,7 +643,7 @@ func TestBuildRemoteLaunchSpecSupportsKilo(t *testing.T) {
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 
-	spec, err := app.buildRemoteLaunchSpec("kilo", cfg, false, false, "", projectDir, false)
+	spec, err := app.buildRemoteLaunchSpec("kilo", cfg, false, false, "", projectDir, false, "")
 	if err != nil {
 		t.Fatalf("buildRemoteLaunchSpec(kilo) error = %v", err)
 	}
@@ -701,7 +701,7 @@ func TestStartRemoteSessionSupportsKilo(t *testing.T) {
 		return &fakeExecutionStrategy{handle: newFakeExecutionHandle(102)}, nil
 	}
 
-	session, err := app.StartRemoteSession("kilo", projectDir, false)
+	session, err := app.StartRemoteSession("kilo", projectDir, false, "")
 	if err != nil {
 		t.Fatalf("StartRemoteSession(kilo) error = %v", err)
 	}
@@ -774,5 +774,138 @@ func TestToRemoteSessionViewSanitizesPreviewAndEvents(t *testing.T) {
 	}
 	if strings.ContainsRune(view.Events[0].Title, '\x00') {
 		t.Fatalf("event title contains NUL after sanitize: %q", view.Events[0].Title)
+	}
+}
+
+func TestBuildRemoteLaunchSpecProviderOverride(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("USERPROFILE", tempHome)
+	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
+
+	projectDir := filepath.Join(tempHome, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(projectDir) error = %v", err)
+	}
+
+	app := &App{testHomeDir: tempHome}
+	cfg, err := app.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.Claude = ToolConfig{
+		CurrentModel: "Original",
+		Models: []ModelConfig{
+			{ModelName: "Original", ModelId: "claude-sonnet"},
+			{ModelName: "DeepSeek", ModelId: "deepseek-v3", ApiKey: "sk-abc"},
+			{ModelName: "EmptyKey", ModelId: "empty-model", ApiKey: ""},
+		},
+	}
+	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
+	cfg.CurrentProject = "p1"
+
+	t.Run("empty override uses CurrentModel", func(t *testing.T) {
+		spec, err := app.buildRemoteLaunchSpec("claude", cfg, false, false, "", projectDir, false, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if spec.ModelName != "Original" {
+			t.Errorf("ModelName = %q, want %q", spec.ModelName, "Original")
+		}
+	})
+
+	t.Run("valid override replaces default", func(t *testing.T) {
+		spec, err := app.buildRemoteLaunchSpec("claude", cfg, false, false, "", projectDir, false, "DeepSeek")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if spec.ModelName != "DeepSeek" {
+			t.Errorf("ModelName = %q, want %q", spec.ModelName, "DeepSeek")
+		}
+		if spec.ModelID != "deepseek-v3" {
+			t.Errorf("ModelID = %q, want %q", spec.ModelID, "deepseek-v3")
+		}
+	})
+
+	t.Run("invalid provider returns error", func(t *testing.T) {
+		_, err := app.buildRemoteLaunchSpec("claude", cfg, false, false, "", projectDir, false, "EmptyKey")
+		if err == nil {
+			t.Fatal("expected error for invalid provider, got nil")
+		}
+		if !strings.Contains(err.Error(), "has no API key configured") {
+			t.Errorf("error = %q, want it to contain 'has no API key configured'", err.Error())
+		}
+	})
+
+	t.Run("nonexistent provider returns error", func(t *testing.T) {
+		_, err := app.buildRemoteLaunchSpec("claude", cfg, false, false, "", projectDir, false, "NonExistent")
+		if err == nil {
+			t.Fatal("expected error for nonexistent provider, got nil")
+		}
+		if !strings.Contains(err.Error(), "not found") {
+			t.Errorf("error = %q, want it to contain 'not found'", err.Error())
+		}
+	})
+}
+
+func TestListValidProviders(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("USERPROFILE", tempHome)
+
+	app := &App{testHomeDir: tempHome}
+	cfg, err := app.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.Claude = ToolConfig{
+		CurrentModel: "Original",
+		Models: []ModelConfig{
+			{ModelName: "Original", ModelId: "claude-sonnet"},
+			{ModelName: "DeepSeek", ModelId: "deepseek-v3", ApiKey: "sk-abc"},
+			{ModelName: "EmptyKey", ModelId: "empty-model", ApiKey: ""},
+		},
+	}
+	if err := app.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	providers, err := app.ListValidProviders("claude")
+	if err != nil {
+		t.Fatalf("ListValidProviders() error = %v", err)
+	}
+
+	// Should have Original and DeepSeek, not EmptyKey
+	if len(providers) != 2 {
+		t.Fatalf("got %d providers, want 2", len(providers))
+	}
+
+	foundOriginal := false
+	foundDeepSeek := false
+	for _, p := range providers {
+		if p.Name == "Original" {
+			foundOriginal = true
+			if !p.IsDefault {
+				t.Error("Original should be marked as default")
+			}
+		}
+		if p.Name == "DeepSeek" {
+			foundDeepSeek = true
+			if p.IsDefault {
+				t.Error("DeepSeek should not be marked as default")
+			}
+			if p.ModelID != "deepseek-v3" {
+				t.Errorf("DeepSeek ModelID = %q, want %q", p.ModelID, "deepseek-v3")
+			}
+		}
+		if p.Name == "EmptyKey" {
+			t.Error("EmptyKey should not be in valid providers")
+		}
+	}
+	if !foundOriginal {
+		t.Error("Original not found in providers")
+	}
+	if !foundDeepSeek {
+		t.Error("DeepSeek not found in providers")
 	}
 }

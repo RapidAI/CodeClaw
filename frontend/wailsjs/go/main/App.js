@@ -98,12 +98,16 @@ export function StartRemoteClaudeSession(arg1, arg2) {
   return window['go']['main']['App']['StartRemoteClaudeSession'](arg1, arg2);
 }
 
-export function StartRemoteSession(arg1, arg2, arg3) {
-  return window['go']['main']['App']['StartRemoteSession'](arg1, arg2, arg3);
+export function StartRemoteSession(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['StartRemoteSession'](arg1, arg2, arg3, arg4);
 }
 
-export function StartRemoteHandoffSession(arg1, arg2, arg3) {
-  return window['go']['main']['App']['StartRemoteHandoffSession'](arg1, arg2, arg3);
+export function StartRemoteHandoffSession(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['StartRemoteHandoffSession'](arg1, arg2, arg3, arg4);
+}
+
+export function ListValidProviders(arg1) {
+  return window['go']['main']['App']['ListValidProviders'](arg1);
 }
 
 export function GetSkillsDir(arg1) {
@@ -336,6 +340,31 @@ export function CheckMCPServerHealth(arg1) {
   return window['go']['main']['App']['CheckMCPServerHealth'](arg1);
 }
 
+// Local MCP server management bindings
+export function ListLocalMCPServers() {
+  return window['go']['main']['App']['ListLocalMCPServers']();
+}
+
+export function RegisterLocalMCPServer(arg1) {
+  return window['go']['main']['App']['RegisterLocalMCPServer'](arg1);
+}
+
+export function UpdateLocalMCPServer(arg1) {
+  return window['go']['main']['App']['UpdateLocalMCPServer'](arg1);
+}
+
+export function UnregisterLocalMCPServer(arg1) {
+  return window['go']['main']['App']['UnregisterLocalMCPServer'](arg1);
+}
+
+export function SyncLocalMCPServers() {
+  return window['go']['main']['App']['SyncLocalMCPServers']();
+}
+
+export function GetLocalMCPServerStatuses() {
+  return window['go']['main']['App']['GetLocalMCPServerStatuses']();
+}
+
 // MaClaw LLM configuration bindings
 export function GetMaclawLLMConfig() {
   return window['go']['main']['App']['GetMaclawLLMConfig']();
@@ -361,8 +390,20 @@ export function PingMaclawLLM() {
   return window['go']['main']['App']['PingMaclawLLM']();
 }
 
+export function GetMaclawAgentMaxIterations() {
+  return window['go']['main']['App']['GetMaclawAgentMaxIterations']();
+}
+
+export function SetMaclawAgentMaxIterations(arg1) {
+  return window['go']['main']['App']['SetMaclawAgentMaxIterations'](arg1);
+}
+
 export function PingSkillHub(arg1) {
   return window['go']['main']['App']['PingSkillHub'](arg1);
+}
+
+export function ValidateSkillHub(arg1) {
+  return window['go']['main']['App']['ValidateSkillHub'](arg1);
 }
 
 // SkillHub market bindings

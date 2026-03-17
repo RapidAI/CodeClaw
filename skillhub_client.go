@@ -110,42 +110,31 @@ func (c *SkillHubClient) Search(ctx context.Context, query string) ([]HubSkillMe
 
 	for _, entry := range cfg.SkillHubURLs {
 		wg.Add(1)
-		go func(hubURL string) {
+		go func(hubEntry SkillHubEntry) {
 			defer wg.Done()
 			hubCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
 
-			endpoint := strings.TrimRight(hubURL, "/") + "/api/v1/skills/search?q=" + url.QueryEscape(query)
-			req, reqErr := http.NewRequestWithContext(hubCtx, http.MethodGet, endpoint, nil)
-			if reqErr != nil {
-				return
-			}
-			req.Header.Set("User-Agent", "MaClaw/1.0")
-
 			start := time.Now()
-			resp, doErr := c.client.Do(req)
+			var skills []HubSkillMeta
+			var searchErr error
+
+			switch hubEntry.Type {
+			case "clawhub":
+				skills, searchErr = c.searchClawHub(hubCtx, hubEntry.URL, query)
+			case "clawhub_mirror":
+				skills, searchErr = c.searchClawHubMirror(hubCtx, hubEntry.URL, query)
+			default: // "standard" or empty
+				skills, searchErr = c.searchStandard(hubCtx, hubEntry.URL, query)
+			}
+
 			latency := time.Since(start).Milliseconds()
-			if doErr != nil {
-				return
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
+			if searchErr != nil || len(skills) == 0 {
 				return
 			}
 
-			var sr hubSearchResponse
-			if decErr := json.NewDecoder(resp.Body).Decode(&sr); decErr != nil {
-				return
-			}
-
-			// Tag each skill with the source Hub URL.
-			for i := range sr.Skills {
-				sr.Skills[i].HubURL = hubURL
-			}
-
-			resultsCh <- hubResult{hubURL: hubURL, skills: sr.Skills, latency: latency}
-		}(entry.URL)
+			resultsCh <- hubResult{hubURL: hubEntry.URL, skills: skills, latency: latency}
+		}(entry)
 	}
 
 	wg.Wait()
@@ -437,39 +426,57 @@ func (c *SkillHubClient) RefreshRecommendations(ctx context.Context) error {
 
 	for _, entry := range cfg.SkillHubURLs {
 		wg.Add(1)
-		go func(hubURL string) {
+		go func(hubEntry SkillHubEntry) {
 			defer wg.Done()
 			hubCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
 
-			endpoint := strings.TrimRight(hubURL, "/") + "/api/v1/skills/popular"
-			req, reqErr := http.NewRequestWithContext(hubCtx, http.MethodGet, endpoint, nil)
-			if reqErr != nil {
-				return
-			}
-			req.Header.Set("User-Agent", "MaClaw/1.0")
-
-			resp, doErr := c.client.Do(req)
-			if doErr != nil {
-				return
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				return
-			}
-
 			var skills []HubSkillMeta
-			if decErr := json.NewDecoder(resp.Body).Decode(&skills); decErr != nil {
-				return
+
+			switch hubEntry.Type {
+			case "clawhub_mirror":
+				// 镜像站用 top-downloads 获取热门
+				s, err := c.fetchClawHubMirrorPopular(hubCtx, hubEntry.URL)
+				if err == nil {
+					skills = s
+				}
+			case "clawhub":
+				// ClawHub 用列表接口获取
+				s, err := c.searchClawHub(hubCtx, hubEntry.URL, "")
+				if err == nil {
+					skills = s
+				}
+			default:
+				endpoint := strings.TrimRight(hubEntry.URL, "/") + "/api/v1/skills/popular"
+				req, reqErr := http.NewRequestWithContext(hubCtx, http.MethodGet, endpoint, nil)
+				if reqErr != nil {
+					return
+				}
+				req.Header.Set("User-Agent", "MaClaw/1.0")
+
+				resp, doErr := c.client.Do(req)
+				if doErr != nil {
+					return
+				}
+				defer resp.Body.Close()
+
+				if resp.StatusCode != http.StatusOK {
+					return
+				}
+
+				if decErr := json.NewDecoder(resp.Body).Decode(&skills); decErr != nil {
+					return
+				}
+
+				for i := range skills {
+					skills[i].HubURL = hubEntry.URL
+				}
 			}
 
-			for i := range skills {
-				skills[i].HubURL = hubURL
+			if len(skills) > 0 {
+				resultsCh <- hubPopularResult{skills: skills}
 			}
-
-			resultsCh <- hubPopularResult{skills: skills}
-		}(entry.URL)
+		}(entry)
 	}
 
 	wg.Wait()
@@ -501,4 +508,256 @@ func (c *SkillHubClient) GetRecommendations() []HubSkillMeta {
 	result := make([]HubSkillMeta, len(c.recIndex))
 	copy(result, c.recIndex)
 	return result
+}
+
+// ---------------------------------------------------------------------------
+// 适配器方法: 标准 Hub / ClawHub / ClawHub 镜像
+// ---------------------------------------------------------------------------
+
+// searchStandard 查询标准 SkillHub API
+func (c *SkillHubClient) searchStandard(ctx context.Context, hubURL, query string) ([]HubSkillMeta, error) {
+	endpoint := strings.TrimRight(hubURL, "/") + "/api/v1/skills/search?q=" + url.QueryEscape(query)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "MaClaw/1.0")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var sr hubSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+		return nil, err
+	}
+
+	for i := range sr.Skills {
+		sr.Skills[i].HubURL = hubURL
+	}
+	return sr.Skills, nil
+}
+
+// clawHubMirrorResponse 是 topclawhubskills.com 的搜索响应格式
+type clawHubMirrorResponse struct {
+	OK   bool `json:"ok"`
+	Data []struct {
+		Slug        string `json:"slug"`
+		DisplayName string `json:"display_name"`
+		Summary     string `json:"summary"`
+		Downloads   int    `json:"downloads"`
+		Stars       int    `json:"stars"`
+		OwnerHandle string `json:"owner_handle"`
+		IsCertified bool   `json:"is_certified"`
+		ClawHubURL  string `json:"clawhub_url"`
+	} `json:"data"`
+	Total int `json:"total"`
+}
+
+// searchClawHubMirror 查询 topclawhubskills.com 风格的 API 并转换为 HubSkillMeta
+func (c *SkillHubClient) searchClawHubMirror(ctx context.Context, hubURL, query string) ([]HubSkillMeta, error) {
+	endpoint := strings.TrimRight(hubURL, "/") + "/api/search?q=" + url.QueryEscape(query) + "&limit=20"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "MaClaw/1.0")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var mr clawHubMirrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
+		return nil, err
+	}
+	if !mr.OK {
+		return nil, fmt.Errorf("mirror API returned ok=false")
+	}
+
+	skills := make([]HubSkillMeta, 0, len(mr.Data))
+	for _, d := range mr.Data {
+		trust := "community"
+		if d.IsCertified {
+			trust = "certified"
+		}
+		skills = append(skills, HubSkillMeta{
+			ID:          d.Slug,
+			Name:        d.DisplayName,
+			Description: d.Summary,
+			Author:      d.OwnerHandle,
+			TrustLevel:  trust,
+			Downloads:   d.Downloads,
+			HubURL:      hubURL,
+		})
+	}
+	return skills, nil
+}
+
+// clawHubSearchResponse 是 clawhub.ai 的搜索响应格式
+type clawHubSearchResponse struct {
+	Results []struct {
+		Slug        string `json:"slug"`
+		DisplayName string `json:"displayName"`
+		Summary     string `json:"summary"`
+		Stats       struct {
+			Downloads int `json:"downloads"`
+			Stars     int `json:"stars"`
+		} `json:"stats"`
+		Owner struct {
+			Handle string `json:"handle"`
+		} `json:"owner"`
+	} `json:"results"`
+}
+
+// clawHubListResponse 是 clawhub.ai 的列表响应格式
+type clawHubListResponse struct {
+	Items []struct {
+		Slug        string `json:"slug"`
+		DisplayName string `json:"displayName"`
+		Summary     string `json:"summary"`
+		Stats       struct {
+			Downloads int `json:"downloads"`
+			Stars     int `json:"stars"`
+		} `json:"stats"`
+		Owner struct {
+			Handle string `json:"handle"`
+		} `json:"owner"`
+	} `json:"items"`
+	NextCursor interface{} `json:"nextCursor"`
+}
+
+// searchClawHub 查询 clawhub.ai 风格的 API 并转换为 HubSkillMeta
+func (c *SkillHubClient) searchClawHub(ctx context.Context, hubURL, query string) ([]HubSkillMeta, error) {
+	// 先尝试 /api/v1/search?q=...
+	endpoint := strings.TrimRight(hubURL, "/") + "/api/v1/search?q=" + url.QueryEscape(query)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "MaClaw/1.0")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var sr clawHubSearchResponse
+		if err := json.NewDecoder(resp.Body).Decode(&sr); err == nil && len(sr.Results) > 0 {
+			skills := make([]HubSkillMeta, 0, len(sr.Results))
+			for _, r := range sr.Results {
+				skills = append(skills, HubSkillMeta{
+					ID:          r.Slug,
+					Name:        r.DisplayName,
+					Description: r.Summary,
+					Author:      r.Owner.Handle,
+					TrustLevel:  "community",
+					Downloads:   r.Stats.Downloads,
+					HubURL:      hubURL,
+				})
+			}
+			return skills, nil
+		}
+	}
+
+	// 回退: 获取列表并在客户端过滤
+	listEndpoint := strings.TrimRight(hubURL, "/") + "/api/v1/skills"
+	listReq, err := http.NewRequestWithContext(ctx, http.MethodGet, listEndpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	listReq.Header.Set("User-Agent", "MaClaw/1.0")
+
+	listResp, err := c.client.Do(listReq)
+	if err != nil {
+		return nil, err
+	}
+	defer listResp.Body.Close()
+
+	if listResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", listResp.StatusCode)
+	}
+
+	var lr clawHubListResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&lr); err != nil {
+		return nil, err
+	}
+
+	queryLower := strings.ToLower(query)
+	var skills []HubSkillMeta
+	for _, item := range lr.Items {
+		// 空 query 时返回全部（用于推荐列表）
+		if query == "" ||
+			strings.Contains(strings.ToLower(item.DisplayName), queryLower) ||
+			strings.Contains(strings.ToLower(item.Summary), queryLower) ||
+			strings.Contains(strings.ToLower(item.Slug), queryLower) {
+			skills = append(skills, HubSkillMeta{
+				ID:          item.Slug,
+				Name:        item.DisplayName,
+				Description: item.Summary,
+				Author:      item.Owner.Handle,
+				TrustLevel:  "community",
+				Downloads:   item.Stats.Downloads,
+				HubURL:      hubURL,
+			})
+		}
+	}
+	return skills, nil
+}
+
+// fetchClawHubMirrorPopular 从 topclawhubskills.com 获取热门 Skill
+func (c *SkillHubClient) fetchClawHubMirrorPopular(ctx context.Context, hubURL string) ([]HubSkillMeta, error) {
+	endpoint := strings.TrimRight(hubURL, "/") + "/api/top-downloads?limit=20"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "MaClaw/1.0")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var mr clawHubMirrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
+		return nil, err
+	}
+
+	skills := make([]HubSkillMeta, 0, len(mr.Data))
+	for _, d := range mr.Data {
+		trust := "community"
+		if d.IsCertified {
+			trust = "certified"
+		}
+		skills = append(skills, HubSkillMeta{
+			ID:          d.Slug,
+			Name:        d.DisplayName,
+			Description: d.Summary,
+			Author:      d.OwnerHandle,
+			TrustLevel:  trust,
+			Downloads:   d.Downloads,
+			HubURL:      hubURL,
+		})
+	}
+	return skills, nil
 }

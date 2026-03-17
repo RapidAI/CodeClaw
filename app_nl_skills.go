@@ -316,6 +316,11 @@ func (e *SkillExecutor) executeStep(step NLSkillStep) (string, error) {
 		if serverID == "" || toolName == "" {
 			return "", fmt.Errorf("missing server_id or tool_name parameter")
 		}
+		// Try local MCP manager first
+		if mgr := e.app.localMCPManager; mgr != nil && mgr.IsRunning(serverID) {
+			return mgr.CallTool(serverID, toolName, args)
+		}
+		// Fall back to remote MCP registry
 		if e.mcpRegistry == nil {
 			return "", fmt.Errorf("MCP registry not initialized")
 		}

@@ -39,7 +39,9 @@ type App struct {
 	remoteSessions    *RemoteSessionManager
 	powerStateMutex   sync.Mutex
 	powerStateProcess *exec.Cmd
+	screenDimCancel   context.CancelFunc // cancels the screen-dim goroutine
 	mcpRegistry       *MCPRegistry
+	localMCPManager   *LocalMCPManager
 	skillExecutor     *SkillExecutor
 	// Maclaw capability evolution components
 	riskAssessor        *RiskAssessor
@@ -66,6 +68,7 @@ type App struct {
 	conversationArchiver *ConversationArchiver
 	startupFeedback      *SessionStartupFeedback
 	ioRelay              *SessionIORelay
+	swarmOrchestrator    *SwarmOrchestrator
 }
 
 var OnConfigChanged func(AppConfig)
@@ -144,6 +147,7 @@ type AppConfig struct {
 	ShowCursor           bool            `json:"show_cursor"`
 	Language             string          `json:"language"`
 	PowerOptimization    bool            `json:"power_optimization"`
+	ScreenDimTimeoutMin  int             `json:"screen_dim_timeout_min"` // Minutes of inactivity before dimming display (0=disabled)
 	CheckUpdateOnStartup bool            `json:"check_update_on_startup"`
 	// Environment check settings
 	PauseEnvCheck    bool   `json:"pause_env_check"`     // Whether to skip environment checks
@@ -175,8 +179,14 @@ type AppConfig struct {
 	MaclawLLMModel           string              `json:"maclaw_llm_model"`
 	MaclawLLMProviders       []MaclawLLMProvider `json:"maclaw_llm_providers,omitempty"`
 	MaclawLLMCurrentProvider string              `json:"maclaw_llm_current_provider,omitempty"`
+	MaclawAgentMaxIterations int                 `json:"maclaw_agent_max_iterations,omitempty"` // 0/absent=default(12), >0=fixed limit, -1=unlimited
+	// MaClaw Role configuration — customizable agent persona
+	MaclawRoleName        string `json:"maclaw_role_name,omitempty"`        // Agent display name, default "MaClaw"
+	MaclawRoleDescription string `json:"maclaw_role_description,omitempty"` // Agent role description
 	// Client-side MCP Server registry (Agent Passthrough architecture)
 	MCPServers []MCPServerEntry `json:"mcp_servers,omitempty"`
+	// Local (stdio) MCP Server configurations (npx / command-based)
+	LocalMCPServers []LocalMCPServerEntry `json:"local_mcp_servers,omitempty"`
 	// Client-side NL Skill definitions (Agent Passthrough architecture)
 	NLSkills []NLSkillEntry `json:"nl_skills,omitempty"`
 	// SkillHUB registry URLs for searching and downloading skill packages
@@ -184,9 +194,11 @@ type AppConfig struct {
 }
 
 // SkillHubEntry represents a single SkillHUB registry endpoint.
+// Type 字段标识 Hub 的 API 类型，用于选择正确的适配器。
 type SkillHubEntry struct {
 	Label string `json:"label"`
 	URL   string `json:"url"`
+	Type  string `json:"type,omitempty"` // "standard", "clawhub", "clawhub_mirror", ""(auto-detect)
 }
 type Skill struct {
 	Name        string `json:"name"`
@@ -213,6 +225,10 @@ func (a *App) ensureRemoteInfra() {
 	}
 	if a.mcpRegistry == nil {
 		a.mcpRegistry = NewMCPRegistry(a)
+	}
+	if a.localMCPManager == nil {
+		a.localMCPManager = NewLocalMCPManager(a.mcpRegistry)
+		go a.localMCPManager.SyncFromConfig()
 	}
 	if a.skillExecutor == nil {
 		a.skillExecutor = NewSkillExecutor(a, a.mcpRegistry, a.remoteSessions)
@@ -244,6 +260,7 @@ func (a *App) ensureRemoteInfra() {
 	if a.toolDefGenerator == nil {
 		builtins := (&IMMessageHandler{}).buildToolDefinitions()
 		a.toolDefGenerator = NewToolDefinitionGenerator(a.mcpRegistry, builtins)
+		a.toolDefGenerator.SetLocalMCPManager(a.localMCPManager)
 	}
 	if a.toolRouter == nil {
 		a.toolRouter = NewToolRouter(a.toolDefGenerator)
@@ -423,6 +440,12 @@ func (a *App) domReady(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.screenDimCancel != nil {
+		a.screenDimCancel()
+	}
+	if a.localMCPManager != nil {
+		a.localMCPManager.StopAll()
+	}
 	if a.memoryStore != nil {
 		a.memoryStore.Stop()
 	}
@@ -439,7 +462,9 @@ func (a *App) shutdown(ctx context.Context) {
 }
 
 func (a *App) refreshPowerOptimizationStateFromConfig(config AppConfig) {
-	a.setPowerOptimizationEnabled(config.PowerOptimization && a.hasActiveRemoteTasks())
+	enabled := config.PowerOptimization && a.hasActiveRemoteTasks()
+	a.setPowerOptimizationEnabled(enabled)
+	a.updateScreenDimTimer(enabled, config.ScreenDimTimeoutMin)
 }
 
 func (a *App) refreshPowerOptimizationState() {
@@ -581,7 +606,7 @@ func (a *App) buildClaudeLaunchSpec(
 	projectDir string,
 	useProxy bool,
 ) (LaunchSpec, error) {
-	return a.buildRemoteLaunchSpec("claude", config, yoloMode, adminMode, pythonEnv, projectDir, useProxy)
+	return a.buildRemoteLaunchSpec("claude", config, yoloMode, adminMode, pythonEnv, projectDir, useProxy, "")
 }
 
 func (a *App) buildCodexLaunchEnv(
@@ -850,6 +875,7 @@ func (a *App) buildRemoteLaunchSpec(
 	pythonEnv string,
 	projectDir string,
 	useProxy bool,
+	providerOverride string,
 ) (LaunchSpec, error) {
 	tool := normalizeRemoteToolName(toolName)
 	meta, err := getRemoteToolMetadata(tool)
@@ -857,16 +883,29 @@ func (a *App) buildRemoteLaunchSpec(
 		return LaunchSpec{}, err
 	}
 	toolCfg := meta.ConfigSelector(config)
+
+	targetProvider := toolCfg.CurrentModel
+	if strings.TrimSpace(providerOverride) != "" {
+		targetProvider = strings.TrimSpace(providerOverride)
+	}
+
 	var selectedModel *ModelConfig
 	for _, m := range toolCfg.Models {
-		if m.ModelName == toolCfg.CurrentModel {
+		if strings.EqualFold(m.ModelName, targetProvider) {
 			model := m
 			selectedModel = &model
 			break
 		}
 	}
-	if selectedModel == nil || toolCfg.CurrentModel == "" {
+	if selectedModel == nil {
+		if strings.TrimSpace(providerOverride) != "" {
+			return LaunchSpec{}, fmt.Errorf("provider %q not found for tool %s", targetProvider, tool)
+		}
 		return LaunchSpec{}, fmt.Errorf("no %s provider selected", tool)
+	}
+
+	if !isValidProvider(*selectedModel) {
+		return LaunchSpec{}, fmt.Errorf("provider %q has no API key configured", targetProvider)
 	}
 
 	if projectDir == "" {
@@ -2433,7 +2472,7 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 	}
 
 	if config.RemoteEnabled && (strings.ToLower(toolName) == "claude" || strings.ToLower(toolName) == "codex" || strings.ToLower(toolName) == "opencode" || strings.ToLower(toolName) == "iflow" || strings.ToLower(toolName) == "kilo") {
-		spec, err := a.buildRemoteLaunchSpec(toolName, config, yoloMode, adminMode, pythonEnv, projectDir, useProxy)
+		spec, err := a.buildRemoteLaunchSpec(toolName, config, yoloMode, adminMode, pythonEnv, projectDir, useProxy, "")
 		if err != nil {
 			a.log("build remote launch spec failed: " + err.Error())
 			return
@@ -2778,7 +2817,8 @@ func (a *App) LoadConfig() (AppConfig, error) {
 			RemoteUserID:       "",
 			RemoteMachineID:    "",
 			RemoteMachineToken: "",
-			RemoteHeartbeatSec: 10,
+			RemoteHeartbeatSec:  10,
+			ScreenDimTimeoutMin: 3, // Default: dim display after 3 minutes of inactivity
 		}
 		err = a.SaveConfig(defaultConfig)
 		return defaultConfig, err
@@ -5269,4 +5309,124 @@ func (a *App) PingSkillHub(url string) map[string]interface{} {
 		result["error"] = fmt.Sprintf("HTTP %d", resp.StatusCode)
 	}
 	return result
+}
+
+// ValidateSkillHub 探测给定 URL 的 Hub 类型，返回类型和原因。
+// 返回 map: {"type": "standard"|"clawhub"|"clawhub_mirror"|"unsupported", "reason": "..."}
+func (a *App) ValidateSkillHub(rawURL string) map[string]interface{} {
+	result := map[string]interface{}{
+		"type":   "unsupported",
+		"reason": "",
+	}
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		result["reason"] = "URL 不能为空"
+		return result
+	}
+
+	base := strings.TrimRight(rawURL, "/")
+	client := &http.Client{Timeout: 8 * time.Second}
+
+	// 探测 1: 标准 Hub API — /api/v1/skills/search?q=test
+	if hubType := probeStandardHub(client, base); hubType {
+		result["type"] = "standard"
+		result["reason"] = "检测到标准 SkillHub API"
+		return result
+	}
+
+	// 探测 2: ClawHub 镜像 (topclawhubskills.com 风格) — /api/stats
+	if hubType := probeClawHubMirror(client, base); hubType {
+		result["type"] = "clawhub_mirror"
+		result["reason"] = "检测到 ClawHub 镜像 API (topclawhubskills.com 兼容)"
+		return result
+	}
+
+	// 探测 3: ClawHub (clawhub.ai 风格) — /api/v1/skills
+	if hubType := probeClawHub(client, base); hubType {
+		result["type"] = "clawhub"
+		result["reason"] = "检测到 ClawHub API (clawhub.ai 兼容)"
+		return result
+	}
+
+	result["reason"] = "该地址没有实现标准 SkillHub API，也不是 ClawHub 兼容源"
+	return result
+}
+
+// probeStandardHub 检测标准 Hub API
+func probeStandardHub(client *http.Client, base string) bool {
+	endpoint := base + "/api/v1/skills/search?q=test"
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", "MaClaw/1.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	// 检查返回的 JSON 是否包含 "skills" 数组
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false
+	}
+	_, hasSkills := body["skills"]
+	return hasSkills
+}
+
+// probeClawHubMirror 检测 topclawhubskills.com 风格的 API
+func probeClawHubMirror(client *http.Client, base string) bool {
+	endpoint := base + "/api/stats"
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", "MaClaw/1.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false
+	}
+	// topclawhubskills.com 返回 {"ok":true, "total_skills":...}
+	if ok, _ := body["ok"].(bool); ok {
+		if _, has := body["total_skills"]; has {
+			return true
+		}
+	}
+	return false
+}
+
+// probeClawHub 检测 clawhub.ai 风格的 API
+func probeClawHub(client *http.Client, base string) bool {
+	endpoint := base + "/api/v1/skills"
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", "MaClaw/1.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false
+	}
+	// clawhub.ai 返回 {"items":[...], "nextCursor":...}
+	_, hasItems := body["items"]
+	return hasItems
 }

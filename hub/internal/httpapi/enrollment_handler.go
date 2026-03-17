@@ -1,11 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
+	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
 )
 
 type enrollmentResponse struct {
@@ -69,7 +72,7 @@ func ListPendingEnrollmentsHandler(identity *auth.IdentityService) http.HandlerF
 	}
 }
 
-func ApproveEnrollmentHandler(identity *auth.IdentityService) http.HandlerFunc {
+func ApproveEnrollmentHandler(identity *auth.IdentityService, feishuNotifier *feishu.Notifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req approveEnrollmentRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -85,6 +88,22 @@ func ApproveEnrollmentHandler(identity *auth.IdentityService) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "APPROVE_FAILED", err.Error())
 			return
 		}
+
+		// Trigger Feishu auto-enrollment for the newly approved user so they
+		// can discover the bot without manual intervention.
+		if feishuNotifier != nil {
+			if ae := feishuNotifier.AutoEnroller(); ae != nil {
+				email := user.Email
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if err := ae.AddToFeishuOrg(ctx, email, "", ""); err != nil {
+						log.Printf("[enroll/approve] feishu auto-enroll failed for %s: %v", email, err)
+					}
+				}()
+			}
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":   true,
 			"user": map[string]any{"email": user.Email, "sn": user.SN},

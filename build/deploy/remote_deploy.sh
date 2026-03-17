@@ -21,6 +21,9 @@ mkdir -p "$SRC_ROOT" "$BUILD_ROOT"
 tar -xzf "$ARCHIVE_PATH" -C "$SRC_ROOT"
 cd "$SRC_ROOT"
 
+echo "[remote] Downloading dependencies..."
+GOPROXY="$GOPROXY" go mod download
+
 echo "[remote] Building hub..."
 GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -o "$BUILD_ROOT/maclaw-hub" ./hub/cmd/hub
 echo "[remote] Building hubcenter..."

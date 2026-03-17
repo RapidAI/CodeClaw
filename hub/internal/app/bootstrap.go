@@ -155,9 +155,11 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	if err := imAdapter.RegisterPlugin(qqbotPlugin); err != nil {
 		log.Printf("[bootstrap] failed to register qqbot plugin: %v", err)
 	}
-	// Provide the hub's public URL so QQBot can serve temp files for large uploads.
-	if cfg.Server.PublicBaseURL != "" {
-		qqbotPlugin.SetPublicBaseURL(cfg.Server.PublicBaseURL)
+	// Provide the hub's public URL so IM plugins can serve temp files for large uploads.
+	// GetPublicBaseURL prefers the database value (set via admin panel) over the config file.
+	if publicBaseURL := centerService.GetPublicBaseURL(context.Background()); publicBaseURL != "" {
+		qqbotPlugin.SetPublicBaseURL(publicBaseURL)
+		feishuPlugin.SetPublicBaseURL(publicBaseURL)
 	}
 	// Start QQBot WebSocket gateway if configured
 	if err := qqbotPlugin.Start(context.Background()); err != nil {
@@ -193,6 +195,7 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		invitationService,
 		st.System,
 		feishuNotifier,
+		feishuPlugin,
 		openclawIMPlugin,
 		qqbotPlugin,
 		skillStore,

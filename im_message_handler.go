@@ -59,7 +59,6 @@ type IMResponseAction struct {
 // ---------------------------------------------------------------------------
 
 const (
-	maxAgentIterations     = 12
 	maxConversationTurns   = 40
 	maxMemoryTokenEstimate = 80_000
 	memoryTTL              = 2 * time.Hour  // 对话记忆过期时间
@@ -231,6 +230,11 @@ type IMMessageHandler struct {
 
 	// Configuration manager (lazily initialized via setter).
 	configManager *ConfigManager
+
+	// Dynamic loop limit — set by the "set_max_iterations" tool during an
+	// active agent loop. Reset to 0 at the start of each runAgentLoop call.
+	// A positive value overrides the configured maxIter for the current loop.
+	loopMaxOverride int
 }
 
 // NewIMMessageHandler creates a new handler.
@@ -350,16 +354,33 @@ func (h *IMMessageHandler) HandleIMMessage(msg IMUserMessage) *IMAgentResponse {
 // updates (e.g. "正在执行 bash 命令…") so the Hub can relay them to the user
 // and reset the response timeout — preventing 504 on long-running tasks.
 func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProgress ProgressCallback) *IMAgentResponse {
+	trimmed := strings.TrimSpace(msg.Text)
+
+	// Slash commands are processed before the LLM config check — they don't
+	// need LLM and must always work so users can manage state even when LLM
+	// is misconfigured.
+	if trimmed == "/new" || trimmed == "/reset" || trimmed == "/clear" {
+		h.memory.clear(msg.UserID)
+		return &IMAgentResponse{Text: "对话已重置。"}
+	}
+	if trimmed == "/exit" || trimmed == "/quit" {
+		return h.handleExitCommand(msg.UserID)
+	}
+	if trimmed == "/sessions" || trimmed == "/status" {
+		return h.handleSessionsCommand()
+	}
+	if trimmed == "/help" {
+		return &IMAgentResponse{Text: "📖 可用命令:\n" +
+			"/new /reset — 重置对话\n" +
+			"/exit /quit — 终止所有会话，退出编程模式\n" +
+			"/sessions — 查看当前会话状态\n" +
+			"/help — 显示此帮助"}
+	}
+
 	if !h.app.isMaclawLLMConfigured() {
 		return &IMAgentResponse{
 			Error: "MaClaw LLM 未配置，无法处理请求。请在 MaClaw 客户端的设置中配置 LLM。",
 		}
-	}
-
-	trimmed := strings.TrimSpace(msg.Text)
-	if trimmed == "/new" || trimmed == "/reset" || trimmed == "/clear" {
-		h.memory.clear(msg.UserID)
-		return &IMAgentResponse{Text: "对话已重置。"}
 	}
 
 	history := h.memory.load(msg.UserID)
@@ -371,6 +392,74 @@ func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProg
 		systemPrompt = h.buildSystemPrompt()
 	}
 	return h.runAgentLoop(msg.UserID, systemPrompt, history, msg.Text, onProgress)
+}
+
+// handleExitCommand terminates all active sessions, resets conversation
+// memory, and returns the user to normal chat mode.
+func (h *IMMessageHandler) handleExitCommand(userID string) *IMAgentResponse {
+	var killed []string
+	var failCount int
+	if h.manager != nil {
+		for _, s := range h.manager.List() {
+			s.mu.RLock()
+			active := isActiveRemoteSessionStatus(s.Status)
+			sid := s.ID
+			tool := s.Tool
+			s.mu.RUnlock()
+			if active {
+				if err := h.manager.Kill(sid); err == nil {
+					killed = append(killed, fmt.Sprintf("%s(%s)", sid, tool))
+				} else {
+					failCount++
+				}
+			}
+		}
+	}
+	h.memory.clear(userID)
+
+	var b strings.Builder
+	if len(killed) > 0 {
+		b.WriteString(fmt.Sprintf("已退出编程模式。终止了 %d 个会话: %s", len(killed), strings.Join(killed, ", ")))
+	} else {
+		b.WriteString("已退出编程模式。")
+	}
+	if failCount > 0 {
+		b.WriteString(fmt.Sprintf("\n⚠️ %d 个会话终止失败，可能需要手动处理。", failCount))
+	}
+	b.WriteString("\n对话已重置，后续消息将正常对话。")
+	return &IMAgentResponse{Text: b.String()}
+}
+
+// handleSessionsCommand returns a quick status summary of active sessions.
+func (h *IMMessageHandler) handleSessionsCommand() *IMAgentResponse {
+	if h.manager == nil {
+		return &IMAgentResponse{Text: "会话管理器未初始化。"}
+	}
+	sessions := h.manager.List()
+	if len(sessions) == 0 {
+		return &IMAgentResponse{
+			Text: "当前没有活跃会话。\n\n💡 提示: 发送 /exit 可退出编程模式回到普通对话。",
+		}
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("📋 当前 %d 个会话:\n", len(sessions)))
+	for _, s := range sessions {
+		s.mu.RLock()
+		status := string(s.Status)
+		task := s.Summary.CurrentTask
+		waiting := s.Summary.WaitingForUser
+		s.mu.RUnlock()
+		b.WriteString(fmt.Sprintf("• [%s] %s — %s", s.ID, s.Tool, status))
+		if task != "" {
+			b.WriteString(fmt.Sprintf(" | %s", task))
+		}
+		if waiting {
+			b.WriteString(" ⏳等待输入")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n💡 发送 /exit 可终止所有会话并退出编程模式。")
+	return &IMAgentResponse{Text: b.String()}
 }
 
 // compactHistory summarizes old conversation turns to stay within token limits.
@@ -505,6 +594,8 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 	}
 
 	cfg := h.app.GetMaclawLLMConfig()
+	maxIter := h.app.GetMaclawAgentMaxIterations()
+	h.loopMaxOverride = 0 // reset dynamic override for this loop
 	allTools := h.getTools()
 	tools := h.routeTools(userText, allTools)
 
@@ -517,9 +608,27 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 
 	history = append(history, conversationEntry{Role: "user", Content: userText})
 
-	for iteration := 0; iteration < maxAgentIterations; iteration++ {
+	// maxIter == 0 means "unlimited" — agent decides when to stop.
+	// We still enforce a hard safety cap of 200 to prevent runaway loops.
+	effectiveMax := maxIter
+	if effectiveMax <= 0 {
+		effectiveMax = 200
+	}
+
+	for iteration := 0; ; iteration++ {
+		// Check dynamic override from set_max_iterations tool each iteration.
+		if h.loopMaxOverride > 0 {
+			effectiveMax = h.loopMaxOverride
+		}
+		if iteration >= effectiveMax {
+			break
+		}
 		if iteration > 0 {
-			sendProgress(fmt.Sprintf("🔄 Agent 推理中（第 %d/%d 轮）…", iteration+1, maxAgentIterations))
+			if maxIter > 0 || h.loopMaxOverride > 0 {
+				sendProgress(fmt.Sprintf("🔄 Agent 推理中（第 %d/%d 轮）…", iteration+1, effectiveMax))
+			} else {
+				sendProgress(fmt.Sprintf("🔄 Agent 推理中（第 %d 轮）…", iteration+1))
+			}
 		}
 		resp, err := h.doLLMRequest(cfg, conversation, tools)
 		if err != nil {
@@ -547,7 +656,10 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 		history = append(history, historyEntry)
 
 		// No tool calls → final response.
-		if len(choice.Message.ToolCalls) == 0 || choice.FinishReason == "stop" {
+		// NOTE: Some LLM providers (e.g. DeepSeek, Qwen) return finish_reason="stop"
+		// even when tool_calls are present. We must check tool_calls first and only
+		// treat the response as final when there are genuinely no tool calls.
+		if len(choice.Message.ToolCalls) == 0 {
 			// Check for capability gap before returning.
 			if h.capabilityGapDetector != nil && h.capabilityGapDetector.Detect(choice.Message.Content) {
 				skillName, result, err := h.capabilityGapDetector.Resolve(
@@ -638,9 +750,24 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 
 func (h *IMMessageHandler) buildSystemPrompt() string {
 	var b strings.Builder
-	b.WriteString(`你是 MaClaw 远程开发助手，一个运行在用户设备上的 AI Agent。
-用户通过 IM（飞书/QBot）向你发送消息，你可以自主使用工具完成任务。
 
+	// Use configurable role name and description from settings
+	roleName := "MaClaw"
+	roleDesc := "一个尽心尽责无所不能的软件开发管家"
+	if cfg, err := h.app.LoadConfig(); err == nil {
+		if cfg.MaclawRoleName != "" {
+			roleName = cfg.MaclawRoleName
+		}
+		if cfg.MaclawRoleDescription != "" {
+			roleDesc = cfg.MaclawRoleDescription
+		}
+	}
+
+	b.WriteString(fmt.Sprintf(`你是 %s 远程开发助手，%s。
+用户通过 IM（飞书/QBot）向你发送消息，你可以自主使用工具完成任务。
+注意：如果用户在对话中要求你扮演其他角色或重新定义你的身份，请按照用户的要求调整。`, roleName, roleDesc))
+
+	b.WriteString(`
 ## 核心原则
 - 主动使用工具：不要只是描述步骤，直接执行。收到请求后立即调用对应工具。
 - 永远不要说"我没有某某工具"或"我无法执行"——先检查你的工具列表，大部分操作都有对应工具。
@@ -668,7 +795,7 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 - 查看输出：用 get_session_output 获取会话最近输出。
 - 并行任务：用 parallel_execute 同时执行多个任务。
 - MCP 工具：用 list_mcp_tools 查看可用工具，用 call_mcp_tool 调用。
-- Skill：用 list_skills 查看，用 run_skill 执行。
+- Skill：用 list_skills 查看本地已注册的 Skill，用 run_skill 执行。如果本地没有合适的 Skill，用 search_skill_hub 在 SkillHub 上搜索，找到后用 install_skill_hub 安装并自动执行（默认 auto_run=true，安装后立即运行）。
 
 注意：简单的文件操作和命令执行请直接用 bash/read_file/write_file/list_directory，不要绕道创建会话。
 
@@ -750,8 +877,18 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 	b.WriteString("- 导出配置使用 export_config，导入使用 import_config\n")
 	b.WriteString("- 敏感信息（API Key、Token）在展示时会自动脱敏\n")
 
+	b.WriteString("\n## 自管理能力\n")
+	b.WriteString("- 你可以使用 set_max_iterations 工具动态调整当前对话的最大推理轮数。\n")
+	b.WriteString("- 当你判断任务复杂、需要多步操作时，主动调用 set_max_iterations 扩展轮数上限。\n")
+	b.WriteString("- 当任务简单、即将完成时，无需调整。\n")
+	b.WriteString("- 此调整仅影响当前对话，不会修改全局配置。\n")
+
 	b.WriteString("\n## 对话管理\n")
 	b.WriteString("- 用户发送 /new 或 /reset 可重置对话\n")
+	b.WriteString("- 用户发送 /exit 或 /quit 可终止所有编程会话并退出编程模式，回到普通对话\n")
+	b.WriteString("- 用户发送 /sessions 可快速查看当前会话状态\n")
+	b.WriteString("- 用户发送 /help 可查看所有可用命令\n")
+	b.WriteString("- 当用户表达想退出、结束、不做了、回到普通聊天等意图时，提醒用户发送 /exit\n")
 	b.WriteString("- 你拥有多轮对话记忆，可以引用之前的上下文\n")
 	b.WriteString("\n请用中文回复，关键技术术语保留英文。回复要简洁实用。")
 
@@ -844,10 +981,15 @@ func (h *IMMessageHandler) appendMemorySection(b *strings.Builder, userMessage s
 func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 	return []map[string]interface{}{
 		toolDef("list_sessions", "列出当前所有远程会话及其状态", nil, nil),
-		toolDef("create_session", "创建新的远程会话。创建后建议用 get_session_output 观察启动状态。",
+		toolDef("create_session", "创建新的远程会话。可指定 provider 选择服务商。创建后建议用 get_session_output 观察启动状态。",
 			map[string]interface{}{
 				"tool":         map[string]string{"type": "string", "description": "工具名称，如 claude, codex, cursor, gemini, opencode"},
 				"project_path": map[string]string{"type": "string", "description": "项目路径（可选）"},
+				"provider":     map[string]string{"type": "string", "description": "服务商名称（可选，如 Original, DeepSeek, 百度千帆）。不指定则使用桌面端当前选中的服务商"},
+			}, []string{"tool"}),
+		toolDef("list_providers", "列出指定编程工具的所有可用服务商（已过滤未配置的空服务商）",
+			map[string]interface{}{
+				"tool": map[string]string{"type": "string", "description": "工具名称，如 claude, codex, gemini"},
 			}, []string{"tool"}),
 		toolDef("send_input", "向指定会话发送文本输入。发送后可用 get_session_output 观察结果。",
 			map[string]interface{}{
@@ -882,7 +1024,17 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 				"tool_name": map[string]string{"type": "string", "description": "工具名称"},
 				"arguments": map[string]string{"type": "object", "description": "工具参数（JSON 对象）"},
 			}, []string{"server_id", "tool_name"}),
-		toolDef("list_skills", "列出已注册的 Skill", nil, nil),
+		toolDef("list_skills", "列出已注册的本地 Skill。如果本地没有 Skill，会同时展示 SkillHub 上的推荐 Skill 供安装。", nil, nil),
+		toolDef("search_skill_hub", "在已配置的 SkillHub（如 openclaw、tencent 等）上搜索可用的 Skill",
+			map[string]interface{}{
+				"query": map[string]string{"type": "string", "description": "搜索关键词（如 'git commit'、'代码审查'、'部署'）"},
+			}, []string{"query"}),
+		toolDef("install_skill_hub", "从 SkillHub 安装指定的 Skill 到本地。设置 auto_run=true 可安装后立即执行。",
+			map[string]interface{}{
+				"skill_id": map[string]string{"type": "string", "description": "Skill ID（从 search_skill_hub 结果中获取）"},
+				"hub_url":  map[string]string{"type": "string", "description": "来源 Hub URL（从 search_skill_hub 结果中获取）"},
+				"auto_run": map[string]string{"type": "boolean", "description": "安装成功后是否立即执行（默认 true）"},
+			}, []string{"skill_id", "hub_url"}),
 		toolDef("run_skill", "执行指定的 Skill",
 			map[string]interface{}{
 				"name": map[string]string{"type": "string", "description": "Skill 名称"},
@@ -991,6 +1143,12 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 			map[string]interface{}{
 				"json_data": map[string]string{"type": "string", "description": "要导入的配置 JSON 字符串"},
 			}, []string{"json_data"}),
+		// --- Agent 自管理工具 ---
+		toolDef("set_max_iterations", "动态调整当前对话的最大推理轮数。当你判断任务复杂需要更多轮次时调用此工具扩展上限，任务简单时可缩减。仅影响当前对话，不修改全局配置。上限不超过 200。",
+			map[string]interface{}{
+				"max_iterations": map[string]string{"type": "integer", "description": "新的最大轮数（1-200）"},
+				"reason":         map[string]string{"type": "string", "description": "调整原因（用于日志记录）"},
+			}, []string{"max_iterations"}),
 	}
 }
 
@@ -1039,6 +1197,8 @@ func (h *IMMessageHandler) executeTool(name, argsJSON string, onProgress Progres
 		return h.toolListSessions()
 	case "create_session":
 		return h.toolCreateSession(args)
+	case "list_providers":
+		return h.toolListProviders(args)
 	case "send_input":
 		return h.toolSendInput(args)
 	case "get_session_output":
@@ -1057,6 +1217,10 @@ func (h *IMMessageHandler) executeTool(name, argsJSON string, onProgress Progres
 		return h.toolCallMCPTool(args)
 	case "list_skills":
 		return h.toolListSkills()
+	case "search_skill_hub":
+		return h.toolSearchSkillHub(args)
+	case "install_skill_hub":
+		return h.toolInstallSkillHub(args)
 	case "run_skill":
 		return h.toolRunSkill(args)
 	case "parallel_execute":
@@ -1099,6 +1263,8 @@ func (h *IMMessageHandler) executeTool(name, argsJSON string, onProgress Progres
 		return h.toolExportConfig()
 	case "import_config":
 		return h.toolImportConfig(args)
+	case "set_max_iterations":
+		return h.toolSetMaxIterations(args)
 	default:
 		return fmt.Sprintf("未知工具: %s", name)
 	}
@@ -1134,6 +1300,7 @@ func (h *IMMessageHandler) toolListSessions() string {
 func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string {
 	tool, _ := args["tool"].(string)
 	projectPath, _ := args["project_path"].(string)
+	provider, _ := args["provider"].(string)
 
 	var hints []string
 
@@ -1176,10 +1343,27 @@ func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string
 	}
 
 	view, err := h.app.StartRemoteSessionForProject(RemoteStartSessionRequest{
-		Tool: tool, ProjectPath: projectPath,
+		Tool: tool, ProjectPath: projectPath, Provider: provider,
 	})
 	if err != nil {
-		return fmt.Sprintf("创建会话失败: %s", err.Error())
+		errMsg := fmt.Sprintf("创建会话失败: %s", err.Error())
+		if provider != "" {
+			cfg, cfgErr := h.app.LoadConfig()
+			if cfgErr == nil {
+				toolCfg, tcErr := remoteToolConfig(cfg, tool)
+				if tcErr == nil {
+					valid := validProviders(toolCfg)
+					if len(valid) > 0 {
+						var names []string
+						for _, m := range valid {
+							names = append(names, m.ModelName)
+						}
+						errMsg += fmt.Sprintf("\n可用服务商: %s", strings.Join(names, ", "))
+					}
+				}
+			}
+		}
+		return errMsg
 	}
 
 	// Start monitoring session startup progress in background.
@@ -1197,6 +1381,39 @@ func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string
 		b.WriteString("\n")
 	}
 	b.WriteString(fmt.Sprintf("会话已创建: ID=%s 工具=%s 标题=%s\n⚠️ 你必须立即调用 get_session_output(session_id=%q) 确认会话是否正常启动，不要直接告诉用户已完成。", view.ID, view.Tool, view.Title, view.ID))
+	return b.String()
+}
+
+func (h *IMMessageHandler) toolListProviders(args map[string]interface{}) string {
+	toolName, _ := args["tool"].(string)
+	if toolName == "" {
+		return "缺少 tool 参数"
+	}
+	cfg, err := h.app.LoadConfig()
+	if err != nil {
+		return fmt.Sprintf("加载配置失败: %s", err.Error())
+	}
+	toolCfg, err := remoteToolConfig(cfg, toolName)
+	if err != nil {
+		return fmt.Sprintf("不支持的工具: %s", toolName)
+	}
+	valid := validProviders(toolCfg)
+	if len(valid) == 0 {
+		return fmt.Sprintf("工具 %s 没有可用的服务商，请在桌面端配置", toolName)
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("工具 %s 的可用服务商:\n", toolName))
+	for _, m := range valid {
+		isDefault := ""
+		if strings.EqualFold(m.ModelName, toolCfg.CurrentModel) {
+			isDefault = " [当前默认]"
+		}
+		modelId := m.ModelId
+		if len(modelId) > 20 {
+			modelId = modelId[:20] + "..."
+		}
+		b.WriteString(fmt.Sprintf("  - %s (model_id=%s)%s\n", m.ModelName, modelId, isDefault))
+	}
 	return b.String()
 }
 
@@ -1381,40 +1598,66 @@ func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {
 }
 
 func (h *IMMessageHandler) toolListMCPTools() string {
-	registry := h.app.mcpRegistry
-	if registry == nil {
-		return "MCP Registry 未初始化"
-	}
-	servers := registry.ListServers()
-	if len(servers) == 0 {
-		return "没有已注册的 MCP Server"
-	}
 	var b strings.Builder
-	for _, s := range servers {
-		b.WriteString(fmt.Sprintf("## %s (%s) 状态=%s\n", s.Name, s.ID, s.HealthStatus))
-		tools := registry.GetServerTools(s.ID)
-		if len(tools) == 0 {
-			b.WriteString("  (无工具或无法获取)\n")
-			continue
+	hasAny := false
+
+	// List local (stdio) MCP servers
+	if mgr := h.app.localMCPManager; mgr != nil {
+		for _, ts := range mgr.GetAllTools() {
+			hasAny = true
+			b.WriteString(fmt.Sprintf("## %s (%s) [本地/stdio]\n", ts.ServerName, ts.ServerID))
+			for _, t := range ts.Tools {
+				b.WriteString(fmt.Sprintf("  - %s: %s\n", t.Name, t.Description))
+			}
 		}
-		for _, t := range tools {
-			b.WriteString(fmt.Sprintf("  - %s: %s\n", t.Name, t.Description))
+	}
+
+	// List remote (HTTP) MCP servers
+	registry := h.app.mcpRegistry
+	if registry != nil {
+		servers := registry.ListServers()
+		for _, s := range servers {
+			hasAny = true
+			b.WriteString(fmt.Sprintf("## %s (%s) [远程/HTTP] 状态=%s\n", s.Name, s.ID, s.HealthStatus))
+			tools := registry.GetServerTools(s.ID)
+			if len(tools) == 0 {
+				b.WriteString("  (无工具或无法获取)\n")
+				continue
+			}
+			for _, t := range tools {
+				b.WriteString(fmt.Sprintf("  - %s: %s\n", t.Name, t.Description))
+			}
 		}
+	}
+
+	if !hasAny {
+		return "没有已注册的 MCP Server"
 	}
 	return b.String()
 }
 
 func (h *IMMessageHandler) toolCallMCPTool(args map[string]interface{}) string {
-	registry := h.app.mcpRegistry
-	if registry == nil {
-		return "MCP Registry 未初始化"
-	}
 	serverID, _ := args["server_id"].(string)
 	toolName, _ := args["tool_name"].(string)
 	if serverID == "" || toolName == "" {
 		return "缺少 server_id 或 tool_name 参数"
 	}
 	toolArgs, _ := args["arguments"].(map[string]interface{})
+
+	// Try local MCP manager first (stdio-based servers)
+	if mgr := h.app.localMCPManager; mgr != nil && mgr.IsRunning(serverID) {
+		result, err := mgr.CallTool(serverID, toolName, toolArgs)
+		if err != nil {
+			return fmt.Sprintf("本地 MCP 调用失败: %s", err.Error())
+		}
+		return result
+	}
+
+	// Fall back to remote MCP registry (HTTP-based servers)
+	registry := h.app.mcpRegistry
+	if registry == nil {
+		return "MCP Registry 未初始化"
+	}
 	result, err := registry.CallTool(serverID, toolName, toolArgs)
 	if err != nil {
 		return fmt.Sprintf("MCP 调用失败: %s", err.Error())
@@ -1428,13 +1671,164 @@ func (h *IMMessageHandler) toolListSkills() string {
 		return "Skill Executor 未初始化"
 	}
 	skills := exec.List()
-	if len(skills) == 0 {
-		return "没有已注册的 Skill"
-	}
+
 	var b strings.Builder
-	for _, s := range skills {
-		b.WriteString(fmt.Sprintf("- %s [%s]: %s\n", s.Name, s.Status, s.Description))
+
+	// Show local skills
+	if len(skills) > 0 {
+		b.WriteString("=== 本地已注册 Skill ===\n")
+		for _, s := range skills {
+			line := fmt.Sprintf("- %s [%s]: %s", s.Name, s.Status, s.Description)
+			if s.Source == "hub" {
+				line += fmt.Sprintf(" (来源: Hub, trust: %s)", s.TrustLevel)
+			}
+			b.WriteString(line + "\n")
+		}
+	} else {
+		b.WriteString("本地没有已注册的 Skill。\n")
 	}
+
+	// If local skills are empty or few, also show Hub recommendations
+	if len(skills) < 3 && h.app.skillHubClient != nil {
+		recs := h.app.skillHubClient.GetRecommendations()
+		if len(recs) > 0 {
+			b.WriteString("\n=== SkillHub 推荐 Skill（可用 install_skill_hub 安装）===\n")
+			for _, r := range recs {
+				b.WriteString(fmt.Sprintf("- [%s] %s: %s (trust: %s, downloads: %d, hub: %s)\n",
+					r.ID, r.Name, r.Description, r.TrustLevel, r.Downloads, r.HubURL))
+			}
+		} else {
+			b.WriteString("\n提示：可以使用 search_skill_hub 工具在 SkillHub 上搜索更多 Skill。\n")
+		}
+	}
+
+	return b.String()
+}
+
+func (h *IMMessageHandler) toolSearchSkillHub(args map[string]interface{}) string {
+	query, _ := args["query"].(string)
+	if query == "" {
+		return "缺少 query 参数"
+	}
+
+	if h.app.skillHubClient == nil {
+		h.app.ensureRemoteInfra()
+	}
+	if h.app.skillHubClient == nil {
+		return "SkillHub 客户端未初始化，请检查配置中的 skill_hub_urls"
+	}
+
+	results, err := h.app.skillHubClient.Search(context.Background(), query)
+	if err != nil {
+		return fmt.Sprintf("搜索失败: %s", err.Error())
+	}
+	if len(results) == 0 {
+		return fmt.Sprintf("在 SkillHub 上未找到与 %q 相关的 Skill", query)
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("找到 %d 个 Skill：\n", len(results)))
+	for _, r := range results {
+		tags := ""
+		if len(r.Tags) > 0 {
+			tags = " [" + strings.Join(r.Tags, ", ") + "]"
+		}
+		b.WriteString(fmt.Sprintf("- ID: %s | %s: %s%s (trust: %s, downloads: %d, hub: %s)\n",
+			r.ID, r.Name, r.Description, tags, r.TrustLevel, r.Downloads, r.HubURL))
+	}
+	b.WriteString("\n使用 install_skill_hub 工具安装，需提供 skill_id 和 hub_url 参数。")
+	return b.String()
+}
+
+func (h *IMMessageHandler) toolInstallSkillHub(args map[string]interface{}) string {
+	skillID, _ := args["skill_id"].(string)
+	hubURL, _ := args["hub_url"].(string)
+	if skillID == "" {
+		return "缺少 skill_id 参数"
+	}
+	if hubURL == "" {
+		return "缺少 hub_url 参数"
+	}
+
+	if h.app.skillHubClient == nil {
+		h.app.ensureRemoteInfra()
+	}
+	if h.app.skillHubClient == nil {
+		return "SkillHub 客户端未初始化"
+	}
+	if h.app.skillExecutor == nil {
+		return "Skill Executor 未初始化"
+	}
+
+	// Download from Hub
+	entry, err := h.app.skillHubClient.Install(context.Background(), skillID, hubURL)
+	if err != nil {
+		return fmt.Sprintf("安装失败: %s", err.Error())
+	}
+
+	// Security review if risk assessor is available
+	if h.app.riskAssessor != nil {
+		assessment := h.app.riskAssessor.AssessSkill(entry, entry.TrustLevel)
+		if assessment.Level == RiskCritical {
+			if h.app.auditLog != nil {
+				_ = h.app.auditLog.Log(AuditEntry{
+					Timestamp:    time.Now(),
+					Action:       AuditActionHubSkillReject,
+					ToolName:     "hub_skill_install",
+					RiskLevel:    RiskCritical,
+					PolicyAction: PolicyDeny,
+					Result:       fmt.Sprintf("rejected skill %s from %s: critical risk", skillID, hubURL),
+				})
+			}
+			return fmt.Sprintf("⚠️ Skill %q 包含高风险操作，已拒绝自动安装。风险因素: %s",
+				entry.Name, strings.Join(assessment.Factors, ", "))
+		}
+	}
+
+	// Register locally
+	if err := h.app.skillExecutor.Register(*entry); err != nil {
+		return fmt.Sprintf("注册失败: %s", err.Error())
+	}
+
+	// Audit log
+	if h.app.auditLog != nil {
+		_ = h.app.auditLog.Log(AuditEntry{
+			Timestamp:    time.Now(),
+			Action:       AuditActionHubSkillInstall,
+			ToolName:     "hub_skill_install",
+			RiskLevel:    RiskLow,
+			PolicyAction: PolicyAllow,
+			Result:       fmt.Sprintf("installed skill %s (%s) from %s, trust: %s", entry.Name, skillID, hubURL, entry.TrustLevel),
+		})
+	}
+
+	// Auto-run: default to true unless explicitly set to false.
+	autoRun := true
+	if v, ok := args["auto_run"]; ok {
+		switch val := v.(type) {
+		case bool:
+			autoRun = val
+		case string:
+			autoRun = strings.EqualFold(val, "true")
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("✅ 已成功安装 Skill「%s」\n描述: %s\n来源: %s\n信任等级: %s\n",
+		entry.Name, entry.Description, hubURL, entry.TrustLevel))
+
+	if autoRun {
+		b.WriteString(fmt.Sprintf("\n正在立即执行 Skill「%s」...\n", entry.Name))
+		result, err := h.app.skillExecutor.Execute(entry.Name)
+		if err != nil {
+			b.WriteString(fmt.Sprintf("执行失败: %s\n%s", err.Error(), result))
+		} else {
+			b.WriteString(fmt.Sprintf("执行结果:\n%s", result))
+		}
+	} else {
+		b.WriteString(fmt.Sprintf("\n可以使用 run_skill 工具执行，名称为: %s", entry.Name))
+	}
+
 	return b.String()
 }
 
@@ -1765,7 +2159,7 @@ func (h *IMMessageHandler) toolListDirectory(args map[string]interface{}) string
 	return b.String()
 }
 
-const sendFileMaxSize = 50 << 20 // 50 MB
+const sendFileMaxSize = 200 << 20 // 200 MB — large files are handled by plugin-level fallback (temp URL)
 
 func (h *IMMessageHandler) toolSendFile(args map[string]interface{}) string {
 	p, _ := args["path"].(string)
@@ -2123,4 +2517,24 @@ func (h *IMMessageHandler) toolImportConfig(args map[string]interface{}) string 
 		}
 	}
 	return b.String()
+}
+
+// toolSetMaxIterations allows the agent to dynamically adjust the max
+// iterations for the current conversation loop. This does NOT change the
+// persisted config — it only affects the in-flight loop.
+func (h *IMMessageHandler) toolSetMaxIterations(args map[string]interface{}) string {
+	n, ok := args["max_iterations"].(float64)
+	if !ok || n < 1 {
+		return "缺少或无效的 max_iterations 参数（需要 1-200 的整数）"
+	}
+	limit := int(n)
+	if limit > 200 {
+		limit = 200
+	}
+	reason := stringVal(args, "reason")
+	h.loopMaxOverride = limit
+	if reason != "" {
+		return fmt.Sprintf("✅ 已将当前对话最大轮数调整为 %d（原因: %s）", limit, reason)
+	}
+	return fmt.Sprintf("✅ 已将当前对话最大轮数调整为 %d", limit)
 }

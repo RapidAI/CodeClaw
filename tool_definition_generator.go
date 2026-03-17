@@ -7,10 +7,12 @@ import (
 )
 
 // ToolDefinitionGenerator dynamically generates the Agent's tool definition
-// list by merging builtin tool definitions with tools from healthy MCP Servers.
+// list by merging builtin tool definitions with tools from healthy MCP Servers
+// and running local (stdio) MCP Servers.
 type ToolDefinitionGenerator struct {
-	registry    *MCPRegistry
-	builtinDefs []map[string]interface{} // the 12 builtin tool definitions
+	registry        *MCPRegistry
+	localMCPManager *LocalMCPManager
+	builtinDefs     []map[string]interface{} // the 12 builtin tool definitions
 }
 
 // NewToolDefinitionGenerator creates a new generator.
@@ -22,9 +24,14 @@ func NewToolDefinitionGenerator(registry *MCPRegistry, builtinDefs []map[string]
 	}
 }
 
+// SetLocalMCPManager sets the local MCP manager for stdio-based tool discovery.
+func (g *ToolDefinitionGenerator) SetLocalMCPManager(mgr *LocalMCPManager) {
+	g.localMCPManager = mgr
+}
+
 // Generate produces the complete tool definition list: builtin + dynamic MCP tools.
 // Dynamic tool names that conflict with builtin names get a server_id prefix.
-// Only tools from healthy MCP Servers are included.
+// Only tools from healthy remote MCP Servers and running local MCP Servers are included.
 func (g *ToolDefinitionGenerator) Generate() []map[string]interface{} {
 	// Start with a copy of builtin definitions.
 	result := make([]map[string]interface{}, len(g.builtinDefs))
@@ -38,36 +45,44 @@ func (g *ToolDefinitionGenerator) Generate() []map[string]interface{} {
 		}
 	}
 
-	if g.registry == nil {
-		return result
-	}
-
-	// Collect tools from all healthy MCP Servers.
-	servers := g.registry.ListServers()
-
-	// Track dynamic tool names across servers for inter-server conflict detection.
+	// Track dynamic tool names across all servers for conflict detection.
 	// Maps tool name → server ID of the first server that registered it.
 	dynamicNames := make(map[string]string)
-	// Deferred definitions that need conflict resolution between dynamic tools.
 	type pendingTool struct {
 		serverID string
 		tool     MCPToolView
 	}
 	var pending []pendingTool
 
-	for _, srv := range servers {
-		if srv.HealthStatus != "healthy" {
-			continue
+	// Collect tools from healthy remote MCP Servers.
+	if g.registry != nil {
+		servers := g.registry.ListServers()
+		for _, srv := range servers {
+			if srv.HealthStatus != "healthy" {
+				continue
+			}
+			tools := g.registry.GetServerTools(srv.ID)
+			for _, t := range tools {
+				pending = append(pending, pendingTool{serverID: srv.ID, tool: t})
+				if _, exists := dynamicNames[t.Name]; !exists {
+					dynamicNames[t.Name] = srv.ID
+				} else {
+					dynamicNames[t.Name] = ""
+				}
+			}
 		}
+	}
 
-		tools := g.registry.GetServerTools(srv.ID)
-		for _, t := range tools {
-			pending = append(pending, pendingTool{serverID: srv.ID, tool: t})
-			if _, exists := dynamicNames[t.Name]; !exists {
-				dynamicNames[t.Name] = srv.ID
-			} else {
-				// Mark as conflicting by setting to empty string.
-				dynamicNames[t.Name] = ""
+	// Collect tools from running local (stdio) MCP Servers.
+	if g.localMCPManager != nil {
+		for _, ts := range g.localMCPManager.GetAllTools() {
+			for _, t := range ts.Tools {
+				pending = append(pending, pendingTool{serverID: ts.ServerID, tool: t})
+				if _, exists := dynamicNames[t.Name]; !exists {
+					dynamicNames[t.Name] = ts.ServerID
+				} else {
+					dynamicNames[t.Name] = ""
+				}
 			}
 		}
 	}
@@ -75,23 +90,16 @@ func (g *ToolDefinitionGenerator) Generate() []map[string]interface{} {
 	// Generate definitions for each dynamic tool.
 	for _, p := range pending {
 		name := p.tool.Name
-
-		// Check conflict with builtin tools — always prefix.
 		needsPrefix := builtinNames[name]
-
-		// Check conflict between dynamic tools from different servers.
 		if !needsPrefix {
 			if ownerID := dynamicNames[name]; ownerID == "" {
-				// Multiple servers have the same tool name — prefix all.
 				needsPrefix = true
 			}
 		}
-
 		finalName := name
 		if needsPrefix {
 			finalName = fmt.Sprintf("%s_%s", p.serverID, name)
 		}
-
 		def := mcpToolToDefinition(finalName, p.tool)
 		result = append(result, def)
 	}

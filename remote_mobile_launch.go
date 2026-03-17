@@ -22,6 +22,7 @@ type RemoteStartSessionRequest struct {
 	Tool        string `json:"tool"`
 	ProjectID   string `json:"project_id,omitempty"`
 	ProjectPath string `json:"project_path,omitempty"`
+	Provider    string `json:"provider,omitempty"`
 	UseProxy    *bool  `json:"use_proxy,omitempty"`
 	YoloMode    *bool  `json:"yolo_mode,omitempty"`
 	AdminMode   *bool  `json:"admin_mode,omitempty"`
@@ -109,7 +110,7 @@ func (a *App) StartRemoteSessionForProject(req RemoteStartSessionRequest) (Remot
 		pythonEnv = strings.TrimSpace(req.PythonEnv)
 	}
 
-	spec, err := a.buildRemoteLaunchSpec(tool, cfg, yoloMode, adminMode, pythonEnv, project.Path, useProxy)
+	spec, err := a.buildRemoteLaunchSpec(tool, cfg, yoloMode, adminMode, pythonEnv, project.Path, useProxy, req.Provider)
 	if err != nil {
 		return RemoteSessionView{}, err
 	}

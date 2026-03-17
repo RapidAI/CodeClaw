@@ -220,6 +220,44 @@ func (a *App) TestMaclawLLM(llm MaclawLLMConfig) (string, error) {
 	return result.Choices[0].Message.Content, nil
 }
 
+// defaultAgentMaxIterations is the fallback when the user has not configured a custom value.
+const defaultAgentMaxIterations = 12
+
+// GetMaclawAgentMaxIterations returns the configured max agent iterations.
+//   - positive value: use that as the limit
+//   - -1: unlimited (agent self-manages via set_max_iterations tool)
+//   - 0 or missing: not configured → return default (12)
+func (a *App) GetMaclawAgentMaxIterations() int {
+	cfg, err := a.LoadConfig()
+	if err != nil || cfg.MaclawAgentMaxIterations == 0 {
+		return defaultAgentMaxIterations
+	}
+	if cfg.MaclawAgentMaxIterations < 0 {
+		return 0 // -1 stored → 0 returned → means "unlimited"
+	}
+	return cfg.MaclawAgentMaxIterations
+}
+
+// SetMaclawAgentMaxIterations persists the max agent iterations setting.
+//   - n > 0: fixed limit
+//   - n == 0: unlimited (stored as -1 internally)
+//   - n < 0: reset to default (stored as 0 internally, i.e. field absent)
+func (a *App) SetMaclawAgentMaxIterations(n int) error {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	switch {
+	case n > 0:
+		cfg.MaclawAgentMaxIterations = n
+	case n == 0:
+		cfg.MaclawAgentMaxIterations = -1 // sentinel for "unlimited"
+	default:
+		cfg.MaclawAgentMaxIterations = 0 // zero-value = not configured
+	}
+	return a.SaveConfig(cfg)
+}
+
 // MaclawLLMStatus represents the online/offline status of the MaClaw LLM agent.
 type MaclawLLMStatus struct {
 	Online     bool   `json:"online"`

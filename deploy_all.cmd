@@ -29,6 +29,8 @@ goto :main
 
 :exit_with
 set "EXIT_CODE=%~1"
+REM -- Ensure password temp file is always cleaned up --
+if exist "%PASSWORD_FILE%" del /q "%PASSWORD_FILE%" >nul 2>nul
 if defined PAUSE_ON_EXIT (
   echo.
   pause
@@ -130,20 +132,11 @@ echo Deployment completed successfully.
 echo   Hub       -^> %REMOTE_HOST%:%REMOTE_HUB_DIR%
 echo   HubCenter -^> %REMOTE_HOST%:%REMOTE_HUBCENTER_DIR%
 echo   Mode      -^> upload source, build on remote host, keep config/data
-goto :success
-
-:fail
-goto :finalize_fail
-
-:success
-goto :finalize_success
-
-:finalize_fail
-call :exit_with 1
+call :exit_with 0
 goto :eof
 
-:finalize_success
-call :exit_with 0
+:fail
+call :exit_with 1
 goto :eof
 
 :prompt_password
@@ -187,7 +180,7 @@ if not exist "%POWERSHELL%" (
   "$ErrorActionPreference = 'Stop';" ^
   "$src = '%ROOT_DIR_TRIM%';" ^
   "$dst = '%STAGE_ROOT%';" ^
-  "$skipNames = @('.git','.gocache','.gomodcache','.kode','.vscode','build','dist');" ^
+  "$skipNames = @('.git','.gocache','.gomodcache','.kiro','.kode','.vscode','build','dist');" ^
   "Get-ChildItem -Path $src -Force | Where-Object { $skipNames -notcontains $_.Name } | ForEach-Object { Copy-Item -Path $_.FullName -Destination $dst -Recurse -Force };" ^
   "$removePaths = @('frontend\node_modules','hub\bin','hub\package','hub\data','hub\.gocache','hub\.gomodcache','hubcenter\bin','hubcenter\package','hubcenter\data','hubcenter\.gocache','hubcenter\.gomodcache');" ^
   "foreach ($rel in $removePaths) { $path = Join-Path $dst $rel; if (Test-Path $path) { Remove-Item -Recurse -Force $path -ErrorAction SilentlyContinue } };" ^
@@ -223,6 +216,9 @@ setlocal DisableDelayedExpansion
   echo mkdir -p "$SRC_ROOT" "$BUILD_ROOT"
   echo tar -xzf "$ARCHIVE_PATH" -C "$SRC_ROOT"
   echo cd "$SRC_ROOT"
+  echo.
+  echo echo "[remote] Downloading dependencies..."
+  echo GOPROXY="$GOPROXY" go mod download
   echo.
   echo echo "[remote] Building hub..."
   echo GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -o "$BUILD_ROOT/maclaw-hub" ./hub/cmd/hub

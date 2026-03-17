@@ -3,12 +3,18 @@ package feishu
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"image/png"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/im"
@@ -32,7 +38,34 @@ type FeishuPlugin struct {
 	// adapter is an optional reference to the IM Adapter. When set,
 	// handleBotMessage routes messages through the adapter pipeline.
 	adapter IMAdapter
+
+	// publicBaseURL is the hub's externally reachable URL, used to
+	// construct temporary download URLs for large file uploads.
+	publicBaseURL string
+
+	// tempFiles stores metadata for temporary file downloads keyed by token.
+	// File data is persisted to disk under tempDir; metadata is kept in memory
+	// for fast lookup and expiry tracking.
+	tempMu    sync.Mutex
+	tempFiles map[string]*feishuTempFileEntry
+	tempDir   string // directory for temp file storage on disk
 }
+
+// feishuTempFileEntry holds metadata for a temporary download file.
+// The actual bytes live on disk at filepath.Join(tempDir, token).
+type feishuTempFileEntry struct {
+	FileName  string
+	MimeType  string
+	ExpiresAt time.Time
+}
+
+const (
+	// feishuTempFileTTL is how long a temp file is kept before cleanup.
+	feishuTempFileTTL = 10 * time.Minute
+	// feishuUploadMaxSize: files larger than this (raw bytes) use the
+	// temp-URL fallback instead of Feishu's UploadFile API.
+	feishuUploadMaxSize = 30 * 1024 * 1024 // 30 MB — Feishu im/v1/files limit
+)
 
 // IMAdapter is a minimal interface for the IM Adapter so that the feishu
 // package does not import hub/internal/im (avoiding circular deps if needed).
@@ -43,9 +76,23 @@ type IMAdapter interface {
 
 // NewPlugin creates a FeishuPlugin wrapping the given Notifier.
 func NewPlugin(n *Notifier) *FeishuPlugin {
-	return &FeishuPlugin{
-		notifier: n,
+	dir := filepath.Join(os.TempDir(), "feishu-tempfiles")
+	_ = os.MkdirAll(dir, 0o700)
+	// Clean up any stale files from a previous run.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(dir, e.Name()))
 	}
+	return &FeishuPlugin{
+		notifier:  n,
+		tempFiles: make(map[string]*feishuTempFileEntry),
+		tempDir:   dir,
+	}
+}
+
+// SetPublicBaseURL sets the hub's externally reachable URL for temp file downloads.
+func (p *FeishuPlugin) SetPublicBaseURL(url string) {
+	p.publicBaseURL = strings.TrimRight(url, "/")
 }
 
 // SetAdapter wires the IM Adapter for message routing. When set, incoming
@@ -158,10 +205,12 @@ func (p *FeishuPlugin) uploadBase64Image(ctx context.Context, b64Data string) (s
 		return "", fmt.Errorf("base64 decode: %w", err)
 	}
 
-	img, err := png.Decode(bytes.NewReader(raw))
+	// Decode any supported image format (png, jpeg, webp, gif, bmp, tiff).
+	img, format, err := decodeAnyImage(raw)
 	if err != nil {
-		return "", fmt.Errorf("png decode: %w", err)
+		return "", fmt.Errorf("image decode: %w", err)
 	}
+	log.Printf("[feishu] uploadBase64Image: detected format=%s", format)
 
 	bot := p.notifier.Bot()
 	if bot == nil {
@@ -184,8 +233,9 @@ func (p *FeishuPlugin) uploadBase64Image(ctx context.Context, b64Data string) (s
 }
 
 // SendFile sends a file to the target user via Feishu.
-// It uploads the base64-encoded file data using the Feishu file upload API,
-// then sends it as a file message.
+// Small files (≤ feishuUploadMaxSize) are uploaded via the Feishu file API
+// and sent as native file messages. Large files are stored as temporary
+// downloads on the hub and a text link is sent instead.
 func (p *FeishuPlugin) SendFile(ctx context.Context, target im.UserTarget, fileData, fileName, mimeType string) error {
 	openID := target.PlatformUID
 	if openID == "" {
@@ -203,11 +253,21 @@ func (p *FeishuPlugin) SendFile(ctx context.Context, target im.UserTarget, fileD
 	}
 
 	// Determine file type for Feishu API.
-	fileType := "stream"
 	if strings.HasPrefix(mimeType, "image/") {
 		// For images, use SendImage path instead.
 		return p.SendImage(ctx, target, fileData, fileName)
 	}
+
+	// Large file → temp URL fallback.
+	if len(raw) > feishuUploadMaxSize {
+		if p.publicBaseURL == "" {
+			return fmt.Errorf("feishu: file too large (%d bytes, max %d) and no public base URL configured for temp download", len(raw), feishuUploadMaxSize)
+		}
+		return p.sendFileViaTempURL(ctx, target, raw, fileName, mimeType)
+	}
+
+	// Small file → native Feishu upload.
+	fileType := "stream"
 
 	// Use a dedicated context with generous timeout for file upload,
 	// since the caller's context may have a shorter deadline that's
@@ -241,6 +301,201 @@ func (p *FeishuPlugin) SendFile(ctx context.Context, target im.UserTarget, fileD
 	}
 
 	return nil
+}
+
+// sendFileViaTempURL stores the file on disk and sends a download link
+// to the user as a text message.
+func (p *FeishuPlugin) sendFileViaTempURL(ctx context.Context, target im.UserTarget, raw []byte, fileName, mimeType string) error {
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	token := feishuGenerateTempToken()
+
+	// Write file data to disk instead of holding it in memory.
+	filePath := filepath.Join(p.tempDir, token)
+	if err := os.WriteFile(filePath, raw, 0o600); err != nil {
+		return fmt.Errorf("feishu: write temp file to disk: %w", err)
+	}
+
+	p.tempMu.Lock()
+	p.tempFiles[token] = &feishuTempFileEntry{
+		FileName:  fileName,
+		MimeType:  mimeType,
+		ExpiresAt: time.Now().Add(feishuTempFileTTL),
+	}
+	// Inline cleanup of expired entries.
+	now := time.Now()
+	for k, v := range p.tempFiles {
+		if now.After(v.ExpiresAt) {
+			delete(p.tempFiles, k)
+			_ = os.Remove(filepath.Join(p.tempDir, k))
+		}
+	}
+	p.tempMu.Unlock()
+
+	downloadURL := fmt.Sprintf("%s/api/feishu/tempfile/%s", p.publicBaseURL, token)
+	sizeMB := float64(len(raw)) / (1024 * 1024)
+	text := fmt.Sprintf("📎 文件过大（%.1f MB），请通过链接下载（%d 分钟内有效）：\n%s\n文件名: %s",
+		sizeMB, int(feishuTempFileTTL.Minutes()), downloadURL, fileName)
+
+	return p.sendTextWithLink(ctx, target, text, downloadURL, "点击下载文件")
+}
+
+// ServeTempFile serves a previously stored temporary file for download.
+func (p *FeishuPlugin) ServeTempFile(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	if token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+
+	// Reject tokens that could be used for path traversal.
+	if strings.Contains(token, "..") || strings.ContainsAny(token, "/\\") || token != filepath.Base(token) {
+		http.Error(w, "invalid token", http.StatusBadRequest)
+		return
+	}
+
+	// Feishu (and other IM clients) often send a preflight/preview request
+	// (e.g. HEAD, or a GET from a link-preview bot) before the user actually
+	// clicks the link. If we delete the file on the preview fetch, the real
+	// user download will 404. Detect preview requests and skip deletion.
+	ua := strings.ToLower(r.UserAgent())
+	isPreview := r.Method == http.MethodHead ||
+		strings.Contains(ua, "bot") ||
+		strings.Contains(ua, "spider") ||
+		strings.Contains(ua, "preview") ||
+		strings.Contains(ua, "lark") ||
+		strings.Contains(ua, "feishu")
+
+	log.Printf("[feishu/tempfile] request token=%s method=%s preview=%v UA=%s", token, r.Method, isPreview, r.UserAgent())
+
+	filePath := filepath.Join(p.tempDir, token)
+
+	p.tempMu.Lock()
+	entry, ok := p.tempFiles[token]
+	p.tempMu.Unlock()
+
+	if !ok {
+		// Fallback: check if the file exists on disk even though metadata
+		// is missing (e.g. after a process restart that cleared the map).
+		if _, statErr := os.Stat(filePath); statErr != nil {
+			log.Printf("[feishu/tempfile] token=%s not found in map or disk", token)
+			http.Error(w, "file not found or expired", http.StatusNotFound)
+			return
+		}
+		// File exists on disk but metadata was lost — serve with generic headers.
+		p.serveTempFileFromDisk(w, filePath, "application/octet-stream", "download")
+		if !isPreview {
+			_ = os.Remove(filePath)
+		}
+		return
+	}
+
+	if time.Now().After(entry.ExpiresAt) {
+		p.tempMu.Lock()
+		delete(p.tempFiles, token)
+		p.tempMu.Unlock()
+		_ = os.Remove(filePath)
+		http.Error(w, "file expired", http.StatusGone)
+		return
+	}
+
+	p.serveTempFileFromDisk(w, filePath, entry.MimeType, entry.FileName)
+
+	// Only remove after a real user download, not a bot/preview fetch.
+	if !isPreview {
+		p.tempMu.Lock()
+		delete(p.tempFiles, token)
+		p.tempMu.Unlock()
+		_ = os.Remove(filePath)
+	}
+}
+
+// serveTempFileFromDisk streams a file from disk to the HTTP response.
+// Uses io.Copy for memory-efficient transfer of large files.
+func (p *FeishuPlugin) serveTempFileFromDisk(w http.ResponseWriter, filePath, mimeType, fileName string) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("[feishu/tempfile] failed to open %s: %v", filePath, err)
+		http.Error(w, "file not found or expired", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		http.Error(w, "failed to stat file", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[feishu/tempfile] serving file=%s size=%d", fileName, info.Size())
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+	if fileName != "" {
+		safe := strings.Map(func(r rune) rune {
+			if r > 127 || r == '"' || r == '\\' {
+				return '_'
+			}
+			return r
+		}, fileName)
+		w.Header().Set("Content-Disposition",
+			fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, safe, url.PathEscape(fileName)))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, f)
+}
+
+// sendTextWithLink sends a Feishu post (rich text) message that includes a
+// clickable hyperlink. This avoids the problem where plain-text URLs in Feishu
+// post messages are not always rendered as clickable links.
+func (p *FeishuPlugin) sendTextWithLink(ctx context.Context, target im.UserTarget, text, linkURL, linkText string) error {
+	openID := target.PlatformUID
+	if openID == "" {
+		return fmt.Errorf("feishu: PlatformUID (open_id) is required")
+	}
+	bot := p.notifier.Bot()
+	if bot == nil {
+		return fmt.Errorf("feishu bot not initialized")
+	}
+
+	// Build post content: split text by \n, replace the raw URL line with
+	// an <a> element so it's clickable in Feishu.
+	lines := strings.Split(text, "\n")
+	var rows [][]lark.PostElem
+	for _, line := range lines {
+		if strings.TrimSpace(line) == linkURL {
+			// Replace the raw URL line with a clickable link element.
+			lt := linkText
+			href := linkURL
+			rows = append(rows, []lark.PostElem{
+				{Tag: "a", Text: &lt, Href: &href},
+			})
+		} else {
+			t := line
+			rows = append(rows, []lark.PostElem{
+				{Tag: "text", Text: &t},
+			})
+		}
+	}
+	pc := lark.PostContent{
+		"zh_cn": {Content: rows},
+	}
+	msg := lark.NewMsgBuffer(lark.MsgPost).
+		BindOpenID(openID).
+		Post(&pc).
+		Build()
+	if _, err := bot.PostMessage(ctx, msg); err != nil {
+		return fmt.Errorf("feishu: send post with link: %w", err)
+	}
+	return nil
+}
+
+func feishuGenerateTempToken() string {
+	b := make([]byte, 24)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // ResolveUser maps a Feishu open_id to the unified internal user ID.

@@ -1,14 +1,10 @@
 package feishu
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"image"
-	_ "image/jpeg" // register JPEG decoder for image.Decode
-	_ "image/png"  // register PNG decoder for image.Decode
 	"log"
 	"net/http"
 	"strings"
@@ -837,17 +833,19 @@ func (n *Notifier) onSessionImage(event session.Event) {
 			return
 		}
 
-		// Decode into image.Image using the standard library's format
-		// registry (png and jpeg are imported for side-effect registration).
-		img, format, err := image.Decode(bytes.NewReader(imgBytes))
+		// Decode into image.Image – supports png, jpeg, webp, gif, bmp, tiff
+		// via the format decoders registered in image_convert.go.
+		img, format, err := decodeAnyImage(imgBytes)
 		if err != nil {
 			log.Printf("[feishu] image parse failed (session=%s, media_type=%s): %v", sessionID, imgData.MediaType, err)
 			return
 		}
-		_ = format
+		log.Printf("[feishu] onSessionImage: detected format=%s (session=%s)", format, sessionID)
 
-		// Upload to Feishu.
-		resp, err := n.bot.UploadImageObject(context.Background(), img)
+		// Upload to Feishu with a generous timeout for large images.
+		uploadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		resp, err := n.bot.UploadImageObject(uploadCtx, img)
 		if err != nil {
 			log.Printf("[feishu] image upload failed (session=%s): %v", sessionID, err)
 			return

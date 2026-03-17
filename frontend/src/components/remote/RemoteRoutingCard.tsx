@@ -25,6 +25,9 @@ type Props = {
     onDemandInstallingTool: string;
     translate: (key: string) => string;
     formatText: (key: string, values?: Record<string, string>) => string;
+    providers: Array<{name: string; model_id: string; is_default: boolean}>;
+    selectedProvider: string;
+    setSelectedProvider: (provider: string) => void;
 };
 
 export function RemoteRoutingCard(props: Props) {
@@ -51,6 +54,9 @@ export function RemoteRoutingCard(props: Props) {
         onDemandInstallingTool,
         translate,
         formatText,
+        providers,
+        selectedProvider,
+        setSelectedProvider,
     } = props;
 
     return (
@@ -81,13 +87,23 @@ export function RemoteRoutingCard(props: Props) {
                 </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 200px) 1fr", gap: "8px", marginTop: "8px", alignItems: "start" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 200px) minmax(120px, 160px) 1fr", gap: "8px", marginTop: "8px", alignItems: "start" }}>
                 <div>
                     <div style={remoteLabelStyle}>{translate("remoteTool")}</div>
                     <select className="form-input" value={selectedRemoteTool} onChange={(e) => setSelectedRemoteTool(e.target.value as RemoteToolName)} disabled={!!remoteBusy}>
                         {visibleRemoteTools.map((tool) => (
                             <option key={tool.name} value={tool.name} disabled={tool.can_start === false}>
                                 {tool.display_name}{tool.installed === false ? ` (${translate("remoteNotInstalled")})` : ""}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                <div>
+                    <div style={remoteLabelStyle}>{translate("remoteProviderLabel")}</div>
+                    <select className="form-input" value={selectedProvider} onChange={(e) => setSelectedProvider(e.target.value)} disabled={!!remoteBusy || providers.length === 0}>
+                        {providers.map((p) => (
+                            <option key={p.name} value={p.name}>
+                                {p.name}{p.is_default ? ` (${translate("remoteProviderDefault")})` : ""}
                             </option>
                         ))}
                     </select>

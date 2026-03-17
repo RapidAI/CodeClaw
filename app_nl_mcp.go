@@ -526,3 +526,154 @@ func (a *App) CheckMCPServerHealth(serverID string) error {
 	}
 	return a.mcpRegistry.HealthCheck(serverID)
 }
+
+// ─── Local (stdio) MCP Server support ───────────────────────────────────────
+
+// LocalMCPServerEntry represents a local MCP server launched via command (e.g. npx).
+type LocalMCPServerEntry struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Command string            `json:"command"`           // e.g. "npx"
+	Args    []string          `json:"args,omitempty"`    // e.g. ["-y", "@modelcontextprotocol/server-brave-search"]
+	Env     map[string]string `json:"env,omitempty"`     // e.g. {"BRAVE_API_KEY": "xxx"}
+	Disabled bool             `json:"disabled,omitempty"`
+	CreatedAt string          `json:"created_at"`
+}
+
+// loadLocalServers reads local MCP server entries from config.
+func (r *MCPRegistry) loadLocalServers() []LocalMCPServerEntry {
+	cfg, err := r.app.LoadConfig()
+	if err != nil {
+		return nil
+	}
+	return cfg.LocalMCPServers
+}
+
+// saveLocalServers persists local MCP server entries to config.
+func (r *MCPRegistry) saveLocalServers(servers []LocalMCPServerEntry) error {
+	cfg, err := r.app.LoadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.LocalMCPServers = servers
+	return r.app.SaveConfig(cfg)
+}
+
+// RegisterLocal adds a new local MCP server entry.
+func (r *MCPRegistry) RegisterLocal(entry LocalMCPServerEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	servers := r.loadLocalServers()
+	if entry.ID == "" {
+		entry.ID = fmt.Sprintf("local-%d", time.Now().UnixNano())
+	}
+	if entry.CreatedAt == "" {
+		entry.CreatedAt = time.Now().Format(time.RFC3339)
+	}
+	servers = append(servers, entry)
+	return r.saveLocalServers(servers)
+}
+
+// UpdateLocal updates an existing local MCP server entry.
+func (r *MCPRegistry) UpdateLocal(entry LocalMCPServerEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	servers := r.loadLocalServers()
+	for i, s := range servers {
+		if s.ID == entry.ID {
+			entry.CreatedAt = s.CreatedAt
+			servers[i] = entry
+			return r.saveLocalServers(servers)
+		}
+	}
+	return fmt.Errorf("local MCP server %s not found", entry.ID)
+}
+
+// UnregisterLocal removes a local MCP server entry by ID.
+func (r *MCPRegistry) UnregisterLocal(serverID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	servers := r.loadLocalServers()
+	for i, s := range servers {
+		if s.ID == serverID {
+			servers = append(servers[:i], servers[i+1:]...)
+			return r.saveLocalServers(servers)
+		}
+	}
+	return fmt.Errorf("local MCP server %s not found", serverID)
+}
+
+// ListLocalServers returns all local MCP server entries.
+func (r *MCPRegistry) ListLocalServers() []LocalMCPServerEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.loadLocalServers()
+}
+
+// ─── Wails bindings for Local MCP Servers ───────────────────────────────────
+
+// ListLocalMCPServers returns all local (stdio) MCP server configs (Wails binding).
+func (a *App) ListLocalMCPServers() []LocalMCPServerEntry {
+	if a.mcpRegistry == nil {
+		return nil
+	}
+	return a.mcpRegistry.ListLocalServers()
+}
+
+// RegisterLocalMCPServer adds a new local MCP server config (Wails binding).
+func (a *App) RegisterLocalMCPServer(server LocalMCPServerEntry) error {
+	if a.mcpRegistry == nil {
+		return fmt.Errorf("MCP registry not initialized")
+	}
+	return a.mcpRegistry.RegisterLocal(server)
+}
+
+// UpdateLocalMCPServer updates an existing local MCP server config (Wails binding).
+func (a *App) UpdateLocalMCPServer(server LocalMCPServerEntry) error {
+	if a.mcpRegistry == nil {
+		return fmt.Errorf("MCP registry not initialized")
+	}
+	return a.mcpRegistry.UpdateLocal(server)
+}
+
+// UnregisterLocalMCPServer removes a local MCP server config by ID (Wails binding).
+func (a *App) UnregisterLocalMCPServer(serverID string) error {
+	if a.mcpRegistry == nil {
+		return fmt.Errorf("MCP registry not initialized")
+	}
+	return a.mcpRegistry.UnregisterLocal(serverID)
+}
+
+// SyncLocalMCPServers triggers the local MCP manager to re-read config
+// and start/stop processes accordingly (Wails binding).
+func (a *App) SyncLocalMCPServers() error {
+	if a.localMCPManager == nil {
+		return fmt.Errorf("local MCP manager not initialized")
+	}
+	a.localMCPManager.SyncFromConfig()
+	return nil
+}
+
+// LocalMCPServerStatus represents the runtime status of a local MCP server.
+type LocalMCPServerStatus struct {
+	ID      string `json:"id"`
+	Running bool   `json:"running"`
+}
+
+// GetLocalMCPServerStatuses returns the running status of all configured
+// local MCP servers (Wails binding).
+func (a *App) GetLocalMCPServerStatuses() []LocalMCPServerStatus {
+	if a.mcpRegistry == nil {
+		return nil
+	}
+	entries := a.mcpRegistry.ListLocalServers()
+	result := make([]LocalMCPServerStatus, len(entries))
+	for i, e := range entries {
+		running := false
+		if a.localMCPManager != nil {
+			running = a.localMCPManager.IsRunning(e.ID)
+		}
+		result[i] = LocalMCPServerStatus{ID: e.ID, Running: running}
+	}
+	return result
+}

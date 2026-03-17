@@ -13,6 +13,7 @@ import {
     InstallToolOnDemand,
     ListRemoteSessions,
     ListRemoteToolMetadata,
+    ListValidProviders,
     ProbeRemoteHub,
     ReconnectRemoteHub,
     RunRemoteToolSmoke,
@@ -99,6 +100,8 @@ export function useRemotePanel(params: UseRemotePanelParams) {
     const [invitationCodeRequired, setInvitationCodeRequired] = useState(false);
     const [invitationCode, setInvitationCodeRaw] = useState("");
     const [invitationCodeError, setInvitationCodeError] = useState("");
+    const [providers, setProviders] = useState<Array<{name: string; model_id: string; is_default: boolean}>>([]);
+    const [selectedProvider, setSelectedProvider] = useState<string>("");
 
     // Track session IDs that have been killed locally but may not yet be
     // reflected by the backend.  refreshRemotePanel will filter these out
@@ -335,7 +338,7 @@ export function useRemotePanel(params: UseRemotePanelParams) {
         }
         setRemoteBusy("start-session");
         try {
-            await StartRemoteSession(selectedRemoteTool, projectDir, getUseProxy());
+            await StartRemoteSession(selectedRemoteTool, projectDir, getUseProxy(), selectedProvider);
             await refreshRemotePanel();
             showToastMessage(formatText("remoteStartTool", { tool: getRemoteToolLabel(selectedRemoteTool) }), 3000);
         } catch (err) {
@@ -369,9 +372,9 @@ export function useRemotePanel(params: UseRemotePanelParams) {
         setRemoteBusy("quick-start");
         try {
             if (launchSource === "handoff") {
-                await StartRemoteHandoffSession(tool, projectDir, getUseProxy());
+                await StartRemoteHandoffSession(tool, projectDir, getUseProxy(), selectedProvider);
             } else {
-                await StartRemoteSession(tool, projectDir, getUseProxy());
+                await StartRemoteSession(tool, projectDir, getUseProxy(), selectedProvider);
             }
             await refreshRemotePanel();
             showToastMessage(formatText("remoteStartTool", { tool: getRemoteToolLabel(tool) }), 3000);
@@ -636,6 +639,21 @@ export function useRemotePanel(params: UseRemotePanelParams) {
         setRemoteSmokeReport(null);
     }, [selectedRemoteTool]);
 
+    useEffect(() => {
+        // Clear stale provider state immediately so a mid-flight "Start"
+        // won't send a provider name that belongs to the previous tool.
+        setProviders([]);
+        setSelectedProvider("");
+        ListValidProviders(selectedRemoteTool)
+            .then((list) => {
+                const providerList = Array.isArray(list) ? list : [];
+                setProviders(providerList);
+                const defaultProvider = providerList.find((p: any) => p.is_default);
+                setSelectedProvider(defaultProvider?.name || (providerList.length > 0 ? providerList[0].name : ""));
+            })
+            .catch((err) => console.error("Failed to load providers:", err));
+    }, [selectedRemoteTool]);
+
     return {
         remoteActivationStatus,
         remoteConnectionStatus,
@@ -683,5 +701,8 @@ export function useRemotePanel(params: UseRemotePanelParams) {
         invitationCode,
         setInvitationCode,
         invitationCodeError,
+        providers,
+        selectedProvider,
+        setSelectedProvider,
     };
 }

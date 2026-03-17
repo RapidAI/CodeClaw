@@ -20,28 +20,43 @@ set "PATH=%GOPATH%\bin;%PATH%"
 REM -- Clean previous build artifacts --
 echo [Step 1/7] Cleaning previous build...
 if exist "%OUTPUT_DIR%" (
-    rmdir /s /q "%OUTPUT_DIR%"
+    rmdir /s /q "%OUTPUT_DIR%" 2>nul
+    if exist "%OUTPUT_DIR%" (
+        echo [WARN] Could not fully clean %OUTPUT_DIR% - some files may be locked.
+        echo [WARN] Attempting to continue...
+        del /q "%OUTPUT_DIR%\*.exe" 2>nul
+        del /q "%OUTPUT_DIR%\*.zip" 2>nul
+    )
 )
-mkdir "%OUTPUT_DIR%"
+if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
 
-REM -- Increment build number and set version --
+REM -- Increment build number and set version (single PowerShell call) --
 echo [Step 2/7] Updating version number...
-powershell -NoProfile -Command "if (Test-Path 'build_number') { $n = [int](Get-Content 'build_number') + 1 } else { $n = 1 }; Set-Content -Path 'build_number' -Value $n -NoNewline; Set-Content -Path 'temp_build_num.txt' -Value $n -NoNewline"
-set /p BUILD_NUM=<temp_build_num.txt
-del temp_build_num.txt
-%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "$ver = (Get-Content '%~dp0wails.json' -Raw | ConvertFrom-Json).info.productVersion; $parts = $ver.Split('.'); $bn = Get-Content '%~dp0build_number'; $parts[3] = $bn; $newVer = $parts -join '.'; Set-Content -Path '%~dp0temp_version.txt' -Value $newVer -NoNewline"
-set /p VERSION=<temp_version.txt
-del temp_version.txt
-%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "(Get-Content '%~dp0wails.json' -Raw | ConvertFrom-Json).info.productName | Set-Content -Path '%~dp0temp_product_name.txt' -NoNewline"
-set /p PRODUCT_NAME=<temp_product_name.txt
-del temp_product_name.txt
-%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "(Get-Content '%~dp0wails.json' -Raw | ConvertFrom-Json).info.companyName | Set-Content -Path '%~dp0temp_company_name.txt' -NoNewline"
-set /p COMPANY_NAME=<temp_company_name.txt
-del temp_company_name.txt
-%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "(Get-Content '%~dp0wails.json' -Raw | ConvertFrom-Json).info.copyright | Set-Content -Path '%~dp0temp_copyright.txt' -NoNewline"
-set /p COPYRIGHT_TEXT=<temp_copyright.txt
-del temp_copyright.txt
-echo [INFO] Building Version: %VERSION% 
+%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command ^
+  "if (Test-Path 'build_number') { $n = [int](Get-Content 'build_number') + 1 } else { $n = 1 };" ^
+  "Set-Content -Path 'build_number' -Value $n -NoNewline;" ^
+  "$cfg = Get-Content '%~dp0wails.json' -Raw | ConvertFrom-Json;" ^
+  "$parts = $cfg.info.productVersion.Split('.');" ^
+  "$parts[3] = [string]$n;" ^
+  "$ver = $parts -join '.';" ^
+  "@{" ^
+  "  VERSION = $ver;" ^
+  "  BUILD_NUM = [string]$n;" ^
+  "  PRODUCT_NAME = $cfg.info.productName;" ^
+  "  COMPANY_NAME = $cfg.info.companyName;" ^
+  "  COPYRIGHT = $cfg.info.copyright" ^
+  "}.GetEnumerator() | ForEach-Object { Set-Content -Path ('%~dp0temp_' + $_.Key + '.txt') -Value $_.Value -NoNewline }"
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to update version info.
+    goto :error
+)
+set /p BUILD_NUM=<"%~dp0temp_BUILD_NUM.txt"
+set /p VERSION=<"%~dp0temp_VERSION.txt"
+set /p PRODUCT_NAME=<"%~dp0temp_PRODUCT_NAME.txt"
+set /p COMPANY_NAME=<"%~dp0temp_COMPANY_NAME.txt"
+set /p COPYRIGHT_TEXT=<"%~dp0temp_COPYRIGHT.txt"
+del /q "%~dp0temp_BUILD_NUM.txt" "%~dp0temp_VERSION.txt" "%~dp0temp_PRODUCT_NAME.txt" "%~dp0temp_COMPANY_NAME.txt" "%~dp0temp_COPYRIGHT.txt" 2>nul
+echo [INFO] Building Version: %VERSION%
 
 REM -- Sync version with frontend --
 echo [Step 3/7] Syncing version with frontend...
@@ -144,7 +159,7 @@ echo   - Creating main executable copy (amd64)...
 copy /Y "%OUTPUT_DIR%\%APP_NAME%_amd64.exe" "%OUTPUT_DIR%\%APP_NAME%.exe" >nul
 if exist "%OUTPUT_DIR%\%APP_NAME%.exe" (
     echo [SUCCESS] Windows main binary created: %OUTPUT_DIR%\%APP_NAME%.exe
-    
+
     echo   - Creating Windows portable zip...
     powershell -Command "Compress-Archive -Path '%OUTPUT_DIR%\%APP_NAME%.exe' -DestinationPath '%OUTPUT_DIR%\%APP_NAME%-Windows-Portable.zip' -Force"
 )
@@ -159,12 +174,12 @@ goto :error
 echo.
 echo [SUCCESS] Build and packaging complete!
 echo Artifacts are in: %OUTPUT_DIR%
+endlocal
 goto :eof
 
 :error
 echo.
 echo [FAILED] The build process failed. Please check the output above for errors.
+endlocal
 pause
 exit /b 1
-
-endlocal

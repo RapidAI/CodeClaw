@@ -190,6 +190,16 @@ func (s *Service) SetPublicBaseURL(ctx context.Context, publicBaseURL string) (*
 	return s.Status(ctx)
 }
 
+// GetPublicBaseURL returns the effective public base URL, preferring the
+// database value over the config file fallback.
+func (s *Service) GetPublicBaseURL(ctx context.Context) string {
+	url, err := s.publicBaseURL(ctx)
+	if err != nil {
+		return normalizeBaseURL(s.cfg.Server.PublicBaseURL)
+	}
+	return url
+}
+
 func (s *Service) SetVisibility(ctx context.Context, visibility string) (*RegistrationState, error) {
 	normalized := normalizeVisibility(visibility)
 	if err := s.settings.Set(ctx, systemKeyHubVisibility, mustJSON(map[string]string{"value": normalized})); err != nil {

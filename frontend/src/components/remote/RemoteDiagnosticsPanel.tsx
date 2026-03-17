@@ -41,6 +41,9 @@ type Props = {
     onDemandInstallingTool: string;
     translate: (key: string) => string;
     formatText: (key: string, values?: Record<string, string>) => string;
+    providers: Array<{name: string; model_id: string; is_default: boolean}>;
+    selectedProvider: string;
+    setSelectedProvider: (provider: string) => void;
 };
 
 export function RemoteDiagnosticsPanel(props: Props) {
@@ -75,6 +78,9 @@ export function RemoteDiagnosticsPanel(props: Props) {
         onDemandInstallingTool,
         translate,
         formatText,
+        providers,
+        selectedProvider,
+        setSelectedProvider,
     } = props;
 
     return (
@@ -102,6 +108,9 @@ export function RemoteDiagnosticsPanel(props: Props) {
                 onDemandInstallingTool={onDemandInstallingTool}
                 translate={translate}
                 formatText={formatText}
+                providers={providers}
+                selectedProvider={selectedProvider}
+                setSelectedProvider={setSelectedProvider}
             />
             <RemoteToolDiagnosticsCard
                 selectedRemoteTool={selectedRemoteTool}

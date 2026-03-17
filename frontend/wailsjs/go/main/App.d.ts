@@ -50,9 +50,11 @@ export function GetLastRemoteSmokeReport():Promise<any>;
 
 export function StartRemoteClaudeSession(arg1:string,arg2:boolean):Promise<any>;
 
-export function StartRemoteSession(arg1:string,arg2:string,arg3:boolean):Promise<any>;
+export function StartRemoteSession(arg1:string,arg2:string,arg3:boolean,arg4:string):Promise<any>;
 
-export function StartRemoteHandoffSession(arg1:string,arg2:string,arg3:boolean):Promise<any>;
+export function StartRemoteHandoffSession(arg1:string,arg2:string,arg3:boolean,arg4:string):Promise<any>;
+
+export function ListValidProviders(arg1:string):Promise<any>;
 
 export function GetSkillsDir(arg1:string):Promise<string>;
 
@@ -170,6 +172,19 @@ export function GetMCPServerTools(arg1:string):Promise<Array<any>>;
 
 export function CheckMCPServerHealth(arg1:string):Promise<void>;
 
+// Local MCP server management bindings
+export function ListLocalMCPServers():Promise<Array<any>>;
+
+export function RegisterLocalMCPServer(arg1:any):Promise<void>;
+
+export function UpdateLocalMCPServer(arg1:any):Promise<void>;
+
+export function UnregisterLocalMCPServer(arg1:string):Promise<void>;
+
+export function SyncLocalMCPServers():Promise<void>;
+
+export function GetLocalMCPServerStatuses():Promise<Array<any>>;
+
 // MaClaw LLM configuration bindings
 export function GetMaclawLLMConfig():Promise<any>;
 
@@ -181,9 +196,15 @@ export function SaveMaclawLLMProviders(arg1:any, arg2:string):Promise<void>;
 
 export function TestMaclawLLM(arg1:any):Promise<string>;
 
+export function GetMaclawAgentMaxIterations():Promise<number>;
+
+export function SetMaclawAgentMaxIterations(arg1:number):Promise<void>;
+
 export function PingMaclawLLM():Promise<any>;
 
 export function PingSkillHub(arg1:string):Promise<any>;
+
+export function ValidateSkillHub(arg1:string):Promise<any>;
 
 // SkillHub market bindings
 export function SearchSkillHub(arg1:string):Promise<Array<any>>;

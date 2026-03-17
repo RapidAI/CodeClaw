@@ -12,7 +12,7 @@ import kiloIcon from './assets/images/KiloCode.png';
 import cursorIcon from './assets/images/qodercli.png';
 import lobsterOnline from './assets/images/lobster_online.svg';
 import lobsterOffline from './assets/images/lobster_offline.svg';
-import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, PingSkillHub } from "../wailsjs/go/main/App";
+import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, PingSkillHub, ValidateSkillHub } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
 import ReactMarkdown from 'react-markdown';
@@ -25,6 +25,7 @@ import { TERMINAL_SESSION_STATUSES } from './components/remote/types';
 import { SkillsManagementPanel } from './components/remote/SkillsManagementPanel';
 import { MCPManagementPanel } from './components/remote/MCPManagementPanel';
 import { LLMConfigPanel } from './components/remote/LLMConfigPanel';
+import { MaclawRolePanel } from './components/remote/MaclawRolePanel';
 
 const subscriptionUrls: { [key: string]: string } = {
     "GLM": "https://bigmodel.cn/glm-coding",
@@ -133,8 +134,8 @@ const APP_VERSION = "5.0.0.9300"
 const TOOL_NAMES = ['claude', 'gemini', 'codex', 'opencode', 'codebuddy', 'cursor', 'iflow', 'kilo'] as const;
 const SKILL_TOOLS = ['claude', 'gemini', 'codex'] as const;
 const DEFAULT_SKILLHUB_ENTRIES = [
-    { label: 'OpenClaw Official', url: 'https://skillhub.openclaw.org' },
-    { label: '腾讯云 SkillHUB', url: 'https://skillhub.tencent.com/' },
+    { label: 'OpenClaw Official', url: 'https://skillhub.openclaw.org', type: 'standard' },
+    { label: '腾讯云 SkillHUB', url: 'https://skillhub.tencent.com/', type: '' },
 ];
 const isToolTab = (tab: string): boolean => (TOOL_NAMES as readonly string[]).includes(tab);
 const isSkillTool = (tab: string): boolean => (SKILL_TOOLS as readonly string[]).includes(tab);
@@ -324,12 +325,16 @@ const translations: any = {
         "cancel": "Cancel",
         "confirm": "Confirm",
         "slogan": "Master your code, seize the machine.",
-        "maclawLLMPopupTitle": "MaClaw LLM Not Configured",
-        "maclawLLMPopupDesc": "MaClaw cannot respond to remote commands without an LLM configured.",
-        "maclawLLMApplyLobster": "Apply for Lobster Plan",
-        "maclawLLMGoSettings": "Configure LLM API",
-        "maclawLLMReadyHint": "When the lobster icon (top-left) lights up, MaClaw is ready.",
-        "maclawLLMRemoteHint": "Go to Settings → Remote Control, register with your email (invitation code may be required) to enable remote programming.",
+        "maclawLLMPopupTitle": "Let's get MaClaw ready!",
+        "maclawLLMPopupDesc": "Two quick steps to unlock remote coding.",
+        "maclawLLMStep1Title": "Configure LLM",
+        "maclawLLMStep1Desc": "Connect an LLM provider so MaClaw can think.",
+        "maclawLLMApplyLobster": "Get a free Lobster Plan",
+        "maclawLLMGoSettings": "I have an API key",
+        "maclawLLMStep2Title": "Register Remote & Bind Feishu",
+        "maclawLLMStep2Desc": "Register your device and bind Feishu to enable remote control.",
+        "maclawLLMGoRemote": "Go to Remote Settings",
+        "maclawLLMReadyHint": "The lobster icon (top-left) lights up once you're all set.",
         "proxySettings": "Proxy",
         "proxyHost": "Proxy Host",
         "proxyPort": "Proxy Port",
@@ -399,6 +404,8 @@ const translations: any = {
         "remoteFullSmoke": "Full Smoke",
         "remoteFullSmokeNotRun": "Full smoke has not been run yet.",
         "remoteTool": "Tool",
+        "remoteProviderLabel": "Provider",
+        "remoteProviderDefault": "Default",
         "remotePty": "PTY",
         "remoteSupported": "Supported",
         "remoteUnavailableShort": "Unavailable",
@@ -688,12 +695,16 @@ const translations: any = {
         "cancel": "取消",
         "confirm": "确定",
         "slogan": "让远程编程像品尝甜点一样丝滑。",
-        "maclawLLMPopupTitle": "MaClaw LLM 未配置",
-        "maclawLLMPopupDesc": "未配置 LLM，MaClaw 无法响应远程操作指令。",
-        "maclawLLMApplyLobster": "申请龙虾套餐",
-        "maclawLLMGoSettings": "设置 LLM API",
-        "maclawLLMReadyHint": "左上角的龙虾亮起，表明 MaClaw 已就绪。",
-        "maclawLLMRemoteHint": "在 设置→远程控制 中使用邮箱注册（可能需要邀请码），即可开通远程编程。",
+        "maclawLLMPopupTitle": "来，配置一下 MaClaw 吧",
+        "maclawLLMPopupDesc": "两步开启远程编程。",
+        "maclawLLMStep1Title": "配置 LLM",
+        "maclawLLMStep1Desc": "连接 LLM 服务商，让 MaClaw 能思考。",
+        "maclawLLMApplyLobster": "免费领取龙虾套餐",
+        "maclawLLMGoSettings": "我已有 API Key",
+        "maclawLLMStep2Title": "注册远程 & 绑定飞书",
+        "maclawLLMStep2Desc": "注册设备并绑定飞书，即可远程控制。",
+        "maclawLLMGoRemote": "前往远程设置",
+        "maclawLLMReadyHint": "左上角龙虾亮起，说明一切就绪。",
         "proxySettings": "代理设置",
         "proxyHost": "代理主机",
         "proxyPort": "代理端口",
@@ -763,6 +774,8 @@ const translations: any = {
         "remoteFullSmoke": "完整冒烟测试",
         "remoteFullSmokeNotRun": "尚未运行完整冒烟测试。",
         "remoteTool": "工具",
+        "remoteProviderLabel": "服务商",
+        "remoteProviderDefault": "默认",
         "remotePty": "PTY",
         "remoteSupported": "支持",
         "remoteUnavailableShort": "不可用",
@@ -1030,12 +1043,16 @@ const translations: any = {
         "cancel": "取消",
         "confirm": "確定",
         "slogan": "讓遠程編程像品嚐甜點一樣絲滑。",
-        "maclawLLMPopupTitle": "MaClaw LLM 未配置",
-        "maclawLLMPopupDesc": "未配置 LLM，MaClaw 無法回應遠端操作指令。",
-        "maclawLLMApplyLobster": "申請龍蝦套餐",
-        "maclawLLMGoSettings": "設定 LLM API",
-        "maclawLLMReadyHint": "左上角的龍蝦亮起，表明 MaClaw 已就緒。",
-        "maclawLLMRemoteHint": "在 設定→遠端控制 中使用郵箱註冊（可能需要邀請碼），即可開通遠端編程。",
+        "maclawLLMPopupTitle": "來，配置一下 MaClaw 吧",
+        "maclawLLMPopupDesc": "兩步開啟遠端編程。",
+        "maclawLLMStep1Title": "配置 LLM",
+        "maclawLLMStep1Desc": "連接 LLM 服務商，讓 MaClaw 能思考。",
+        "maclawLLMApplyLobster": "免費領取龍蝦套餐",
+        "maclawLLMGoSettings": "我已有 API Key",
+        "maclawLLMStep2Title": "註冊遠端 & 綁定飛書",
+        "maclawLLMStep2Desc": "註冊裝置並綁定飛書，即可遠端控制。",
+        "maclawLLMGoRemote": "前往遠端設定",
+        "maclawLLMReadyHint": "左上角龍蝦亮起，說明一切就緒。",
         "proxySettings": "代理設置",
         "proxyHost": "代理主機",
         "proxyPort": "代理端口",
@@ -1105,6 +1122,8 @@ const translations: any = {
         "remoteFullSmoke": "完整冒煙測試",
         "remoteFullSmokeNotRun": "尚未執行完整冒煙測試。",
         "remoteTool": "工具",
+        "remoteProviderLabel": "服務商",
+        "remoteProviderDefault": "預設",
         "remotePty": "PTY",
         "remoteSupported": "支援",
         "remoteUnavailableShort": "不可用",
@@ -1331,7 +1350,7 @@ function App() {
     const [status, setStatus] = useState("");
     const [activeTab, setActiveTab] = useState(0);
     const [tabStartIndex, setTabStartIndex] = useState(0);
-    const [settingsTab, setSettingsTab] = useState<'general' | 'display' | 'remote' | 'skills' | 'mcp' | 'llm' | 'skillhub'>('general');
+    const [settingsTab, setSettingsTab] = useState<'general' | 'display' | 'remote' | 'skills' | 'mcp' | 'llm' | 'skillhub' | 'role'>('general');
     const [installLocation, setInstallLocation] = useState<'user' | 'project'>('user');
     const [installProject, setInstallProject] = useState<string>("");
     const [isBatchInstalling, setIsBatchInstalling] = useState(false);
@@ -1350,10 +1369,12 @@ function App() {
     const maclawLLMFirstPingResult = useRef<{online: boolean; configured: boolean} | null>(null);
 
     // SkillHUB management
-    const [skillHubEntries, setSkillHubEntries] = useState<{label: string; url: string}[]>([]);
+    const [skillHubEntries, setSkillHubEntries] = useState<{label: string; url: string; type?: string}[]>([]);
     const [skillHubStatus, setSkillHubStatus] = useState<Record<string, {online: boolean; ms: number; error: string; testing: boolean}>>({});
     const [newSkillHubLabel, setNewSkillHubLabel] = useState('');
     const [newSkillHubUrl, setNewSkillHubUrl] = useState('');
+    const [skillHubValidating, setSkillHubValidating] = useState(false);
+    const [skillHubValidateError, setSkillHubValidateError] = useState('');
     const skillHubEntriesRef = useRef(skillHubEntries);
     skillHubEntriesRef.current = skillHubEntries;
 
@@ -1382,7 +1403,7 @@ function App() {
         skillHubEntriesRef.current.forEach(e => pingOneSkillHub(e.url));
     };
 
-    const saveSkillHubEntries = (entries: {label: string; url: string}[]) => {
+    const saveSkillHubEntries = (entries: {label: string; url: string; type?: string}[]) => {
         setSkillHubEntries(entries);
         if (config) {
             const newConfig = new main.AppConfig({ ...config, skill_hub_urls: entries });
@@ -2003,7 +2024,7 @@ function App() {
         pingLLM();
         const timer = setInterval(pingLLM, 60000);
         return () => clearInterval(timer);
-    }, [settingsTab]);
+    }, []);
 
     // Show the MaClaw LLM popup once both the first ping result AND config are available.
     useEffect(() => {
@@ -2011,6 +2032,8 @@ function App() {
         const { online } = maclawLLMFirstPingResult.current;
         if (!online && !config.hide_maclaw_llm_popup) {
             setShowMaclawLLMPopup(true);
+            // Suppress the startup welcome popup to avoid two overlapping modals
+            setShowStartupPopup(false);
         }
         // Clear so this only fires once.
         maclawLLMFirstPingResult.current = null;
@@ -2226,6 +2249,9 @@ function App() {
         invitationCode,
         setInvitationCode,
         invitationCodeError,
+        providers,
+        selectedProvider,
+        setSelectedProvider,
     } = useRemotePanel({
         config,
         setConfig,
@@ -2893,6 +2919,11 @@ ${instruction}`;
             id: 'skillhub' as const,
             label: 'SkillHUB',
             desc: lang === 'zh-Hans' ? '配置 SkillHUB 地址，搜索与下载技能包' : lang === 'zh-Hant' ? '配置 SkillHUB 位址，搜尋與下載技能包' : 'Configure SkillHUB URL to search and download skill packages',
+        },
+        {
+            id: 'role' as const,
+            label: lang === 'zh-Hans' ? 'MaClaw 角色' : lang === 'zh-Hant' ? 'MaClaw 角色' : 'MaClaw Role',
+            desc: lang === 'zh-Hans' ? '自定义 MaClaw Agent 的名字与角色描述' : lang === 'zh-Hant' ? '自訂 MaClaw Agent 的名字與角色描述' : 'Customize MaClaw Agent name and role description',
         },
     ];
     const isRemoteCapableActiveTool = remoteToolMetadata.some(
@@ -3754,7 +3785,7 @@ ${instruction}`;
                             </div>
 
                             <div className="settings-panel" style={{ display: settingsTab === 'llm' ? 'block' : 'none' }}>
-                                <LLMConfigPanel lang={lang} codexModels={config?.codex?.models} />
+                                <LLMConfigPanel lang={lang} codexModels={config?.codex?.models} onStatusChange={(online, configured) => { setMaclawLLMOnline(online); setMaclawLLMConfigured(configured); }} />
                             </div>
 
                             <div className="settings-panel" style={{ display: settingsTab === 'skillhub' ? 'block' : 'none' }}>
@@ -3777,7 +3808,14 @@ ${instruction}`;
                                                         {st?.testing ? '⏳' : st?.online ? '🟢' : st ? '🔴' : '⚪'}
                                                     </span>
                                                     <div style={{ flex: 1, minWidth: 0 }}>
-                                                        <div style={{ fontSize: '0.8rem', fontWeight: 500, color: '#374151' }}>{entry.label}</div>
+                                                        <div style={{ fontSize: '0.8rem', fontWeight: 500, color: '#374151', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                            {entry.label}
+                                                            {entry.type && entry.type !== 'standard' && (
+                                                                <span style={{ fontSize: '0.6rem', padding: '1px 5px', borderRadius: '4px', backgroundColor: entry.type === 'clawhub' ? '#dbeafe' : '#fef3c7', color: entry.type === 'clawhub' ? '#2563eb' : '#d97706', fontWeight: 400 }}>
+                                                                    {entry.type === 'clawhub' ? 'ClawHub' : entry.type === 'clawhub_mirror' ? 'ClawHub 镜像' : entry.type}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                         <div style={{ fontSize: '0.72rem', color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.url}</div>
                                                     </div>
                                                     {st && !st.testing && (
@@ -3829,23 +3867,41 @@ ${instruction}`;
                                         <button
                                             className="btn-primary"
                                             style={{ padding: '6px 14px', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
-                                            disabled={!newSkillHubUrl.trim()}
-                                            onClick={() => {
+                                            disabled={!newSkillHubUrl.trim() || skillHubValidating}
+                                            onClick={async () => {
                                                 const url = newSkillHubUrl.trim();
-                                                let label = newSkillHubLabel.trim();
-                                                if (!label) {
-                                                    try { label = new URL(url).hostname; } catch { label = url; }
+                                                setSkillHubValidating(true);
+                                                setSkillHubValidateError('');
+                                                try {
+                                                    const res = await ValidateSkillHub(url);
+                                                    if (res.type === 'unsupported') {
+                                                        setSkillHubValidateError(res.reason || (lang === 'zh-Hans' ? '不支持的 Hub 类型' : 'Unsupported hub type'));
+                                                        return;
+                                                    }
+                                                    let label = newSkillHubLabel.trim();
+                                                    if (!label) {
+                                                        try { label = new URL(url).hostname; } catch { label = url; }
+                                                    }
+                                                    const next = [...skillHubEntries, { label, url, type: res.type }];
+                                                    saveSkillHubEntries(next);
+                                                    setNewSkillHubLabel('');
+                                                    setNewSkillHubUrl('');
+                                                    setTimeout(() => pingOneSkillHub(url), 300);
+                                                } catch (err: any) {
+                                                    setSkillHubValidateError(String(err));
+                                                } finally {
+                                                    setSkillHubValidating(false);
                                                 }
-                                                const next = [...skillHubEntries, { label, url }];
-                                                saveSkillHubEntries(next);
-                                                setNewSkillHubLabel('');
-                                                setNewSkillHubUrl('');
-                                                setTimeout(() => pingOneSkillHub(url), 300);
                                             }}
                                         >
-                                            + {lang === 'zh-Hans' ? '添加' : lang === 'zh-Hant' ? '新增' : 'Add'}
+                                            {skillHubValidating ? '⏳' : '+'} {lang === 'zh-Hans' ? '添加' : lang === 'zh-Hant' ? '新增' : 'Add'}
                                         </button>
                                     </div>
+                                    {skillHubValidateError && (
+                                        <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px', padding: '4px 8px', backgroundColor: '#fef2f2', borderRadius: '4px' }}>
+                                            ⚠️ {skillHubValidateError}
+                                        </div>
+                                    )}
 
                                     {/* Restore defaults */}
                                     <div style={{ marginTop: '12px' }}>
@@ -3860,6 +3916,10 @@ ${instruction}`;
                                         </button>
                                     </div>
                                 </div>
+                            </div>
+
+                            <div className="settings-panel" style={{ display: settingsTab === 'role' ? 'block' : 'none' }}>
+                                <MaclawRolePanel config={config} saveRemoteConfigField={saveRemoteConfigField} lang={lang} />
                             </div>
 
                             <div className="settings-panel" style={{ display: settingsTab === 'display' ? 'block' : 'none' }}>
@@ -5606,136 +5666,131 @@ ${instruction}`;
                 </div>
             )}
 
-            {/* MaClaw LLM Not Configured Popup */}
-            {showMaclawLLMPopup && (
-                <div className="modal-overlay" style={{ backgroundColor: 'rgba(0, 0, 0, 0.4)', backdropFilter: 'blur(4px)' }}>
+            {/* MaClaw LLM Onboarding Guide */}
+            {showMaclawLLMPopup && (() => {
+                const stepBadge: React.CSSProperties = {
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: '20px', height: '20px', borderRadius: '50%',
+                    background: '#6366f1', color: '#fff', fontSize: '0.7rem', fontWeight: 700, flexShrink: 0,
+                };
+                const stepBtn: React.CSSProperties = {
+                    padding: '5px 12px', borderRadius: '6px', fontSize: '0.76rem', fontWeight: 500,
+                    background: '#f5f3ff', color: '#6366f1', border: '1px solid #c7d2fe',
+                    cursor: 'pointer', transition: 'all 0.15s',
+                };
+                return (
+                <div className="modal-overlay" style={{ backgroundColor: 'rgba(0, 0, 0, 0.3)', backdropFilter: 'blur(3px)' }}>
                     <div className="modal-content" style={{
-                        width: '340px',
+                        width: '330px',
                         textAlign: 'center',
                         padding: 0,
-                        borderRadius: '16px',
+                        borderRadius: '14px',
                         overflow: 'hidden',
-                        border: 'none',
-                        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+                        border: '1px solid #e0e7ff',
+                        boxShadow: '0 8px 24px rgba(99, 102, 241, 0.12)'
                     }}>
+                        {/* Header */}
                         <div style={{
-                            background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-                            padding: '25px 20px',
-                            color: '#1e293b',
+                            background: 'linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)',
+                            padding: '14px 18px 12px',
                             position: 'relative',
-                            borderBottom: '1px solid #fbbf24'
                         }}>
                             <button
                                 className="modal-close"
                                 onClick={() => setShowMaclawLLMPopup(false)}
-                                style={{ color: '#9ca3af', opacity: 0.8, top: '10px', right: '15px', zIndex: 10 }}
+                                style={{ color: '#a5b4fc', opacity: 0.9, top: '8px', right: '12px', zIndex: 10, fontSize: '1.1rem' }}
                             >&times;</button>
-                            <div style={{ fontSize: '2.5rem', marginBottom: '10px', lineHeight: 1 }}>🦞</div>
-                            <h3 style={{ margin: 0, color: '#92400e', fontSize: '1.1rem', fontWeight: 'bold' }}>{t("maclawLLMPopupTitle")}</h3>
-                            <p style={{ margin: '8px 0 0 0', fontSize: '0.85rem', color: '#a16207', fontWeight: '500' }}>
+                            <div style={{ fontSize: '1.4rem', marginBottom: '4px', lineHeight: 1 }}>👋</div>
+                            <h3 style={{ margin: 0, color: '#4338ca', fontSize: '0.92rem', fontWeight: 600 }}>{t("maclawLLMPopupTitle")}</h3>
+                            <p style={{ margin: '4px 0 0 0', fontSize: '0.74rem', color: '#6366f1', fontWeight: 400 }}>
                                 {t("maclawLLMPopupDesc")}
                             </p>
                         </div>
 
-                        <div style={{ padding: '20px 25px' }}>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
-                                <button
-                                    style={{
-                                        width: '100%',
-                                        padding: '10px',
-                                        borderRadius: '10px',
-                                        fontSize: '0.95rem',
-                                        fontWeight: '600',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '8px',
-                                        background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
-                                        color: '#92400e',
-                                        border: '1px solid #fbbf24',
-                                        boxShadow: '0 2px 4px rgba(251, 191, 36, 0.2)',
-                                        cursor: 'pointer',
-                                        transition: 'all 0.2s'
-                                    }}
-                                    onClick={() => {
-                                        BrowserOpenURL("https://bigmodel.cn/claw-plan-team");
-                                    }}
-                                >
-                                    <span>🦞</span> {t("maclawLLMApplyLobster")}
-                                </button>
-                                <button
-                                    style={{
-                                        width: '100%',
-                                        padding: '10px',
-                                        borderRadius: '10px',
-                                        fontSize: '0.95rem',
-                                        fontWeight: '500',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '8px',
-                                        backgroundColor: '#ffffff',
-                                        color: '#6366f1',
-                                        border: '1px solid #c7d2fe',
-                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                        cursor: 'pointer',
-                                        transition: 'all 0.2s'
-                                    }}
-                                    onClick={() => {
-                                        setShowMaclawLLMPopup(false);
-                                        setNavTab('settings');
-                                        setSettingsTab('llm');
-                                    }}
-                                >
-                                    <span>⚙️</span> {t("maclawLLMGoSettings")}
-                                </button>
+                        {/* Steps */}
+                        <div style={{ padding: '14px 18px 12px', textAlign: 'left' }}>
+                            {/* Step 1 — Configure LLM */}
+                            <div style={{ marginBottom: '14px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                                    <span style={stepBadge}>1</span>
+                                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#1e293b' }}>{t("maclawLLMStep1Title")}</span>
+                                </div>
+                                <p style={{ margin: '0 0 8px 28px', fontSize: '0.72rem', color: '#94a3b8', lineHeight: 1.4 }}>
+                                    {t("maclawLLMStep1Desc")}
+                                </p>
+                                <div style={{ display: 'flex', gap: '6px', marginLeft: '28px' }}>
+                                    <button
+                                        style={{ ...stepBtn, background: '#6366f1', color: '#fff', border: 'none', fontWeight: 600 }}
+                                        onClick={() => BrowserOpenURL("https://bigmodel.cn/claw-plan-team")}
+                                    >
+                                        🦞 {t("maclawLLMApplyLobster")}
+                                    </button>
+                                    <button
+                                        style={stepBtn}
+                                        onClick={() => {
+                                            setShowMaclawLLMPopup(false);
+                                            switchTool('settings');
+                                            setSettingsTab('llm');
+                                        }}
+                                    >
+                                        ⚙️ {t("maclawLLMGoSettings")}
+                                    </button>
+                                </div>
                             </div>
 
-                            <p style={{ fontSize: '0.78rem', color: '#94a3b8', margin: '0 0 14px 0', lineHeight: 1.5 }}>
+                            {/* Divider */}
+                            <div style={{ height: '1px', background: '#e0e7ff', margin: '0 0 14px 0' }} />
+
+                            {/* Step 2 — Register Remote & Bind Feishu */}
+                            <div style={{ marginBottom: '12px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                                    <span style={stepBadge}>2</span>
+                                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#1e293b' }}>{t("maclawLLMStep2Title")}</span>
+                                </div>
+                                <p style={{ margin: '0 0 8px 28px', fontSize: '0.72rem', color: '#94a3b8', lineHeight: 1.4 }}>
+                                    {t("maclawLLMStep2Desc")}
+                                </p>
+                                <div style={{ marginLeft: '28px' }}>
+                                    <button
+                                        style={stepBtn}
+                                        onClick={() => {
+                                            setShowMaclawLLMPopup(false);
+                                            setNavTab('settings');
+                                            setSettingsTab('remote');
+                                        }}
+                                    >
+                                        📡 {t("maclawLLMGoRemote")}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Footer */}
+                            <p style={{ margin: '0 0 8px 0', fontSize: '0.68rem', color: '#b0b8c9', lineHeight: 1.5 }}>
                                 💡 {t("maclawLLMReadyHint")}
                             </p>
-
-                            <p style={{ fontSize: '0.78rem', color: '#94a3b8', margin: '0 0 14px 0', lineHeight: 1.5 }}>
-                                📡 {t("maclawLLMRemoteHint")}
-                            </p>
-
-                            <div style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'flex-start',
-                                gap: '8px'
+                            <label style={{
+                                display: 'flex', alignItems: 'center', gap: '5px',
+                                cursor: 'pointer', fontSize: '0.72rem', color: '#b0b8c9',
                             }}>
-                                <label style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    cursor: 'pointer',
-                                    fontSize: '0.8rem',
-                                    color: '#94a3b8'
-                                }}>
-                                    <input
-                                        type="checkbox"
-                                        checked={config?.hide_maclaw_llm_popup || false}
-                                        style={{
-                                            width: '14px',
-                                            height: '14px',
-                                            cursor: 'pointer'
-                                        }}
-                                        onChange={(e) => {
-                                            if (config) {
-                                                const newConfig = new main.AppConfig({ ...config, hide_maclaw_llm_popup: e.target.checked });
-                                                setConfig(newConfig);
-                                                SaveConfig(newConfig);
-                                            }
-                                        }}
-                                    />
-                                    {t("dontShowAgain")}
-                                </label>
-                            </div>
+                                <input
+                                    type="checkbox"
+                                    checked={config?.hide_maclaw_llm_popup || false}
+                                    style={{ width: '13px', height: '13px', cursor: 'pointer' }}
+                                    onChange={(e) => {
+                                        if (config) {
+                                            const newConfig = new main.AppConfig({ ...config, hide_maclaw_llm_popup: e.target.checked });
+                                            setConfig(newConfig);
+                                            SaveConfig(newConfig);
+                                        }
+                                    }}
+                                />
+                                {t("dontShowAgain")}
+                            </label>
                         </div>
                     </div>
                 </div>
-            )}
+                );
+            })()}
 
             {/* Thanks Modal */}
             {showThanksModal && (

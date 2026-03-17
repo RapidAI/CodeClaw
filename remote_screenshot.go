@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"os/exec"
 	"runtime"
@@ -177,6 +178,72 @@ func isqrt(n uint64) uint64 {
 	return x
 }
 
+// downsizeScreenshotBase64 checks if the base64-encoded PNG data exceeds
+// sizeLimit when decoded. If so, it decodes the image, scales it down
+// proportionally so the re-encoded PNG fits within the limit, and returns
+// the new base64 string. If the image is already within the limit, it is
+// returned unchanged. This uses nearest-neighbor scaling via the standard
+// library to avoid external dependencies.
+func downsizeScreenshotBase64(base64Data string, sizeLimit int) (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return base64Data, err
+	}
+	if len(decoded) <= sizeLimit {
+		return base64Data, nil
+	}
+
+	img, err := png.Decode(bytes.NewReader(decoded))
+	if err != nil {
+		return base64Data, fmt.Errorf("png decode for downsize: %w", err)
+	}
+
+	bounds := img.Bounds()
+	origW := bounds.Dx()
+	origH := bounds.Dy()
+	if origW == 0 || origH == 0 {
+		return base64Data, nil
+	}
+
+	// Estimate scale factor. PNG compressed size is hard to predict, so we
+	// use the ratio of sizeLimit to decoded size as a pixel-area proxy and
+	// apply a 0.85 safety margin to avoid needing a second pass.
+	ratio := float64(sizeLimit) / float64(len(decoded)) * 0.85
+	scale := math.Sqrt(ratio)
+	if scale >= 1.0 {
+		scale = 0.7 // fallback: shrink to 70%
+	}
+
+	newW := int(float64(origW) * scale)
+	newH := int(float64(origH) * scale)
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	// Use nearest-neighbor via draw.ApproxBiLinear if available, but the
+	// standard library draw.Draw with manual coordinate mapping is simpler
+	// and has zero dependencies.
+	for y := 0; y < newH; y++ {
+		srcY := bounds.Min.Y + y*origH/newH
+		for x := 0; x < newW; x++ {
+			srcX := bounds.Min.X + x*origW/newW
+			dst.Set(x, y, img.At(srcX, srcY))
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return base64Data, fmt.Errorf("png encode after downsize: %w", err)
+	}
+
+	result := base64.StdEncoding.EncodeToString(buf.Bytes())
+	return result, nil
+}
+
 // BuildScreenshotCommand returns a platform-specific shell command string that
 // captures a screenshot and outputs the result as raw base64-encoded PNG data
 // to stdout. Temporary files are cleaned up on macOS and Linux regardless of
@@ -199,7 +266,7 @@ func buildWindowsScreenshotCommand() string {
 	// The caller (captureAndSend) invokes this via powershell -Command directly,
 	// avoiding cmd.exe quote mangling that corrupts base64 output.
 	//
-	// Enhanced strategy for locked/disconnected sessions (5 attempts):
+	// Enhanced strategy for locked/disconnected sessions (6 attempts):
 	// 1. Standard CopyFromScreen (BitBlt) — fastest, works when unlocked.
 	// 2. BitBlt with CAPTUREBLT flag — captures layered windows.
 	// 3. tscon reconnect — reconnects RDP session to console to restore
@@ -208,7 +275,11 @@ func buildWindowsScreenshotCommand() string {
 	//    captures each via PrintWindow (WM_PRINT), composites them onto a
 	//    single bitmap. Works even without desktop composition because each
 	//    window paints itself independently.
-	// 5. If all fail, return a clear error message.
+	// 5. DXGI Desktop Duplication — uses the GPU output duplication API
+	//    (Windows 8+) to grab the frame buffer directly. This works even
+	//    when the session is locked or DWM is suspended, as long as the
+	//    GPU adapter is active (physical console or persistent RDP).
+	// 6. If all fail, return a clear error message.
 	return `Add-Type -AssemblyName System.Drawing; ` +
 		`Add-Type -AssemblyName System.Windows.Forms; ` +
 		`Add-Type @'` + "\n" +
@@ -260,6 +331,23 @@ func buildWindowsScreenshotCommand() string {
 		`$b64 = [Convert]::ToBase64String($ms.ToArray()); ` +
 		`$ms.Dispose(); return $b64 }; ` +
 		`$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; ` +
+		// Detect if the workstation is locked. When locked, CopyFromScreen
+		// and BitBlt capture the lock screen (wallpaper/screensaver) instead
+		// of the desktop — skip them and go straight to PrintWindow/DXGI.
+		`$isLocked = $false; ` +
+		`try { ` +
+		`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; ` +
+		`public class LockCheck { ` +
+		`[DllImport("user32.dll")] static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess); ` +
+		`[DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr hDesktop); ` +
+		`public static bool IsLocked() { IntPtr h = OpenInputDesktop(0, false, 0x0001); if (h == IntPtr.Zero) return true; CloseDesktop(h); return false; } ` +
+		`}' -ErrorAction SilentlyContinue; ` +
+		`$isLocked = [LockCheck]::IsLocked() ` +
+		`} catch { }; ` +
+		`if ($isLocked) { ` +
+		// ========== Locked: skip Attempts 1-3, go to PrintWindow/DXGI ==========
+		`}; ` +
+		`if (-not $isLocked) { ` +
 		// ========== Attempt 1: standard CopyFromScreen ==========
 		`$bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height); ` +
 		`$g = [System.Drawing.Graphics]::FromImage($bmp); ` +
@@ -309,6 +397,7 @@ func buildWindowsScreenshotCommand() string {
 		`if (-not (Test-BlankBitmap $bmp3)) { ` +
 		`$b64 = ConvertTo-Base64Png $bmp3; $bmp3.Dispose(); [Console]::Out.Write($b64); exit 0 }; ` +
 		`$bmp3.Dispose() }; ` +
+		`}; ` + // end if (-not $isLocked) — skip Attempts 1-3 when locked
 		// ========== Attempt 4: PrintWindow composite ==========
 		// Enumerate all visible top-level windows and capture each using
 		// PrintWindow (which sends WM_PRINT to the window, making it paint
@@ -360,8 +449,121 @@ func buildWindowsScreenshotCommand() string {
 		`if ($capturedAny -and -not (Test-BlankBitmap $composite)) { ` +
 		`$b64 = ConvertTo-Base64Png $composite; $composite.Dispose(); [Console]::Out.Write($b64); exit 0 }; ` +
 		`$composite.Dispose(); ` +
+		// ========== Attempt 5: DXGI Desktop Duplication ==========
+		// The Desktop Duplication API (IDXGIOutputDuplication) captures the
+		// GPU frame buffer directly. It works on Windows 8+ even when the
+		// desktop compositor (DWM) is suspended (locked screen, disconnected
+		// RDP) as long as the GPU adapter is active. We use a C# inline
+		// class compiled via Add-Type to call the DXGI COM interfaces through
+		// SharpDX-style raw COM interop (no external dependencies).
+		`try { ` +
+		`Add-Type @'` + "\n" +
+		`using System;` + "\n" +
+		`using System.Drawing;` + "\n" +
+		`using System.Drawing.Imaging;` + "\n" +
+		`using System.Runtime.InteropServices;` + "\n" +
+		`public class DxgiCapture {` + "\n" +
+		`  [DllImport("d3d11.dll")]` + "\n" +
+		`  static extern int D3D11CreateDevice(IntPtr pAdapter, int DriverType, IntPtr Software,` + "\n" +
+		`    uint Flags, IntPtr pFeatureLevels, uint FeatureLevels, uint SDKVersion,` + "\n" +
+		`    out IntPtr ppDevice, IntPtr pFeatureLevel, out IntPtr ppImmediateContext);` + "\n" +
+		`  [DllImport("dxgi.dll")]` + "\n" +
+		`  static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr ppFactory);` + "\n" +
+		`  static IntPtr VF(IntPtr obj, int slot) {` + "\n" +
+		`    IntPtr vt = Marshal.ReadIntPtr(obj);` + "\n" +
+		`    return Marshal.ReadIntPtr(vt, slot * IntPtr.Size);` + "\n" +
+		`  }` + "\n" +
+		`  delegate int EnumAdapters1D(IntPtr s, uint i, out IntPtr a);` + "\n" +
+		`  delegate int EnumOutputsD(IntPtr s, uint i, out IntPtr o);` + "\n" +
+		`  delegate int QID(IntPtr s, ref Guid g, out IntPtr p);` + "\n" +
+		`  delegate int DupOutputD(IntPtr s, IntPtr dev, out IntPtr d);` + "\n" +
+		`  delegate int AcquireD(IntPtr s, uint ms, IntPtr info, out IntPtr res);` + "\n" +
+		`  delegate int ReleaseFrameD(IntPtr s);` + "\n" +
+		`  delegate int ReleaseD(IntPtr s);` + "\n" +
+		// GetDesc: we pass a raw buffer because DXGI_OUTDUPL_DESC is large
+		// and we only need the first two int32s (width, height from the
+		// embedded DXGI_MODE_DESC).
+		`  delegate int GetDescD(IntPtr s, IntPtr descBuf);` + "\n" +
+		`  [StructLayout(LayoutKind.Sequential)]` + "\n" +
+		`  struct TexDesc {` + "\n" +
+		`    public uint Width, Height, MipLevels, ArraySize;` + "\n" +
+		`    public uint Format, SampleCount, SampleQuality, Usage;` + "\n" +
+		`    public uint BindFlags, CPUAccessFlags, MiscFlags;` + "\n" +
+		`  }` + "\n" +
+		`  delegate int CreateTex2DD(IntPtr s, ref TexDesc d, IntPtr init, out IntPtr tex);` + "\n" +
+		`  delegate void CopyResD(IntPtr s, IntPtr dst, IntPtr src);` + "\n" +
+		`  [StructLayout(LayoutKind.Sequential)]` + "\n" +
+		`  struct MappedSub { public IntPtr pData; public uint RowPitch; public uint DepthPitch; }` + "\n" +
+		`  delegate int MapD(IntPtr s, IntPtr res, uint sub, uint mt, uint fl, out MappedSub m);` + "\n" +
+		`  delegate void UnmapD(IntPtr s, IntPtr res, uint sub);` + "\n" +
+		`  public static Bitmap Capture() {` + "\n" +
+		`    Guid fGuid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");` + "\n" +
+		`    IntPtr factory; int hr = CreateDXGIFactory1(ref fGuid, out factory);` + "\n" +
+		`    if (hr != 0) throw new Exception("DXGI factory: 0x" + hr.ToString("X"));` + "\n" +
+		`    IntPtr adapter; hr = Marshal.GetDelegateForFunctionPointer<EnumAdapters1D>(VF(factory,12))(factory,0,out adapter);` + "\n" +
+		`    if (hr != 0) throw new Exception("enum adapter: 0x" + hr.ToString("X"));` + "\n" +
+		`    IntPtr output; hr = Marshal.GetDelegateForFunctionPointer<EnumOutputsD>(VF(adapter,7))(adapter,0,out output);` + "\n" +
+		`    if (hr != 0) throw new Exception("enum output: 0x" + hr.ToString("X"));` + "\n" +
+		`    Guid o1g = new Guid("00cddea8-939b-4b83-a340-a685226666cc");` + "\n" +
+		`    IntPtr output1; hr = Marshal.GetDelegateForFunctionPointer<QID>(VF(output,0))(output,ref o1g,out output1);` + "\n" +
+		`    if (hr != 0) throw new Exception("QI output1: 0x" + hr.ToString("X"));` + "\n" +
+		`    IntPtr dev, ctx;` + "\n" +
+		`    hr = D3D11CreateDevice(adapter,0,IntPtr.Zero,0,IntPtr.Zero,0,7,out dev,IntPtr.Zero,out ctx);` + "\n" +
+		`    if (hr != 0) throw new Exception("D3D11 device: 0x" + hr.ToString("X"));` + "\n" +
+		`    IntPtr dup; hr = Marshal.GetDelegateForFunctionPointer<DupOutputD>(VF(output1,22))(output1,dev,out dup);` + "\n" +
+		`    if (hr != 0) throw new Exception("dup output: 0x" + hr.ToString("X"));` + "\n" +
+		// Read output dimensions from DXGI_OUTDUPL_DESC via a raw 128-byte buffer.
+		`    IntPtr descBuf = Marshal.AllocHGlobal(128);` + "\n" +
+		`    Marshal.GetDelegateForFunctionPointer<GetDescD>(VF(dup,7))(dup, descBuf);` + "\n" +
+		`    int w = Marshal.ReadInt32(descBuf, 0);` + "\n" +
+		`    int h = Marshal.ReadInt32(descBuf, 4);` + "\n" +
+		`    Marshal.FreeHGlobal(descBuf);` + "\n" +
+		`    if (w <= 0 || h <= 0) throw new Exception("bad DXGI size: " + w + "x" + h);` + "\n" +
+		// AcquireNextFrame (vtable slot 8). DXGI_OUTDUPL_FRAME_INFO is 48 bytes.
+		`    IntPtr fi = Marshal.AllocHGlobal(48);` + "\n" +
+		`    IntPtr resource; hr = Marshal.GetDelegateForFunctionPointer<AcquireD>(VF(dup,8))(dup,500,fi,out resource);` + "\n" +
+		`    Marshal.FreeHGlobal(fi);` + "\n" +
+		`    if (hr != 0) throw new Exception("acquire frame: 0x" + hr.ToString("X"));` + "\n" +
+		// QI to ID3D11Texture2D.
+		`    Guid t2g = new Guid("6f15aaf2-d208-4e89-9ab4-489535d34f9c");` + "\n" +
+		`    IntPtr srcTex; Marshal.GetDelegateForFunctionPointer<QID>(VF(resource,0))(resource,ref t2g,out srcTex);` + "\n" +
+		// Create staging texture (ID3D11Device::CreateTexture2D, vtable slot 5).
+		`    TexDesc td = new TexDesc();` + "\n" +
+		`    td.Width=(uint)w; td.Height=(uint)h; td.MipLevels=1; td.ArraySize=1;` + "\n" +
+		`    td.Format=87; td.SampleCount=1; td.SampleQuality=0;` + "\n" +
+		`    td.Usage=3; td.BindFlags=0; td.CPUAccessFlags=0x20000; td.MiscFlags=0;` + "\n" +
+		`    IntPtr staging; Marshal.GetDelegateForFunctionPointer<CreateTex2DD>(VF(dev,5))(dev,ref td,IntPtr.Zero,out staging);` + "\n" +
+		// CopyResource (ID3D11DeviceContext, vtable slot 47).
+		`    Marshal.GetDelegateForFunctionPointer<CopyResD>(VF(ctx,47))(ctx,staging,srcTex);` + "\n" +
+		// Map (vtable slot 14). D3D11_MAP_READ=1.
+		`    MappedSub mapped; Marshal.GetDelegateForFunctionPointer<MapD>(VF(ctx,14))(ctx,staging,0,1,0,out mapped);` + "\n" +
+		// Copy row by row using Marshal.Copy (safe, no /unsafe needed).
+		`    Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);` + "\n" +
+		`    BitmapData bd = bmp.LockBits(new Rectangle(0,0,w,h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);` + "\n" +
+		`    int rowBytes = w * 4;` + "\n" +
+		`    byte[] rowBuf = new byte[rowBytes];` + "\n" +
+		`    for (int r = 0; r < h; r++) {` + "\n" +
+		`      Marshal.Copy(IntPtr.Add(mapped.pData, (int)(r * mapped.RowPitch)), rowBuf, 0, rowBytes);` + "\n" +
+		`      Marshal.Copy(rowBuf, 0, IntPtr.Add(bd.Scan0, r * bd.Stride), rowBytes);` + "\n" +
+		`    }` + "\n" +
+		`    bmp.UnlockBits(bd);` + "\n" +
+		// Cleanup: Unmap(slot 15), ReleaseFrame(slot 11), Release(slot 2).
+		`    Marshal.GetDelegateForFunctionPointer<UnmapD>(VF(ctx,15))(ctx,staging,0);` + "\n" +
+		`    Marshal.GetDelegateForFunctionPointer<ReleaseFrameD>(VF(dup,11))(dup);` + "\n" +
+		`    var rel = new Action<IntPtr>(p => { try { Marshal.GetDelegateForFunctionPointer<ReleaseD>(VF(p,2))(p); } catch {} });` + "\n" +
+		`    rel(staging); rel(srcTex); rel(resource); rel(dup);` + "\n" +
+		`    rel(output1); rel(output); rel(adapter); rel(factory); rel(dev); rel(ctx);` + "\n" +
+		`    return bmp;` + "\n" +
+		`  }` + "\n" +
+		`}` + "\n" +
+		`'@ -ReferencedAssemblies System.Drawing; ` +
+		`$dxgiBmp = [DxgiCapture]::Capture(); ` +
+		`if ($dxgiBmp -and -not (Test-BlankBitmap $dxgiBmp)) { ` +
+		`$b64 = ConvertTo-Base64Png $dxgiBmp; $dxgiBmp.Dispose(); [Console]::Out.Write($b64); exit 0 }; ` +
+		`if ($dxgiBmp) { $dxgiBmp.Dispose() } ` +
+		`} catch { }; ` +
 		// ========== All attempts failed ==========
-		`Write-Error "screen is blank - all 4 capture methods failed (CopyFromScreen, BitBlt+CAPTUREBLT, tscon reconnect, PrintWindow composite). This usually means the Windows session is locked, disconnected via RDP, or running as a service without an interactive desktop. Try: (1) unlock the machine, (2) keep RDP connected, or (3) use a VNC-style connection that preserves the desktop session."; exit 1`
+		`Write-Error "screen is blank - all 5 capture methods failed (CopyFromScreen, BitBlt+CAPTUREBLT, tscon reconnect, PrintWindow composite, DXGI Desktop Duplication). This usually means the Windows session is locked, disconnected via RDP, or running as a service without an interactive desktop. Try: (1) unlock the machine, (2) keep RDP connected, or (3) use a VNC-style connection that preserves the desktop session."; exit 1`
 }
 
 func buildDarwinScreenshotCommand() string {
@@ -375,7 +577,8 @@ func buildDarwinScreenshotCommand() string {
 	// 4. If still blank, report the error with lock status.
 	return `tmpfile=$(mktemp /tmp/screenshot_XXXXXX.png); ` +
 		`tmpfile2=$(mktemp /tmp/screenshot_XXXXXX.png); ` +
-		`trap "rm -f \"$tmpfile\" \"$tmpfile2\"" EXIT; ` +
+		`tmpfile3=""; ` +
+		`trap "rm -f \"$tmpfile\" \"$tmpfile2\" \"$tmpfile3\"" EXIT; ` +
 		// Define a reusable blank-check function to avoid code duplication.
 		// Takes a file path as $1, prints "true" if blank, "false" otherwise.
 		`check_blank() { ` +
@@ -415,6 +618,35 @@ except:
 		`is_blank2=$(check_blank "$tmpfile2"); ` +
 		`if [ "$is_blank2" != "true" ]; then ` +
 		`base64 -i "$tmpfile2"; exit 0; fi; ` +
+		// Attempt 3: CGWindowListCreateImage via python3+Quartz.
+		// This captures the full screen composite directly from the window
+		// server, which can work even when the screen is locked because it
+		// reads from the window server's internal buffer rather than the
+		// display framebuffer.
+		`tmpfile3=$(mktemp /tmp/screenshot_XXXXXX.png); ` +
+		`if python3 -c "
+import Quartz
+from Foundation import NSURL
+import sys
+region = Quartz.CGRectInfinite
+image = Quartz.CGWindowListCreateImage(region, Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID, Quartz.kCGWindowImageDefault)
+if image is None:
+    sys.exit(1)
+w = Quartz.CGImageGetWidth(image)
+h = Quartz.CGImageGetHeight(image)
+if w == 0 or h == 0:
+    sys.exit(1)
+url = NSURL.fileURLWithPath_(sys.argv[1])
+dest = Quartz.CGImageDestinationCreateWithURL(url, 'public.png', 1, None)
+if dest is None:
+    sys.exit(1)
+Quartz.CGImageDestinationAddImage(dest, image, None)
+Quartz.CGImageDestinationFinalize(dest)
+" "$tmpfile3" 2>/dev/null; then ` +
+		`is_blank3=$(check_blank "$tmpfile3"); ` +
+		`if [ "$is_blank3" != "true" ]; then ` +
+		`base64 -i "$tmpfile3"; exit 0; fi; fi; ` +
+		`rm -f "$tmpfile3"; ` +
 		// Both attempts blank — report error with lock status.
 		`echo "screen is blank - session may be locked ($is_locked) or display is off" >&2; exit 1`
 }
@@ -774,8 +1006,19 @@ func (m *RemoteSessionManager) captureAndSend(sessionID, label, cmdStr string) e
 
 	msg := NewImageTransferMessage(sessionID, "image/png", base64Data)
 	if err := ValidateImageTransferMessage(msg, ImageOutputSizeLimit); err != nil {
-		m.app.log(fmt.Sprintf("[screenshot] image exceeds size limit for session=%s: %v", sessionID, err))
-		return err
+		// Image exceeds size limit — attempt to downsize before giving up.
+		downsized, dsErr := downsizeScreenshotBase64(base64Data, ImageOutputSizeLimit)
+		if dsErr != nil {
+			m.app.log(fmt.Sprintf("[screenshot] downsize failed for session=%s: %v", sessionID, dsErr))
+			return fmt.Errorf("image transfer: decoded size exceeds limit and downsize failed: %w", dsErr)
+		}
+		m.app.log(fmt.Sprintf("[screenshot] downsized image for session=%s", sessionID))
+		base64Data = downsized
+		msg = NewImageTransferMessage(sessionID, "image/png", base64Data)
+		if err := ValidateImageTransferMessage(msg, ImageOutputSizeLimit); err != nil {
+			m.app.log(fmt.Sprintf("[screenshot] image still exceeds size limit after downsize for session=%s: %v", sessionID, err))
+			return err
+		}
 	}
 
 	if m.hubClient != nil {

@@ -30,6 +30,12 @@ type RemoteSmokeSnapshot struct {
 	Report *RemoteSmokeReport `json:"report,omitempty"`
 }
 
+type ProviderView struct {
+	Name      string `json:"name"`
+	ModelID   string `json:"model_id"`
+	IsDefault bool   `json:"is_default"`
+}
+
 type RemoteSessionView struct {
 	ID             string           `json:"id"`
 	Tool           string           `json:"tool"`
@@ -236,6 +242,27 @@ func (a *App) ListRemoteToolMetadata() []RemoteToolMetadataView {
 	return listRemoteToolMetadataForApp(a)
 }
 
+func (a *App) ListValidProviders(toolName string) ([]ProviderView, error) {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	toolCfg, err := remoteToolConfig(cfg, toolName)
+	if err != nil {
+		return nil, err
+	}
+	valid := validProviders(toolCfg)
+	out := make([]ProviderView, 0, len(valid))
+	for _, m := range valid {
+		out = append(out, ProviderView{
+			Name:      m.ModelName,
+			ModelID:   m.ModelId,
+			IsDefault: strings.EqualFold(m.ModelName, toolCfg.CurrentModel),
+		})
+	}
+	return out, nil
+}
+
 func (a *App) emitRemoteStateChanged() {
 	a.emitEvent("remote-state-changed")
 }
@@ -335,7 +362,7 @@ func (a *App) RunRemoteToolSmoke(toolName, projectDir string, useProxy bool) (Re
 		return report, fmt.Errorf("%s launch probe failed: %s", toolName, launchProbe.Message)
 	}
 
-	session, err := a.StartRemoteSession(toolName, projectDir, useProxy)
+	session, err := a.StartRemoteSession(toolName, projectDir, useProxy, "")
 	report.StartedSession = &session
 	if err != nil {
 		return report, err
@@ -369,10 +396,10 @@ func (a *App) ListRemoteSessions() []RemoteSessionView {
 }
 
 func (a *App) StartRemoteClaudeSession(projectDir string, useProxy bool) (RemoteSessionView, error) {
-	return a.StartRemoteSession("claude", projectDir, useProxy)
+	return a.StartRemoteSession("claude", projectDir, useProxy, "")
 }
 
-func (a *App) StartRemoteSession(toolName, projectDir string, useProxy bool) (RemoteSessionView, error) {
+func (a *App) StartRemoteSession(toolName, projectDir string, useProxy bool, provider string) (RemoteSessionView, error) {
 	cfg, err := a.LoadConfig()
 	if err != nil {
 		return RemoteSessionView{}, err
@@ -401,7 +428,7 @@ func (a *App) StartRemoteSession(toolName, projectDir string, useProxy bool) (Re
 		}
 	}
 
-	spec, err := a.buildRemoteLaunchSpec(toolName, cfg, false, false, "", projectDir, useProxy)
+	spec, err := a.buildRemoteLaunchSpec(toolName, cfg, false, false, "", projectDir, useProxy, provider)
 	if err != nil {
 		return RemoteSessionView{}, err
 	}
@@ -418,7 +445,7 @@ func (a *App) StartRemoteSession(toolName, projectDir string, useProxy bool) (Re
 	return toRemoteSessionView(session), err
 }
 
-func (a *App) StartRemoteHandoffSession(toolName, projectDir string, useProxy bool) (RemoteSessionView, error) {
+func (a *App) StartRemoteHandoffSession(toolName, projectDir string, useProxy bool, provider string) (RemoteSessionView, error) {
 	cfg, err := a.LoadConfig()
 	if err != nil {
 		return RemoteSessionView{}, err
@@ -447,7 +474,7 @@ func (a *App) StartRemoteHandoffSession(toolName, projectDir string, useProxy bo
 		}
 	}
 
-	spec, err := a.buildRemoteLaunchSpec(toolName, cfg, false, false, "", projectDir, useProxy)
+	spec, err := a.buildRemoteLaunchSpec(toolName, cfg, false, false, "", projectDir, useProxy, provider)
 	if err != nil {
 		return RemoteSessionView{}, err
 	}

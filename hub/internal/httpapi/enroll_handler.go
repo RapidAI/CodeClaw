@@ -80,18 +80,22 @@ func EnrollStartHandler(identity *auth.IdentityService, feishuNotifier *feishu.N
 				AppVersion:           req.AppVersion,
 				HeartbeatIntervalSec: heartbeat,
 			})
+		}
 
-			// Auto-add user to Feishu organization so they can discover the bot.
-			if feishuNotifier != nil {
-				if ae := feishuNotifier.AutoEnroller(); ae != nil {
-					go func() {
-						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-						defer cancel()
-						if err := ae.AddToFeishuOrg(ctx, req.Email, "", req.Mobile); err != nil {
-							log.Printf("[enroll] feishu auto-enroll failed for %s: %v", req.Email, err)
-						}
-					}()
-				}
+		// Auto-add user to Feishu organization so they can discover the bot.
+		// This runs for all successful enrollments (including pending_approval)
+		// so the user is already in the Feishu org when the admin approves.
+		if resp != nil && feishuNotifier != nil {
+			if ae := feishuNotifier.AutoEnroller(); ae != nil {
+				email := req.Email
+				mobile := req.Mobile
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if err := ae.AddToFeishuOrg(ctx, email, "", mobile); err != nil {
+						log.Printf("[enroll] feishu auto-enroll failed for %s: %v", email, err)
+					}
+				}()
 			}
 		}
 

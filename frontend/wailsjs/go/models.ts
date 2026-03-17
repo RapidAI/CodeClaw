@@ -142,6 +142,8 @@ export namespace main {
 	    maclaw_llm_url: string;
 	    maclaw_llm_key: string;
 	    maclaw_llm_model: string;
+	    maclaw_role_name: string;
+	    maclaw_role_description: string;
 	    skill_hub_urls: any[];
 	
 	    static createFrom(source: any = {}) {
@@ -201,6 +203,8 @@ export namespace main {
 	        this.maclaw_llm_url = source["maclaw_llm_url"];
 	        this.maclaw_llm_key = source["maclaw_llm_key"];
 	        this.maclaw_llm_model = source["maclaw_llm_model"];
+	        this.maclaw_role_name = source["maclaw_role_name"];
+	        this.maclaw_role_description = source["maclaw_role_description"];
 	        this.skill_hub_urls = source["skill_hub_urls"];
 	    }
 	

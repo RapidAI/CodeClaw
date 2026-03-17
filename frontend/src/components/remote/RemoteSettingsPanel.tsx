@@ -1,7 +1,52 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { main } from "../../../wailsjs/go/models";
 import { ListRemoteHubs } from "../../../wailsjs/go/main/App";
 import type { RemoteActivationStatus } from "./types";
+
+const COUNTRY_CODES = [
+    { code: "+86", label: "🇨🇳 +86" },
+    { code: "+1", label: "🇺🇸 +1" },
+    { code: "+81", label: "🇯🇵 +81" },
+    { code: "+82", label: "🇰🇷 +82" },
+    { code: "+44", label: "🇬🇧 +44" },
+    { code: "+49", label: "🇩🇪 +49" },
+    { code: "+33", label: "🇫🇷 +33" },
+    { code: "+61", label: "🇦🇺 +61" },
+    { code: "+65", label: "🇸🇬 +65" },
+    { code: "+852", label: "🇭🇰 +852" },
+    { code: "+853", label: "🇲🇴 +853" },
+    { code: "+886", label: "🇹🇼 +886" },
+    { code: "+91", label: "🇮🇳 +91" },
+    { code: "+7", label: "🇷🇺 +7" },
+    { code: "+55", label: "🇧🇷 +55" },
+    { code: "+60", label: "🇲🇾 +60" },
+    { code: "+66", label: "🇹🇭 +66" },
+    { code: "+84", label: "🇻🇳 +84" },
+    { code: "+62", label: "🇮🇩 +62" },
+    { code: "+63", label: "🇵🇭 +63" },
+] as const;
+
+// Pre-sorted by code length descending so +852 matches before +8x
+const COUNTRY_CODES_SORTED = [...COUNTRY_CODES].sort((a, b) => b.code.length - a.code.length);
+
+/** Split a full mobile string like "+8613800138000" into { countryCode, localNumber }. */
+function parseMobile(full: string): { countryCode: string; localNumber: string } {
+    const s = (full || "").replace(/[\s-]/g, "");
+    if (!s) return { countryCode: "+86", localNumber: "" };
+    // Try matching known country codes (longest first to handle +852 vs +8)
+    for (const cc of COUNTRY_CODES_SORTED) {
+        if (s.startsWith(cc.code)) {
+            return { countryCode: cc.code, localNumber: s.slice(cc.code.length) };
+        }
+    }
+    // Fallback: if starts with +, try to extract code
+    if (s.startsWith("+")) {
+        const m = s.match(/^(\+\d{1,4})/);
+        if (m) return { countryCode: m[1], localNumber: s.slice(m[1].length) };
+    }
+    // No code found — assume +86 for bare numbers
+    return { countryCode: "+86", localNumber: s };
+}
 
 interface HubOption {
     hub_id: string;
@@ -39,6 +84,23 @@ export function RemoteSettingsPanel({
     const [hubProbeError, setHubProbeError] = useState("");
     const [showMobileConfirm, setShowMobileConfirm] = useState(false);
     const [showNoMobilePrompt, setShowNoMobilePrompt] = useState(false);
+
+    // Track the user's country code selection separately so it persists
+    // even when the local number is empty (parsed would default to +86).
+    const [selectedCC, setSelectedCC] = useState<string | null>(null);
+    const parsed = useMemo(() => parseMobile((config as any)?.remote_mobile || ""), [config]);
+    const countryCode = selectedCC && !parsed.localNumber ? selectedCC : parsed.countryCode;
+
+    const handleCountryCodeChange = useCallback((newCode: string) => {
+        setSelectedCC(newCode);
+        const local = parsed.localNumber;
+        saveRemoteConfigField({ remote_mobile: local ? newCode + local : "" } as any);
+    }, [parsed.localNumber, saveRemoteConfigField]);
+
+    const handleLocalNumberChange = useCallback((value: string) => {
+        const digits = value.replace(/\D/g, "");
+        saveRemoteConfigField({ remote_mobile: digits ? countryCode + digits : "" } as any);
+    }, [countryCode, saveRemoteConfigField]);
 
     const probeHubs = async () => {
         const centerURL = (config?.remote_hubcenter_url || "").trim();
@@ -91,8 +153,8 @@ export function RemoteSettingsPanel({
 
     return (
         <>
-            {/* Row 1: Hub Center + 心跳间隔 */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: "10px" }}>
+            {/* Row 1: Hub Center + 心跳间隔 + 熄屏时间 */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px", gap: "10px" }}>
                 <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="form-label">{translate("remoteHubCenterUrl")}</label>
                     <input
@@ -114,6 +176,19 @@ export function RemoteSettingsPanel({
                         value={config?.remote_heartbeat_sec || 10}
                         onChange={(e) => saveRemoteConfigField({ remote_heartbeat_sec: Number(e.target.value || 10) })}
                         onBlur={(e) => saveRemoteConfigField({ remote_heartbeat_sec: Math.max(5, Number(e.target.value || 10)) })}
+                    />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">熄屏时间（分钟）</label>
+                    <input
+                        className="form-input"
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={(config as any)?.screen_dim_timeout_min ?? 3}
+                        onChange={(e) => saveRemoteConfigField({ screen_dim_timeout_min: Number(e.target.value || 0) } as any)}
+                        onBlur={(e) => saveRemoteConfigField({ screen_dim_timeout_min: Math.max(0, Number(e.target.value || 0)) } as any)}
+                        title="无键鼠操作多少分钟后熄屏节能（0=禁用）。防锁屏开启时有效。"
                     />
                 </div>
             </div>
@@ -177,14 +252,26 @@ export function RemoteSettingsPanel({
                     </div>
                     <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">手机号（飞书自动加入组织）</label>
-                        <input
-                            className="form-input"
-                            value={(config as any)?.remote_mobile || ""}
-                            onChange={(e) => saveRemoteConfigField({ remote_mobile: e.target.value } as any)}
-                            onBlur={(e) => saveRemoteConfigField({ remote_mobile: e.target.value.trim() } as any)}
-                            placeholder="+86 13800138000"
-                            spellCheck={false}
-                        />
+                        <div style={{ display: "flex", gap: "4px" }}>
+                            <select
+                                className="form-select"
+                                value={countryCode}
+                                onChange={(e) => handleCountryCodeChange(e.target.value)}
+                                style={{ width: "72px", flexShrink: 0 }}
+                            >
+                                {COUNTRY_CODES.map((cc) => (
+                                    <option key={cc.code} value={cc.code}>{cc.label}</option>
+                                ))}
+                            </select>
+                            <input
+                                className="form-input"
+                                value={parsed.localNumber}
+                                onChange={(e) => handleLocalNumberChange(e.target.value)}
+                                placeholder="13800138000"
+                                spellCheck={false}
+                                style={{ flex: 1 }}
+                            />
+                        </div>
                     </div>
                     {invitationCodeRequired && (
                         <div className="form-group" style={{ marginBottom: 0 }}>
@@ -257,7 +344,10 @@ export function RemoteSettingsPanel({
                             padding: "14px", margin: "12px 0", borderRadius: "10px",
                             background: "#f0f5ff", color: "#1a3a6b", letterSpacing: "1px",
                         }}>
-                            {((config as any)?.remote_mobile || "").trim()}
+                            {(() => {
+                                const m = parseMobile(((config as any)?.remote_mobile || "").trim());
+                                return m.localNumber ? `${m.countryCode} ${m.localNumber}` : ((config as any)?.remote_mobile || "").trim();
+                            })()}
                         </div>
                         <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", marginTop: "16px" }}>
                             <button

@@ -20,6 +20,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"log"
 	"math/big"
@@ -232,7 +234,15 @@ func (p *Plugin) SendImage(ctx context.Context, target im.UserTarget, imageKey s
 
 	// imageKey is base64-encoded PNG data from the screenshot pipeline.
 	if len(imageKey) > 200 {
-		return p.sendC2CMedia(ctx, openID, 1, imageKey, "", "image/png", caption) // 1 = image
+		// Compress PNG → JPEG to reduce size; QQ's media upload is prone to
+		// 850027 "富媒体文件上传超时" when the payload is large.
+		compressed, mime := compressImageForQQ(imageKey, "image/png")
+		err := p.sendC2CMedia(ctx, openID, 1, compressed, "", mime, caption)
+		if err != nil {
+			log.Printf("[qqbot] SendImage failed, trying download-link fallback: %v", err)
+			return p.sendImageAsLink(ctx, openID, imageKey, "image/png", caption)
+		}
+		return nil
 	}
 
 	text := caption
@@ -240,6 +250,51 @@ func (p *Plugin) SendImage(ctx context.Context, target im.UserTarget, imageKey s
 		text = "[图片]"
 	}
 	return p.SendText(ctx, target, text)
+}
+
+// compressImageForQQ converts base64-encoded PNG data to JPEG at quality 75
+// to reduce payload size. If conversion fails, returns the original data.
+func compressImageForQQ(base64Data, mimeType string) (string, string) {
+	if !strings.HasPrefix(mimeType, "image/png") {
+		return base64Data, mimeType
+	}
+	raw, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return base64Data, mimeType
+	}
+	img, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return base64Data, mimeType
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 75}); err != nil {
+		return base64Data, mimeType
+	}
+	// Only use JPEG if it's actually smaller.
+	if buf.Len() >= len(raw) {
+		return base64Data, mimeType
+	}
+	log.Printf("[qqbot] compressed image: PNG %d bytes → JPEG %d bytes (%.0f%% reduction)",
+		len(raw), buf.Len(), float64(len(raw)-buf.Len())/float64(len(raw))*100)
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), "image/jpeg"
+}
+
+// sendImageAsLink stores the image as a temp file and sends a text message
+// with the download URL. This is the last-resort fallback when QQ's media
+// upload API keeps timing out.
+func (p *Plugin) sendImageAsLink(ctx context.Context, openID, base64Data, mimeType, caption string) error {
+	if p.publicBaseURL == "" {
+		return fmt.Errorf("qqbot: publicBaseURL not set, cannot create download link")
+	}
+	downloadURL, err := p.storeTempFile(base64Data, mimeType)
+	if err != nil {
+		return fmt.Errorf("qqbot: store temp file for link fallback: %w", err)
+	}
+	text := "📷 图片发送失败，请通过链接查看（5分钟内有效）：\n" + downloadURL
+	if caption != "" {
+		text = caption + "\n" + text
+	}
+	return p.sendC2CMessage(ctx, openID, text)
 }
 
 // SendFile sends a file to the target user via QQ rich media API.
@@ -418,56 +473,11 @@ func (p *Plugin) sendC2CMedia(ctx context.Context, openID string, fileType int, 
 
 	// Step 1: Upload media to get file_info.
 	uploadURL := fmt.Sprintf("%s/v2/users/%s/files", qqAPIBase, openID)
-	uploadPayload := map[string]any{
-		"file_type":    fileType,
-		"srv_send_msg": false,
-	}
-	if fileType == 4 && fileName != "" {
-		uploadPayload["file_name"] = fileName
-	}
 
-	// For large files, use URL mode to avoid QQ gateway 413 errors.
-	if len(base64Data) > urlUploadThreshold && p.publicBaseURL != "" {
-		tempURL, storeErr := p.storeTempFile(base64Data, mimeType)
-		if storeErr != nil {
-			log.Printf("[qqbot] failed to store temp file, falling back to inline: %v", storeErr)
-			uploadPayload["file_data"] = base64Data
-		} else {
-			log.Printf("[qqbot] large file (%d bytes base64), using URL mode: %s", len(base64Data), tempURL)
-			uploadPayload["url"] = tempURL
-		}
-	} else {
-		uploadPayload["file_data"] = base64Data
-	}
-
-	uploadBody, _ := json.Marshal(uploadPayload)
-
-	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(uploadBody))
+	// Try upload, with one retry using URL mode if inline fails.
+	fileInfo, err := p.tryUploadMedia(ctx, token, uploadURL, fileType, base64Data, fileName, mimeType)
 	if err != nil {
-		return fmt.Errorf("qqbot: create upload request: %w", err)
-	}
-	uploadReq.Header.Set("Content-Type", "application/json")
-	uploadReq.Header.Set("Authorization", "QQBot "+token)
-
-	uploadResp, err := p.client.Do(uploadReq)
-	if err != nil {
-		return fmt.Errorf("qqbot: upload media failed: %w", err)
-	}
-	defer uploadResp.Body.Close()
-
-	uploadRespBody, _ := io.ReadAll(io.LimitReader(uploadResp.Body, 8192))
-	if uploadResp.StatusCode >= 300 {
-		return fmt.Errorf("qqbot: upload media HTTP %d: %s", uploadResp.StatusCode, string(uploadRespBody))
-	}
-
-	var uploadResult struct {
-		FileInfo string `json:"file_info"`
-	}
-	if err := json.Unmarshal(uploadRespBody, &uploadResult); err != nil {
-		return fmt.Errorf("qqbot: parse upload response: %w", err)
-	}
-	if uploadResult.FileInfo == "" {
-		return fmt.Errorf("qqbot: upload returned empty file_info")
+		return err
 	}
 
 	// Step 2: Send rich media message.
@@ -475,7 +485,7 @@ func (p *Plugin) sendC2CMedia(ctx context.Context, openID string, fileType int, 
 	msgBody, _ := json.Marshal(map[string]any{
 		"msg_type": 7,
 		"media": map[string]any{
-			"file_info": uploadResult.FileInfo,
+			"file_info": fileInfo,
 		},
 	})
 
@@ -503,6 +513,94 @@ func (p *Plugin) sendC2CMedia(ctx context.Context, openID string, fileType int, 
 	}
 
 	return nil
+}
+
+// tryUploadMedia attempts to upload media to QQ. It first tries inline mode,
+// and if that fails with a timeout/size error, retries with URL mode.
+func (p *Plugin) tryUploadMedia(ctx context.Context, token, uploadURL string, fileType int, base64Data, fileName, mimeType string) (string, error) {
+	uploadPayload := map[string]any{
+		"file_type":    fileType,
+		"srv_send_msg": false,
+	}
+	if fileType == 4 && fileName != "" {
+		uploadPayload["file_name"] = fileName
+	}
+
+	useURLMode := len(base64Data) > urlUploadThreshold && p.publicBaseURL != ""
+
+	if useURLMode {
+		tempURL, storeErr := p.storeTempFile(base64Data, mimeType)
+		if storeErr != nil {
+			log.Printf("[qqbot] failed to store temp file, falling back to inline: %v", storeErr)
+			uploadPayload["file_data"] = base64Data
+		} else {
+			log.Printf("[qqbot] large file (%d bytes base64), using URL mode: %s", len(base64Data), tempURL)
+			uploadPayload["url"] = tempURL
+		}
+	} else {
+		uploadPayload["file_data"] = base64Data
+	}
+
+	fileInfo, err := p.doUploadMedia(ctx, token, uploadURL, uploadPayload)
+	if err == nil {
+		return fileInfo, nil
+	}
+
+	// If inline mode failed and we haven't tried URL mode yet, retry with URL.
+	errStr := err.Error()
+	isTimeoutErr := strings.Contains(errStr, "850027") || strings.Contains(errStr, "40034003") || strings.Contains(errStr, "超时")
+	if !useURLMode && isTimeoutErr && p.publicBaseURL != "" {
+		log.Printf("[qqbot] inline upload failed with timeout, retrying with URL mode: %v", err)
+		tempURL, storeErr := p.storeTempFile(base64Data, mimeType)
+		if storeErr != nil {
+			return "", fmt.Errorf("qqbot: inline upload timed out and URL fallback failed: %w", err)
+		}
+		retryPayload := map[string]any{
+			"file_type":    fileType,
+			"srv_send_msg": false,
+			"url":          tempURL,
+		}
+		if fileType == 4 && fileName != "" {
+			retryPayload["file_name"] = fileName
+		}
+		return p.doUploadMedia(ctx, token, uploadURL, retryPayload)
+	}
+
+	return "", err
+}
+
+// doUploadMedia performs the actual HTTP POST to QQ's file upload endpoint.
+func (p *Plugin) doUploadMedia(ctx context.Context, token, uploadURL string, payload map[string]any) (string, error) {
+	uploadBody, _ := json.Marshal(payload)
+
+	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(uploadBody))
+	if err != nil {
+		return "", fmt.Errorf("qqbot: create upload request: %w", err)
+	}
+	uploadReq.Header.Set("Content-Type", "application/json")
+	uploadReq.Header.Set("Authorization", "QQBot "+token)
+
+	uploadResp, err := p.client.Do(uploadReq)
+	if err != nil {
+		return "", fmt.Errorf("qqbot: upload media failed: %w", err)
+	}
+	defer uploadResp.Body.Close()
+
+	uploadRespBody, _ := io.ReadAll(io.LimitReader(uploadResp.Body, 8192))
+	if uploadResp.StatusCode >= 300 {
+		return "", fmt.Errorf("qqbot: upload media HTTP %d: %s", uploadResp.StatusCode, string(uploadRespBody))
+	}
+
+	var uploadResult struct {
+		FileInfo string `json:"file_info"`
+	}
+	if err := json.Unmarshal(uploadRespBody, &uploadResult); err != nil {
+		return "", fmt.Errorf("qqbot: parse upload response: %w", err)
+	}
+	if uploadResult.FileInfo == "" {
+		return "", fmt.Errorf("qqbot: upload returned empty file_info")
+	}
+	return uploadResult.FileInfo, nil
 }
 // ---------------------------------------------------------------------------
 // WebSocket Gateway — connects to QQ Bot gateway for real-time events

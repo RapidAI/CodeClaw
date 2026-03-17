@@ -224,7 +224,7 @@ func GetCenterStatusHandler(centerSvc *center.Service) http.HandlerFunc {
 	}
 }
 
-func UpdateCenterConfigHandler(centerSvc *center.Service, identity *auth.IdentityService) http.HandlerFunc {
+func UpdateCenterConfigHandler(centerSvc *center.Service, identity *auth.IdentityService, onPublicBaseURLChanged ...func(string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CenterConfigRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -251,6 +251,10 @@ func UpdateCenterConfigHandler(centerSvc *center.Service, identity *auth.Identit
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "CENTER_CONFIG_FAILED", err.Error())
 				return
+			}
+			// Notify IM plugins so temp-file download URLs use the new domain.
+			for _, fn := range onPublicBaseURLChanged {
+				fn(status.PublicBaseURL)
 			}
 		}
 		if req.Visibility != "" {

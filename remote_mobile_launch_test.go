@@ -1,0 +1,127 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+func TestStartRemoteSessionForProjectProviderField(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("USERPROFILE", tempHome)
+	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
+
+	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
+	}
+
+	claudeExe := "claude"
+	if runtime.GOOS == "windows" {
+		claudeExe = "claude.exe"
+	}
+	if err := os.WriteFile(filepath.Join(toolsDir, claudeExe), []byte("stub"), 0o644); err != nil {
+		t.Fatalf("WriteFile(claude) error = %v", err)
+	}
+
+	projectDir := filepath.Join(tempHome, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(projectDir) error = %v", err)
+	}
+
+	app := &App{testHomeDir: tempHome}
+	cfg, err := app.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.RemoteEnabled = true
+	cfg.Claude = ToolConfig{
+		CurrentModel: "Original",
+		Models: []ModelConfig{
+			{ModelName: "Original", ModelId: "claude-sonnet"},
+			{ModelName: "DeepSeek", ModelId: "deepseek-v3", ApiKey: "sk-abc"},
+			{ModelName: "EmptyKey", ModelId: "empty-model", ApiKey: ""},
+		},
+	}
+	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
+	cfg.CurrentProject = "p1"
+	if err := app.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	resetSessionManager := func() {
+		app.remoteSessions = NewRemoteSessionManager(app)
+		app.remoteSessions.executionFactory = func(spec LaunchSpec) (ExecutionStrategy, error) {
+			return &fakeExecutionStrategy{handle: newFakeExecutionHandle(200)}, nil
+		}
+	}
+
+	t.Run("empty provider uses default CurrentModel", func(t *testing.T) {
+		resetSessionManager()
+		view, err := app.StartRemoteSessionForProject(RemoteStartSessionRequest{
+			Tool:      "claude",
+			ProjectID: "p1",
+			Provider:  "",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if view.Tool != "claude" {
+			t.Errorf("Tool = %q, want %q", view.Tool, "claude")
+		}
+		if view.ModelID != "claude-sonnet" {
+			t.Errorf("ModelID = %q, want %q", view.ModelID, "claude-sonnet")
+		}
+	})
+
+	t.Run("valid provider overrides default", func(t *testing.T) {
+		resetSessionManager()
+		view, err := app.StartRemoteSessionForProject(RemoteStartSessionRequest{
+			Tool:      "claude",
+			ProjectID: "p1",
+			Provider:  "DeepSeek",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if view.Tool != "claude" {
+			t.Errorf("Tool = %q, want %q", view.Tool, "claude")
+		}
+		if view.ModelID != "deepseek-v3" {
+			t.Errorf("ModelID = %q, want %q", view.ModelID, "deepseek-v3")
+		}
+	})
+
+	t.Run("invalid provider returns error", func(t *testing.T) {
+		resetSessionManager()
+		_, err := app.StartRemoteSessionForProject(RemoteStartSessionRequest{
+			Tool:      "claude",
+			ProjectID: "p1",
+			Provider:  "EmptyKey",
+		})
+		if err == nil {
+			t.Fatal("expected error for invalid provider, got nil")
+		}
+		if !strings.Contains(err.Error(), "has no API key configured") {
+			t.Errorf("error = %q, want it to contain 'has no API key configured'", err.Error())
+		}
+	})
+
+	t.Run("nonexistent provider returns error", func(t *testing.T) {
+		resetSessionManager()
+		_, err := app.StartRemoteSessionForProject(RemoteStartSessionRequest{
+			Tool:      "claude",
+			ProjectID: "p1",
+			Provider:  "NonExistent",
+		})
+		if err == nil {
+			t.Fatal("expected error for nonexistent provider, got nil")
+		}
+		if !strings.Contains(err.Error(), "not found") {
+			t.Errorf("error = %q, want it to contain 'not found'", err.Error())
+		}
+	})
+}

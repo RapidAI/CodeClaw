@@ -284,3 +284,24 @@ func listRemoteToolMetadataForApp(app *App) []RemoteToolMetadataView {
 	}
 	return out
 }
+
+// isValidProvider returns true when the ModelConfig represents a usable
+// provider: either the built-in "Original" mode (which uses the tool's
+// own authentication) or a third-party provider with a configured API key.
+func isValidProvider(m ModelConfig) bool {
+	if strings.EqualFold(m.ModelName, "original") {
+		return true
+	}
+	return strings.TrimSpace(m.ApiKey) != ""
+}
+
+// validProviders returns only the usable providers from a ToolConfig.
+func validProviders(tc ToolConfig) []ModelConfig {
+	var out []ModelConfig
+	for _, m := range tc.Models {
+		if isValidProvider(m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
