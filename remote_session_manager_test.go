@@ -17,7 +17,7 @@ type fakeProviderAdapter struct {
 }
 
 func (f *fakeProviderAdapter) ProviderName() string { return "claude" }
-func (f *fakeProviderAdapter) ExecutionMode() ExecutionMode { return ExecModePTY }
+func (f *fakeProviderAdapter) ExecutionMode() ExecutionMode { return ExecModeSDK }
 func (f *fakeProviderAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 	f.lastSpec = spec
 	if f.buildErr != nil {

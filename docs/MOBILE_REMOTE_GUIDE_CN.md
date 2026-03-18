@@ -38,7 +38,7 @@
 4. `远程邮箱`
    - 建议填写你在手机上也能访问确认链接的邮箱
 5. 选择要远控的工具
-   - 当前界面支持 `Claude`、`Codex`、`OpenCode`、`iFlow`、`Kilo`、`Kode`
+   - 当前界面支持 `Claude`、`Codex`、`OpenCode`、`iFlow`、`Kilo`
 
 然后建议依次点击：
 

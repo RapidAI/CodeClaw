@@ -268,7 +268,8 @@ type SDKInterruptBody struct {
 type ExecutionMode string
 
 const (
-	// ExecModePTY launches the tool in a pseudo-terminal (interactive TUI).
+	// ExecModePTY is deprecated. All providers now use SDK or headless modes.
+	// Retained for backward compatibility with stored session data.
 	ExecModePTY ExecutionMode = "pty"
 
 	// ExecModeSDK launches the tool with structured JSON stdin/stdout (Claude Code stream-json).

@@ -22,12 +22,14 @@ var (
 	ErrMachineUnauthorized    = errors.New("machine unauthorized")
 	ErrInvitationCodeRequired = errors.New("invitation code is required")
 	ErrInvalidInvitationCode  = errors.New("invalid or used invitation code")
+	ErrInvitationExpired      = errors.New("invitation code has expired")
 )
 
 // InvitationCodeValidator abstracts the invitation code service to avoid circular imports.
 type InvitationCodeValidator interface {
 	IsRequired(ctx context.Context) (bool, error)
 	ValidateAndConsume(ctx context.Context, code string, email string) error
+	CheckExpiry(ctx context.Context, email string) (bool, *time.Time, error)
 }
 
 // LoginNotifier sends login confirmation links to bound IM channels.
@@ -48,6 +50,7 @@ type EnrollmentResult struct {
 	SN           string `json:"sn,omitempty"`
 	MachineID    string `json:"machine_id,omitempty"`
 	MachineToken string `json:"machine_token,omitempty"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
 }
 
 type EmailLoginRequestResult struct {
@@ -174,6 +177,31 @@ func (s *IdentityService) StartEnrollment(ctx context.Context, email, machineNam
 	user, err := s.users.GetByEmail(ctx, email)
 	if err != nil {
 		return nil, err
+	}
+
+	// Expiry check for existing users
+	if user != nil && s.invitationSvc != nil {
+		expired, expiresAt, _ := s.invitationSvc.CheckExpiry(ctx, email)
+		if expired {
+			if strings.TrimSpace(invitationCode) != "" {
+				// Expired user provided a new invitation code — rebind
+				if err := s.invitationSvc.ValidateAndConsume(ctx, invitationCode, email); err != nil {
+					return nil, ErrInvalidInvitationCode
+				}
+				// Continue normal enrollment flow
+			} else {
+				// Expired and no new code provided
+				result := &EnrollmentResult{
+					Status:  "invitation_expired",
+					Message: "invitation code has expired",
+					Email:   email,
+				}
+				if expiresAt != nil {
+					result.ExpiresAt = expiresAt.Format(time.RFC3339)
+				}
+				return result, ErrInvitationExpired
+			}
+		}
 	}
 
 	// Invitation code validation — only required for new users

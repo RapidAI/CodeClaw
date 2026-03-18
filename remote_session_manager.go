@@ -28,9 +28,7 @@ func NewRemoteSessionManager(app *App) *RemoteSessionManager {
 		app:      app,
 		sessions: map[string]*RemoteSession{},
 		executionFactory: func(spec LaunchSpec) (ExecutionStrategy, error) {
-			return NewLocalPTYExecutionStrategy(func() PTYSession {
-				return NewWindowsPTYSession()
-			}), nil
+			return NewLocalPTYExecutionStrategy(nil), nil
 		},
 		workspacePreparer: NewDefaultWorkspacePreparer(),
 		pipelineFactory: func() *OutputPipeline {
@@ -44,6 +42,29 @@ func NewRemoteSessionManager(app *App) *RemoteSessionManager {
 
 func (m *RemoteSessionManager) SetHubClient(client *RemoteHubClient) {
 	m.hubClient = client
+}
+
+// executionStrategyForMode returns the correct ExecutionStrategy for the
+// given provider execution mode. All current providers use SDK or headless
+// protocols; the PTY mode constant is retained only for backward compat.
+func executionStrategyForMode(mode ExecutionMode) ExecutionStrategy {
+	switch mode {
+	case ExecModeSDK:
+		return NewSDKExecutionStrategy()
+	case ExecModeCodexSDK:
+		return NewCodexSDKExecutionStrategy()
+	case ExecModeIFlowSDK:
+		return NewIFlowSDKExecutionStrategy()
+	case ExecModeOpenCodeSDK:
+		return NewOpenCodeSDKExecutionStrategy()
+	case ExecModeKiloSDK:
+		return NewKiloSDKExecutionStrategy()
+	case ExecModeGeminiACP:
+		return NewGeminiACPExecutionStrategy()
+	default:
+		// Fallback: SDK mode is the most common protocol.
+		return NewSDKExecutionStrategy()
+	}
 }
 
 func (m *RemoteSessionManager) Create(spec LaunchSpec) (*RemoteSession, error) {
@@ -106,9 +127,8 @@ func (m *RemoteSessionManager) Create(spec LaunchSpec) (*RemoteSession, error) {
 	}
 
 	// Choose execution strategy based on provider mode.
-	// executionFactory is used for PTY mode (and can be overridden in tests).
-	// For SDK modes, we use the factory if it has been overridden (test scenario),
-	// otherwise we create the appropriate strategy directly.
+	// executionFactory can be overridden in tests to inject a fake strategy.
+	// The default factory creates the correct strategy for the provider's mode.
 	var strategy ExecutionStrategy
 	strategy, err = m.executionFactory(spec)
 	if err != nil {
@@ -118,24 +138,12 @@ func (m *RemoteSessionManager) Create(spec LaunchSpec) (*RemoteSession, error) {
 		m.syncFailedSession(session)
 		return session, err
 	}
-	// If the factory returned a PTY strategy but the provider needs a different mode,
-	// create the correct SDK strategy. When executionFactory is overridden in tests,
-	// it returns a fake strategy which is not *LocalPTYExecutionStrategy, so we keep it.
-	if _, isPTY := strategy.(*LocalPTYExecutionStrategy); isPTY {
-		switch provider.ExecutionMode() {
-		case ExecModeCodexSDK:
-			strategy = NewCodexSDKExecutionStrategy()
-		case ExecModeSDK:
-			strategy = NewSDKExecutionStrategy()
-		case ExecModeIFlowSDK:
-			strategy = NewIFlowSDKExecutionStrategy()
-		case ExecModeOpenCodeSDK:
-			strategy = NewOpenCodeSDKExecutionStrategy()
-		case ExecModeKiloSDK:
-			strategy = NewKiloSDKExecutionStrategy()
-		case ExecModeGeminiACP:
-			strategy = NewGeminiACPExecutionStrategy()
-		}
+	// If the factory returned a nil-PTY placeholder (default), resolve the
+	// real strategy from the provider's execution mode. When executionFactory
+	// is overridden in tests it returns a fake strategy which is not
+	// *LocalPTYExecutionStrategy, so we keep it as-is.
+	if _, isPlaceholder := strategy.(*LocalPTYExecutionStrategy); isPlaceholder {
+		strategy = executionStrategyForMode(provider.ExecutionMode())
 	}
 
 	execHandle, err := strategy.Start(cmd)

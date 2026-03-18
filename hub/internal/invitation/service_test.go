@@ -86,6 +86,18 @@ func (m *memInvitationCodeRepo) MarkUsed(_ context.Context, id string, email str
 	return errors.New("not found")
 }
 
+func (m *memInvitationCodeRepo) GetByEmail(_ context.Context, email string) (*store.InvitationCode, error) {
+	var latest *store.InvitationCode
+	for _, c := range m.codes {
+		if c.UsedByEmail == email && c.Status == "used" {
+			if latest == nil || (c.UsedAt != nil && (latest.UsedAt == nil || c.UsedAt.After(*latest.UsedAt))) {
+				latest = c
+			}
+		}
+	}
+	return latest, nil
+}
+
 type memSettingsRepo struct {
 	data map[string]string
 }
@@ -115,7 +127,7 @@ func TestGenerateCodes_ValidCount(t *testing.T) {
 	svc := NewService(&memInvitationCodeRepo{}, newMemSettingsRepo())
 	ctx := context.Background()
 
-	codes, err := svc.GenerateCodes(ctx, 5)
+	codes, err := svc.GenerateCodes(ctx, 5, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,7 +155,7 @@ func TestGenerateCodes_InvalidCount(t *testing.T) {
 	ctx := context.Background()
 
 	for _, count := range []int{0, -1, 51, 100} {
-		_, err := svc.GenerateCodes(ctx, count)
+		_, err := svc.GenerateCodes(ctx, count, 0)
 		if !errors.Is(err, ErrInvalidCount) {
 			t.Errorf("count=%d: expected ErrInvalidCount, got %v", count, err)
 		}
@@ -155,7 +167,7 @@ func TestValidateAndConsume_Success(t *testing.T) {
 	svc := NewService(repo, newMemSettingsRepo())
 	ctx := context.Background()
 
-	codes, err := svc.GenerateCodes(ctx, 1)
+	codes, err := svc.GenerateCodes(ctx, 1, 0)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -183,7 +195,7 @@ func TestValidateAndConsume_AlreadyUsed(t *testing.T) {
 	svc := NewService(repo, newMemSettingsRepo())
 	ctx := context.Background()
 
-	codes, _ := svc.GenerateCodes(ctx, 1)
+	codes, _ := svc.GenerateCodes(ctx, 1, 0)
 	_ = svc.ValidateAndConsume(ctx, codes[0].Code, "first@example.com")
 
 	err := svc.ValidateAndConsume(ctx, codes[0].Code, "second@example.com")
@@ -251,7 +263,7 @@ func TestListCodes(t *testing.T) {
 	svc := NewService(repo, newMemSettingsRepo())
 	ctx := context.Background()
 
-	codes, _ := svc.GenerateCodes(ctx, 3)
+	codes, _ := svc.GenerateCodes(ctx, 3, 0)
 	_ = svc.ValidateAndConsume(ctx, codes[0].Code, "user@example.com")
 
 	all, err := svc.ListCodes(ctx, "", "")

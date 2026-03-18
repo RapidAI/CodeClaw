@@ -99,7 +99,7 @@ func (a *App) CheckEnvironment(force bool) {
 
 		// 1. Setup PATH
 		var envPath = os.Getenv("PATH")
-		commonPaths := []string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"}
+		commonPaths := []string{"/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"}
 		commonPaths = append([]string{localBinDir}, commonPaths...)
 
 		newPathParts := strings.Split(envPath, ":")
@@ -140,6 +140,9 @@ func (a *App) CheckEnvironment(force bool) {
 			}
 			a.log(a.tr("Node.js manually installed to ") + localNodeDir)
 
+			// Ensure the freshly installed bin dir is on PATH so npm lookup succeeds.
+			a.updatePathForNode()
+
 			localNodePath := filepath.Join(localBinDir, "node")
 			if _, err := os.Stat(localNodePath); err == nil {
 				nodePath = localNodePath
@@ -149,6 +152,18 @@ func (a *App) CheckEnvironment(force bool) {
 				a.log(a.tr("Node.js installation completed but binary not found."))
 				wails_runtime.EventsEmit(a.ctx, "env-check-done")
 				return
+			}
+
+			// Verify the installed binary actually runs.
+			verifyCmd := exec.Command(nodePath, "--version")
+			if out, err := verifyCmd.Output(); err != nil {
+				a.log(a.tr("Node.js binary exists but failed to run: ") + err.Error())
+				// Remove the broken installation so next launch retries.
+				os.RemoveAll(localNodeDir)
+				wails_runtime.EventsEmit(a.ctx, "env-check-done")
+				return
+			} else {
+				a.log(a.tr("✓ Node.js installed: %s (%s)", strings.TrimSpace(string(out)), nodePath))
 			}
 		} else {
 			// Get Node.js version
@@ -229,7 +244,8 @@ func (a *App) installToolsInBackground() {
 	}
 
 	tm := NewToolManager(a)
-	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "kode", "iflow", "cursor"}
+	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "iflow", "cursor"}
+	expectedPrefix := filepath.Join(home, ".cceasy", "tools")
 
 	for _, tool := range tools {
 		// Try to acquire lock for this tool
@@ -249,10 +265,16 @@ func (a *App) installToolsInBackground() {
 				a.log(a.tr("Background: ERROR: Failed to install %s: %v", tool, err))
 			} else {
 				a.log(a.tr("Background: %s installed successfully.", tool))
-				// Emit event to notify frontend
+				a.updatePathForNode()
 				a.emitEvent("tool-installed", tool)
 			}
 		} else {
+			if !strings.HasPrefix(status.Path, expectedPrefix) {
+				a.log(a.tr("Background: WARNING: %s found at %s (not in private directory, skipping)", tool, status.Path))
+				a.unlockTool(tool)
+				continue
+			}
+
 			a.log(a.tr("Background: %s found at %s (version: %s).", tool, status.Path, status.Version))
 
 			// Check for updates (skip for non-npm tools like claude and cursor)
@@ -264,14 +286,24 @@ func (a *App) installToolsInBackground() {
 			} else {
 				a.log(a.tr("Background: Checking for %s updates...", tool))
 				latest, err := a.getLatestNpmVersion(npmPath, pkgName)
-				if err == nil && latest != "" && latest != status.Version {
-					a.log(a.tr("Background: New version available for %s: %s (current: %s). Updating...", tool, latest, status.Version))
-					a.emitEvent("tool-updating", tool)
-					if err := tm.UpdateTool(tool); err != nil {
-						a.log(a.tr("Background: ERROR: Failed to update %s: %v", tool, err))
+				if err == nil && latest != "" {
+					needsUpdate := compareVersions(status.Version, latest) < 0
+					if needsUpdate {
+						a.log(a.tr("Background: New version available for %s: %s (current: %s). Updating...", tool, latest, status.Version))
+						a.emitEvent("tool-updating", tool)
+						if err := tm.UpdateTool(tool); err != nil {
+							errStr := err.Error()
+							if strings.Contains(errStr, "ripgrep") && strings.Contains(errStr, "403") {
+								a.log(a.tr("Background: Warning: %s update completed with ripgrep download issue.", tool))
+							} else {
+								a.log(a.tr("Background: ERROR: Failed to update %s: %v", tool, err))
+							}
+						} else {
+							a.log(a.tr("Background: %s updated successfully to %s.", tool, latest))
+							a.emitEvent("tool-updated", tool)
+						}
 					} else {
-						a.log(a.tr("Background: %s updated successfully to %s.", tool, latest))
-						a.emitEvent("tool-updated", tool)
+						a.log(a.tr("Background: %s is already up to date (version: %s).", tool, status.Version))
 					}
 				}
 			}
@@ -391,27 +423,68 @@ func (a *App) installNodeJSManually(targetDir string) error {
 	return nil
 }
 
-func (a *App) downloadFile(filepath string, url string) error {
+func (a *App) downloadFile(dlPath string, url string) error {
+	a.log(fmt.Sprintf("Requesting URL: %s", url))
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create download request: %w", err)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	client := &http.Client{Timeout: 300 * time.Second}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	transport := &http.Transport{
+		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		DisableKeepAlives:     true,
+	}
+	client := &http.Client{Transport: transport}
+
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("network error during download: %v", err)
 	}
 	defer resp.Body.Close()
 
-	out, err := os.Create(filepath)
+	if resp.Request.URL.String() != url {
+		a.log(fmt.Sprintf("Redirected to: %s", resp.Request.URL.String()))
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status: %s", resp.Status)
+	}
+
+	out, err := os.Create(dlPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create local file: %w", err)
 	}
 	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
-	return err
+	size := resp.ContentLength
+	var downloaded int64
+	buffer := make([]byte, 32768)
+	lastReport := time.Now()
+
+	for {
+		n, err := resp.Body.Read(buffer)
+		if n > 0 {
+			out.Write(buffer[:n])
+			downloaded += int64(n)
+			if size > 0 && time.Since(lastReport) > 500*time.Millisecond {
+				percent := float64(downloaded) / float64(size) * 100
+				a.log(a.tr("Downloading (%.1f%%): %d/%d bytes", percent, downloaded, size))
+				lastReport = time.Now()
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("interrupted download: %v", err)
+		}
+	}
+
+	out.Sync()
+	return nil
 }
 
 func (a *App) restartApp() {
@@ -486,8 +559,6 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 			cmdArgs = append(cmdArgs, "-y")
 		case "iflow":
 			cmdArgs = append(cmdArgs, "-y")
-		case "kode":
-			cmdArgs = append(cmdArgs, "--dangerously-skip-permissions")
 		}
 	}
 

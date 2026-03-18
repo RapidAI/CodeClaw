@@ -1149,13 +1149,14 @@ func (r *sessionRepo) Close(ctx context.Context, sessionID string, exitCode *int
 func (r *invitationCodeRepo) Create(ctx context.Context, item *store.InvitationCode) error {
 	_, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO invitation_codes (id, code, status, used_by_email, used_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO invitation_codes (id, code, status, used_by_email, used_at, validity_days, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		item.ID,
 		item.Code,
 		item.Status,
 		item.UsedByEmail,
 		nil,
+		item.ValidityDays,
 		item.CreatedAt.Format(time.RFC3339),
 	)
 	return err
@@ -1164,14 +1165,14 @@ func (r *invitationCodeRepo) Create(ctx context.Context, item *store.InvitationC
 func (r *invitationCodeRepo) GetByCode(ctx context.Context, code string) (*store.InvitationCode, error) {
 	row := r.readDB.QueryRowContext(
 		ctx,
-		`SELECT id, code, status, used_by_email, used_at, created_at
+		`SELECT id, code, status, used_by_email, used_at, validity_days, created_at
 		 FROM invitation_codes WHERE code = ?`,
 		code,
 	)
 	var item store.InvitationCode
 	var usedAt sql.NullString
 	var createdAt string
-	if err := row.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &createdAt); err != nil {
+	if err := row.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1186,7 +1187,7 @@ func (r *invitationCodeRepo) GetByCode(ctx context.Context, code string) (*store
 }
 
 func (r *invitationCodeRepo) List(ctx context.Context, status string, search string) ([]*store.InvitationCode, error) {
-	query := `SELECT id, code, status, used_by_email, used_at, created_at FROM invitation_codes`
+	query := `SELECT id, code, status, used_by_email, used_at, validity_days, created_at FROM invitation_codes`
 	var conditions []string
 	var args []any
 
@@ -1218,7 +1219,7 @@ func (r *invitationCodeRepo) List(ctx context.Context, status string, search str
 		var item store.InvitationCode
 		var usedAt sql.NullString
 		var createdAt string
-		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &createdAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &createdAt); err != nil {
 			return nil, err
 		}
 		if usedAt.Valid {
@@ -1259,7 +1260,7 @@ func (r *invitationCodeRepo) ListPaged(ctx context.Context, status string, searc
 	}
 
 	// Fetch page
-	query := `SELECT id, code, status, used_by_email, used_at, created_at FROM invitation_codes` + baseWhere + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	query := `SELECT id, code, status, used_by_email, used_at, validity_days, created_at FROM invitation_codes` + baseWhere + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	pageArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := r.readDB.QueryContext(ctx, query, pageArgs...)
 	if err != nil {
@@ -1272,7 +1273,7 @@ func (r *invitationCodeRepo) ListPaged(ctx context.Context, status string, searc
 		var item store.InvitationCode
 		var usedAt sql.NullString
 		var createdAt string
-		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &createdAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &createdAt); err != nil {
 			return nil, 0, err
 		}
 		if usedAt.Valid {
@@ -1294,6 +1295,31 @@ func (r *invitationCodeRepo) MarkUsed(ctx context.Context, id string, email stri
 		id,
 	)
 	return err
+}
+
+func (r *invitationCodeRepo) GetByEmail(ctx context.Context, email string) (*store.InvitationCode, error) {
+	row := r.readDB.QueryRowContext(
+		ctx,
+		`SELECT id, code, status, used_by_email, used_at, validity_days, created_at
+		 FROM invitation_codes WHERE used_by_email = ? AND status = 'used'
+		 ORDER BY used_at DESC LIMIT 1`,
+		email,
+	)
+	var item store.InvitationCode
+	var usedAt sql.NullString
+	var createdAt string
+	if err := row.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &createdAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if usedAt.Valid {
+		t := mustParseTime(usedAt.String)
+		item.UsedAt = &t
+	}
+	item.CreatedAt = mustParseTime(createdAt)
+	return &item, nil
 }
 
 func mustParseTime(v string) time.Time {

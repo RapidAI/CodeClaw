@@ -54,9 +54,6 @@ func (tm *ToolManager) GetToolStatus(name string) ToolStatus {
 	if name == "kilo" {
 		binaryNames = []string{"kilo", "kilocode"}
 	}
-	if name == "kode" {
-		binaryNames = []string{"kode"}
-	}
 	if name == "cursor" {
 		binaryNames = []string{"cursor-agent", "agent"}
 	}
@@ -106,8 +103,12 @@ func (tm *ToolManager) GetToolStatus(name string) ToolStatus {
 				}
 			}
 		} else {
+			// Check both the tools root (native installs like claude) and bin/ (npm installs)
+			toolsRoot := filepath.Join(home, ".cceasy", "tools", bn)
 			localBin := filepath.Join(home, ".cceasy", "tools", "bin", bn)
-			if _, err := os.Stat(localBin); err == nil {
+			if info, err := os.Stat(toolsRoot); err == nil && !info.IsDir() {
+				path = toolsRoot
+			} else if _, err := os.Stat(localBin); err == nil {
 				path = localBin
 			} else {
 				// Fallback: Check node_modules bin directly
@@ -401,7 +402,11 @@ func (tm *ToolManager) UpdateTool(name string) error {
 	if err != nil {
 		npmExec, err = exec.LookPath("npm.cmd")
 		if err != nil {
-			return fmt.Errorf("npm not found")
+			// Also check private npm
+			npmExec = tm.getNpmPath()
+			if npmExec == "" {
+				return fmt.Errorf("npm not found")
+			}
 		}
 	}
 
@@ -420,6 +425,10 @@ func (tm *ToolManager) UpdateTool(name string) error {
 	localCacheDir := tm.app.GetLocalCacheDir()
 	if localCacheDir != "" {
 		args = append(args, "--cache", localCacheDir)
+	}
+
+	if strings.HasPrefix(strings.ToLower(tm.app.CurrentLanguage), "zh") {
+		args = append(args, "--registry=https://registry.npmmirror.com")
 	}
 
 	cmd := createNpmInstallCmd(npmExec, args)
@@ -533,11 +542,18 @@ func (tm *ToolManager) installClaudeNative(target string) error {
 		}
 		defer resp.Body.Close()
 
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("failed to get %s version: HTTP %s", target, resp.Status)
+		}
+
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("failed to read version: %w", err)
 		}
 		version = strings.TrimSpace(string(body))
+		if version == "" || len(version) > 30 || strings.Contains(version, "<") {
+			return fmt.Errorf("invalid version response from server: %q", version)
+		}
 	} else {
 		version = target
 	}
@@ -551,6 +567,10 @@ func (tm *ToolManager) installClaudeNative(target string) error {
 		return fmt.Errorf("failed to get manifest: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to get manifest: HTTP %s (url: %s)", resp.Status, manifestURL)
+	}
 
 	var manifest ClaudeManifest
 	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
@@ -587,6 +607,10 @@ func (tm *ToolManager) installClaudeNative(target string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download binary: HTTP %s (url: %s)", resp.Status, downloadURL)
+	}
+
 	outFile, err := os.Create(downloadPath)
 	if err != nil {
 		return fmt.Errorf("failed to create download file: %w", err)
@@ -597,6 +621,7 @@ func (tm *ToolManager) installClaudeNative(target string) error {
 	writer := io.MultiWriter(outFile, hasher)
 
 	_, err = io.Copy(writer, resp.Body)
+	outFile.Sync()
 	outFile.Close()
 	if err != nil {
 		os.Remove(downloadPath)
@@ -647,11 +672,14 @@ func (tm *ToolManager) installClaudeNative(target string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create target file: %w", err)
 	}
-	defer dstFile.Close()
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		dstFile.Close()
 		return fmt.Errorf("failed to copy binary: %w", err)
 	}
+	// Sync and close before verification to ensure the binary is fully on disk.
+	dstFile.Sync()
+	dstFile.Close()
 
 	// Create wrapper scripts (Windows only)
 	if runtime.GOOS == "windows" {
@@ -671,10 +699,20 @@ func (tm *ToolManager) installClaudeNative(target string) error {
 
 	status := tm.GetToolStatus("claude")
 	if !status.Installed {
-		return fmt.Errorf("installation completed but verification failed - claude not found")
+		return fmt.Errorf("installation completed but verification failed - claude not found at expected path")
 	}
 
-	tm.app.log(tm.app.tr("✓ Claude Code %s installed successfully!", status.Version))
+	// Run the binary to confirm it's functional (not a truncated download).
+	verifyCmd := exec.Command(status.Path, "--version")
+	verifyCmd.Env = os.Environ()
+	if out, err := verifyCmd.Output(); err != nil {
+		// Binary exists but doesn't run — remove it so next attempt retries.
+		os.Remove(status.Path)
+		return fmt.Errorf("claude binary exists but failed to execute: %v", err)
+	} else {
+		tm.app.log(tm.app.tr("✓ Claude Code %s installed successfully!", strings.TrimSpace(string(out))))
+	}
+
 	return nil
 }
 
@@ -815,11 +853,13 @@ func (tm *ToolManager) installCursorAgent() error {
 	if err != nil {
 		return fmt.Errorf("failed to create target binary: %w", err)
 	}
-	defer dstFile.Close()
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		dstFile.Close()
 		return fmt.Errorf("failed to copy cursor-agent binary: %w", err)
 	}
+	dstFile.Sync()
+	dstFile.Close()
 
 	// Also create an "agent" symlink for compatibility
 	agentPath := filepath.Join(installDir, "agent")
@@ -842,7 +882,7 @@ func (tm *ToolManager) installCursorAgent() error {
 func (tm *ToolManager) GetPackageName(name string) string {
 	switch name {
 	case "claude":
-		return "@anthropic-ai/claude-code"
+		return "" // Claude Code uses native binary distribution, not npm
 	case "gemini":
 		return "@google/gemini-cli"
 	case "codex":
@@ -858,8 +898,6 @@ func (tm *ToolManager) GetPackageName(name string) string {
 		return "@iflow-ai/iflow-cli"
 	case "kilo":
 		return "@kilocode/cli"
-	case "kode":
-		return "@shareai-lab/kode"
 	case "cursor":
 		return "" // Cursor Agent is not an npm package
 	default:
@@ -903,7 +941,7 @@ func (a *App) UpdateTool(name string) error {
 func (a *App) CheckToolsStatus() []ToolStatus {
 	tm := NewToolManager(a)
 	// Check kilo first, then other tools
-	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "cursor", "codebuddy", "kode", "iflow"}
+	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "cursor", "codebuddy", "iflow"}
 	statuses := make([]ToolStatus, len(tools))
 	for i, name := range tools {
 		statuses[i] = tm.GetToolStatus(name)

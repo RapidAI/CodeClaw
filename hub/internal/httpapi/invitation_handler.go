@@ -14,7 +14,8 @@ import (
 )
 
 type generateCodesRequest struct {
-	Count int `json:"count"`
+	Count        int `json:"count"`
+	ValidityDays int `json:"validity_days"`
 }
 
 type toggleInvitationCodeRequest struct {
@@ -22,12 +23,14 @@ type toggleInvitationCodeRequest struct {
 }
 
 type invitationCodeResponse struct {
-	ID          string  `json:"id"`
-	Code        string  `json:"code"`
-	Status      string  `json:"status"`
-	UsedByEmail string  `json:"used_by_email"`
-	UsedAt      *string `json:"used_at"`
-	CreatedAt   string  `json:"created_at"`
+	ID           string  `json:"id"`
+	Code         string  `json:"code"`
+	Status       string  `json:"status"`
+	UsedByEmail  string  `json:"used_by_email"`
+	UsedAt       *string `json:"used_at"`
+	ValidityDays int     `json:"validity_days"`
+	BoundAt      *string `json:"bound_at"`
+	CreatedAt    string  `json:"created_at"`
 }
 
 func GenerateInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
@@ -38,7 +41,7 @@ func GenerateInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
 			return
 		}
 
-		codes, err := svc.GenerateCodes(r.Context(), req.Count)
+		codes, err := svc.GenerateCodes(r.Context(), req.Count, req.ValidityDays)
 		if err != nil {
 			if errors.Is(err, invitation.ErrInvalidCount) {
 				writeError(w, http.StatusBadRequest, "INVALID_INPUT", err.Error())
@@ -151,15 +154,17 @@ func ExportInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
 
 func toInvitationCodeResponse(c *store.InvitationCode) invitationCodeResponse {
 	resp := invitationCodeResponse{
-		ID:          c.ID,
-		Code:        c.Code,
-		Status:      c.Status,
-		UsedByEmail: c.UsedByEmail,
-		CreatedAt:   c.CreatedAt.Format(time.RFC3339),
+		ID:           c.ID,
+		Code:         c.Code,
+		Status:       c.Status,
+		UsedByEmail:  c.UsedByEmail,
+		ValidityDays: c.ValidityDays,
+		CreatedAt:    c.CreatedAt.Format(time.RFC3339),
 	}
 	if c.UsedAt != nil {
 		t := c.UsedAt.Format(time.RFC3339)
 		resp.UsedAt = &t
+		resp.BoundAt = &t
 	}
 	return resp
 }

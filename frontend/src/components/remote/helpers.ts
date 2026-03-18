@@ -40,11 +40,6 @@ export const fallbackRemoteToolMeta: Record<string, { label: string; configHint:
         configHint: "Checks Kilo config sync plus KILO and OpenAI-compatible environment wiring.",
         smokeHint: "Runs registration, PTY, launch, real session start, and Hub visibility verification for Kilo.",
     },
-    kode: {
-        label: "Kode",
-        configHint: "Checks Kode profile generation and OpenAI-compatible endpoint wiring.",
-        smokeHint: "Runs registration, PTY, launch, real session start, and Hub visibility verification for Kode.",
-    },
 };
 
 export function buildRemoteToolMetaByName(remoteToolMetadata: RemoteToolMetadataView[]): Record<string, RemoteToolMetadataView> {

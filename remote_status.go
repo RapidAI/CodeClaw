@@ -81,7 +81,7 @@ func toRemoteSessionView(s *RemoteSession) RemoteSessionView {
 		rawLines[i] = sanitizeRawOutputLine(rawLines[i])
 	}
 
-	execMode := "pty"
+	execMode := "sdk"
 	if _, isSDK := exec.(*SDKExecutionHandle); isSDK {
 		execMode = "sdk"
 	} else if _, isCodex := exec.(*CodexSDKExecutionHandle); isCodex {

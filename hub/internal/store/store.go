@@ -51,12 +51,13 @@ type EmailBlockItem struct {
 }
 
 type InvitationCode struct {
-	ID          string
-	Code        string
-	Status      string // "unused" | "used"
-	UsedByEmail string
-	UsedAt      *time.Time
-	CreatedAt   time.Time
+	ID           string
+	Code         string
+	Status       string // "unused" | "used"
+	UsedByEmail  string
+	UsedAt       *time.Time
+	ValidityDays int // 0 = 长期有效，>0 = 有效天数
+	CreatedAt    time.Time
 }
 
 type Machine struct {
@@ -168,6 +169,7 @@ type EmailBlocklistRepository interface {
 type InvitationCodeRepository interface {
 	Create(ctx context.Context, item *InvitationCode) error
 	GetByCode(ctx context.Context, code string) (*InvitationCode, error)
+	GetByEmail(ctx context.Context, email string) (*InvitationCode, error)
 	List(ctx context.Context, status string, search string) ([]*InvitationCode, error)
 	ListPaged(ctx context.Context, status string, search string, offset, limit int) ([]*InvitationCode, int, error)
 	MarkUsed(ctx context.Context, id string, email string, usedAt time.Time) error

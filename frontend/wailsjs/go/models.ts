@@ -99,7 +99,6 @@ export namespace main {
 	    qoder: ToolConfig;
 	    iflow: ToolConfig;
 	    kilo: ToolConfig;
-	    kode: ToolConfig;
 	    cursor: ToolConfig;
 	    projects: ProjectConfig[];
 	    current_project: string;
@@ -113,7 +112,6 @@ export namespace main {
 	    show_qoder: boolean;
 	    show_iflow: boolean;
 	    show_kilo: boolean;
-	    show_kode: boolean;
 	    show_cursor: boolean;
 	    language: string;
 	    power_optimization: boolean;
@@ -160,7 +158,6 @@ export namespace main {
 	        this.qoder = this.convertValues(source["qoder"], ToolConfig);
 	        this.iflow = this.convertValues(source["iflow"], ToolConfig);
 	        this.kilo = this.convertValues(source["kilo"], ToolConfig);
-	        this.kode = this.convertValues(source["kode"], ToolConfig);
 	        this.cursor = this.convertValues(source["cursor"], ToolConfig);
 	        this.projects = this.convertValues(source["projects"], ProjectConfig);
 	        this.current_project = source["current_project"];
@@ -174,7 +171,6 @@ export namespace main {
 	        this.show_qoder = source["show_qoder"];
 	        this.show_iflow = source["show_iflow"];
 	        this.show_kilo = source["show_kilo"];
-	        this.show_kode = source["show_kode"];
 	        this.show_cursor = source["show_cursor"];
 	        this.language = source["language"];
 	        this.power_optimization = source["power_optimization"];

@@ -266,7 +266,7 @@ func (c *RemoteHubClient) SendSessionCreated(s *RemoteSession) error {
 		return nil
 	}
 
-	execMode := "pty"
+	execMode := "sdk"
 	if _, isSDK := s.Exec.(*SDKExecutionHandle); isSDK {
 		execMode = "sdk"
 	} else if _, isACP := s.Exec.(*GeminiACPExecutionHandle); isACP {

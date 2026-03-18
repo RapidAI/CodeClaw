@@ -53,6 +53,16 @@ func EnrollStartHandler(identity *auth.IdentityService, feishuNotifier *feishu.N
 		resp, err := identity.StartEnrollment(r.Context(), req.Email, req.MachineName, req.Platform, req.ClientID, req.InvitationCode)
 		if err != nil {
 			switch {
+			case errors.Is(err, auth.ErrInvitationExpired):
+				errResp := map[string]any{
+					"ok":      false,
+					"code":    "INVITATION_EXPIRED",
+					"message": err.Error(),
+				}
+				if resp != nil && resp.ExpiresAt != "" {
+					errResp["expires_at"] = resp.ExpiresAt
+				}
+				writeJSON(w, http.StatusForbidden, errResp)
 			case errors.Is(err, auth.ErrInvitationCodeRequired):
 				writeError(w, http.StatusBadRequest, "INVITATION_CODE_REQUIRED", err.Error())
 			case errors.Is(err, auth.ErrInvalidInvitationCode):

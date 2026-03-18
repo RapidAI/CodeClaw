@@ -38,9 +38,13 @@ func NewService(repo store.InvitationCodeRepository, settings store.SystemSettin
 }
 
 // GenerateCodes generates count invitation codes (1-50) and stores them.
-func (s *Service) GenerateCodes(ctx context.Context, count int) ([]*store.InvitationCode, error) {
+// validityDays specifies the validity period in days; values < 0 are treated as 0 (永久有效).
+func (s *Service) GenerateCodes(ctx context.Context, count int, validityDays int) ([]*store.InvitationCode, error) {
 	if count < 1 || count > maxCount {
 		return nil, ErrInvalidCount
+	}
+	if validityDays < 0 {
+		validityDays = 0
 	}
 
 	codes := make([]*store.InvitationCode, 0, count)
@@ -61,10 +65,11 @@ func (s *Service) GenerateCodes(ctx context.Context, count int) ([]*store.Invita
 
 			now := time.Now()
 			item := &store.InvitationCode{
-				ID:        fmt.Sprintf("ic_%s", randomShortID()),
-				Code:      code,
-				Status:    "unused",
-				CreatedAt: now,
+				ID:           fmt.Sprintf("ic_%s", randomShortID()),
+				Code:         code,
+				Status:       "unused",
+				ValidityDays: validityDays,
+				CreatedAt:    now,
 			}
 			if createErr := s.repo.Create(ctx, item); createErr != nil {
 				// Could be a race condition conflict
@@ -104,6 +109,27 @@ func (s *Service) ValidateAndConsume(ctx context.Context, code string, email str
 	}
 
 	return s.repo.MarkUsed(ctx, item.ID, email, time.Now())
+}
+
+// CheckExpiry checks whether the invitation code associated with the given email has expired.
+// Returns (expired, expiresAt, error).
+// If no code is found or validity_days == 0, returns (false, nil, nil).
+func (s *Service) CheckExpiry(ctx context.Context, email string) (bool, *time.Time, error) {
+	item, err := s.repo.GetByEmail(ctx, email)
+	if err != nil {
+		return false, nil, fmt.Errorf("checking expiry: %w", err)
+	}
+	if item == nil || item.ValidityDays == 0 {
+		return false, nil, nil
+	}
+
+	if item.UsedAt == nil {
+		return false, nil, nil
+	}
+
+	expiresAt := item.UsedAt.Add(time.Duration(item.ValidityDays) * 24 * time.Hour)
+	expired := time.Now().After(expiresAt)
+	return expired, &expiresAt, nil
 }
 
 // IsRequired reads the invitation_code_required setting from SystemSettings.

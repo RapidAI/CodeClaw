@@ -524,7 +524,7 @@ func (a *App) installToolsInBackground() {
 	a.log(a.tr("npm verified successfully: %s", npmExec))
 
 	tm := NewToolManager(a)
-	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "kode", "iflow"}
+	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "iflow"}
 	home, _ := os.UserHomeDir()
 	expectedPrefix := filepath.Join(home, ".cceasy", "tools")
 
@@ -558,29 +558,34 @@ func (a *App) installToolsInBackground() {
 
 			a.log(a.tr("Background: %s found in private directory at %s (version: %s).", tool, status.Path, status.Version))
 
-			// Check for updates
-			a.log(a.tr("Background: Checking for %s updates...", tool))
-			latest, err := a.getLatestNpmVersion(npmExec, tm.GetPackageName(tool))
-			if err == nil && latest != "" {
-				needsUpdate := a.compareVersions(status.Version, latest) < 0
-				if needsUpdate {
-					a.log(a.tr("Background: New version available for %s: %s (current: %s). Updating...", tool, latest, status.Version))
-					a.emitEvent("tool-updating", tool)
-					if err := tm.UpdateTool(tool); err != nil {
-						errStr := err.Error()
-						if strings.Contains(errStr, "ripgrep") && strings.Contains(errStr, "403") {
-							a.log(a.tr("Background: Warning: %s update completed with ripgrep download issue.", tool))
-						} else if strings.Contains(errStr, "EPERM") || strings.Contains(errStr, "EBUSY") {
-							a.log(a.tr("Background: Warning: %s update failed due to file lock.", tool))
+			// Check for updates (skip for non-npm tools like claude and cursor)
+			pkgName := tm.GetPackageName(tool)
+			if pkgName == "" {
+				a.log(a.tr("Background: %s uses native installer, skipping automatic update check.", tool))
+			} else {
+				a.log(a.tr("Background: Checking for %s updates...", tool))
+				latest, err := a.getLatestNpmVersion(npmExec, pkgName)
+				if err == nil && latest != "" {
+					needsUpdate := a.compareVersions(status.Version, latest) < 0
+					if needsUpdate {
+						a.log(a.tr("Background: New version available for %s: %s (current: %s). Updating...", tool, latest, status.Version))
+						a.emitEvent("tool-updating", tool)
+						if err := tm.UpdateTool(tool); err != nil {
+							errStr := err.Error()
+							if strings.Contains(errStr, "ripgrep") && strings.Contains(errStr, "403") {
+								a.log(a.tr("Background: Warning: %s update completed with ripgrep download issue.", tool))
+							} else if strings.Contains(errStr, "EPERM") || strings.Contains(errStr, "EBUSY") {
+								a.log(a.tr("Background: Warning: %s update failed due to file lock.", tool))
+							} else {
+								a.log(a.tr("Background: ERROR: Failed to update %s: %v", tool, err))
+							}
 						} else {
-							a.log(a.tr("Background: ERROR: Failed to update %s: %v", tool, err))
+							a.log(a.tr("Background: %s updated successfully to %s.", tool, latest))
+							a.emitEvent("tool-updated", tool)
 						}
 					} else {
-						a.log(a.tr("Background: %s updated successfully to %s.", tool, latest))
-						a.emitEvent("tool-updated", tool)
+						a.log(a.tr("Background: %s is already up to date (version: %s).", tool, status.Version))
 					}
-				} else {
-					a.log(a.tr("Background: %s is already up to date (version: %s).", tool, status.Version))
 				}
 			}
 		}
@@ -1497,8 +1502,6 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 			flag = "-y"
 		case "kilo":
 			flag = ""
-		case "kode":
-			flag = "--dangerously-skip-permissions"
 		}
 		if flag != "" {
 			cmdArgs += " " + flag

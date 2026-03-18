@@ -1,6 +1,6 @@
 import { main } from "../../../wailsjs/go/models";
 
-export type RemoteToolName = "claude" | "gemini" | "codex" | "opencode" | "cursor" | "iflow" | "kilo" | "kode";
+export type RemoteToolName = "claude" | "gemini" | "codex" | "opencode" | "cursor" | "iflow" | "kilo";
 
 export interface ImportantEventView {
     event_id?: string;
