@@ -22,8 +22,10 @@ func setupTray(app *App, appOptions *options.App) {
 	appOptions.OnStartup = func(ctx context.Context) {
 		app.startup(ctx)
 
-		// Start energye/systray in a goroutine
-		go systray.Run(func() {
+		// Use RunWithExternalLoop since Wails already owns the NSApplication event loop.
+		// systray.Run() would call setInternalLoop(true) and override Wails' AppDelegate,
+		// causing the app to crash on launch.
+		start, _ := systray.RunWithExternalLoop(func() {
 			systray.SetIcon(icon)
 			// Do not set title for macOS as requested
 			systray.SetTooltip("MaClaw Dashboard")
@@ -71,5 +73,8 @@ func setupTray(app *App, appOptions *options.App) {
 				}()
 			}
 		}, func() {})
+
+		// Start the systray native integration (without taking over the event loop)
+		go start()
 	}
 }

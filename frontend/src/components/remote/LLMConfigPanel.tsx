@@ -193,9 +193,17 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
 
     return (
         <div style={{ padding: "0 4px" }}>
-            <h4 style={{ fontSize: "0.8rem", color: "#6366f1", marginBottom: 12, marginTop: 0, textTransform: "uppercase", letterSpacing: "0.025em" }}>
-                {t("MaClaw LLM 配置", "MaClaw LLM Configuration")}
-            </h4>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <h4 style={{ fontSize: "0.8rem", color: "#6366f1", margin: 0, textTransform: "uppercase", letterSpacing: "0.025em" }}>
+                    {t("MaClaw LLM 配置", "MaClaw LLM Configuration")}
+                </h4>
+                <button onClick={openDialog} style={{
+                    fontSize: "0.76rem", padding: "6px 18px", cursor: "pointer",
+                    background: "#6366f1", color: "#fff", border: "none", borderRadius: 4, flexShrink: 0,
+                }}>
+                    {t("配置", "Configure")}
+                </button>
+            </div>
             <p style={{ fontSize: "0.72rem", color: "#888", marginBottom: 16, lineHeight: 1.5 }}>
                 {t(
                     "选择 MaClaw 桌面代理使用的 LLM 服务商（支持 OpenAI 兼容接口和 Anthropic 协议）。",
@@ -203,36 +211,32 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                 )}
             </p>
 
-            {/* Current status card */}
+            {/* Current provider summary */}
             <div style={{
-                marginBottom: 16, padding: "12px 16px", borderRadius: 6,
+                marginBottom: 16, padding: "10px 16px", borderRadius: 6,
                 border: `1px solid ${colors.border}`, background: colors.surface,
+                display: "flex", justifyContent: "space-between", alignItems: "center",
             }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ fontSize: "0.76rem", color: colors.text, lineHeight: 1.7 }}>
-                        <div>
-                            <span style={{ color: colors.textSecondary }}>{t("当前服务商: ", "Provider: ")}</span>
-                            {isNone
-                                ? <span style={{ color: "#ef4444" }}>{t("暂不配置", "None")}</span>
-                                : <span style={{ fontWeight: 600 }}>{currentName}</span>}
-                        </div>
-                        {!isNone && selectedProvider && (
-                            <>
-                                <div><span style={{ color: colors.textSecondary }}>URL: </span>{selectedProvider.url || <span style={{ color: "#f59e0b" }}>{t("未配置", "Not set")}</span>}</div>
-                                <div><span style={{ color: colors.textSecondary }}>Model: </span>{selectedProvider.model || <span style={{ color: "#f59e0b" }}>{t("未配置", "Not set")}</span>}</div>
-                                <div><span style={{ color: colors.textSecondary }}>{t("协议: ", "Protocol: ")}</span>{(selectedProvider.protocol || "openai") === "anthropic" ? "Anthropic" : "OpenAI"}</div>
-                                <div><span style={{ color: colors.textSecondary }}>Key: </span>{selectedProvider.key ? "••••••" : <span style={{ color: "#f59e0b" }}>{t("未配置", "Not set")}</span>}</div>
-                            </>
-                        )}
-                        <div><span style={{ color: colors.textSecondary }}>{t("最大推理轮数: ", "Max Iterations: ")}</span>{maxIter === 0 ? t("不限制", "Unlimited") : maxIter}</div>
-                    </div>
-                    <button onClick={openDialog} style={{
-                        fontSize: "0.76rem", padding: "6px 18px", cursor: "pointer",
-                        background: "#6366f1", color: "#fff", border: "none", borderRadius: 4, flexShrink: 0,
-                    }}>
-                        {t("配置", "Configure")}
-                    </button>
-                </div>
+                <span style={{ fontSize: "0.76rem", color: colors.textSecondary }}>
+                    {t("当前服务商", "Provider")}
+                </span>
+                <span style={{ fontSize: "0.76rem", fontWeight: 600, color: isNone ? "#ef4444" : colors.text }}>
+                    {isNone ? t("暂不配置", "None") : currentName}
+                </span>
+            </div>
+
+            {/* Max iterations — standalone display */}
+            <div style={{
+                marginBottom: 16, padding: "10px 16px", borderRadius: 6,
+                border: `1px solid ${colors.border}`, background: colors.surface,
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+            }}>
+                <span style={{ fontSize: "0.76rem", color: colors.textSecondary }}>
+                    {t("最大推理轮数", "Max Iterations")}
+                </span>
+                <span style={{ fontSize: "0.76rem", color: colors.text, fontWeight: 600 }}>
+                    {maxIter === 0 ? t("不限制", "Unlimited") : maxIter}
+                </span>
             </div>
 
             {isNone && (

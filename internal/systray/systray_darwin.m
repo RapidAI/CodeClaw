@@ -283,7 +283,9 @@ void nativeStart(void) {
   NSNotification *launched = [NSNotification
                                   notificationWithName: NSApplicationDidFinishLaunchingNotification
                                                 object: [NSApplication sharedApplication]];
-  [[NSApplication sharedApplication] setDelegate:owner];
+  // Do NOT call setDelegate here — an external framework (e.g. Wails) already
+  // owns the NSApplication delegate.  We only need to bootstrap the status-bar
+  // item, which applicationDidFinishLaunching does for us.
   [owner applicationDidFinishLaunching:launched];
 }
 
