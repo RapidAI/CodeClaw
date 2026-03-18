@@ -214,7 +214,7 @@ type AppConfig struct {
 	SkillHubURLs []SkillHubEntry `json:"skill_hub_urls,omitempty"`
 	// Memory auto-compression service (runs periodically in background)
 	MemoryAutoCompress bool `json:"memory_auto_compress,omitempty"`
-	// ClawNet P2P network — enabled by default
+	// ClawNet P2P network — disabled by default for new installs
 	ClawNetEnabled bool `json:"clawnet_enabled"`
 }
 
@@ -3029,7 +3029,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		config.PowerOptimization = true
 	}
 	if !hasClawNetEnabled {
-		config.ClawNetEnabled = true
+		config.ClawNetEnabled = false
 	}
 	if config.RemoteHeartbeatSec < 5 {
 		config.RemoteHeartbeatSec = 10

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { main } from "../../../wailsjs/go/models";
 import {
     ClawNetStopDaemon,
@@ -36,6 +36,7 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
     const [error, setError] = useState("");
     const [downloadProgress, setDownloadProgress] = useState<{ stage: string; percent: number; message: string } | null>(null);
     const [identityExists, setIdentityExists] = useState(false);
+    const identityFoundRef = useRef(false);
     const [identityPath, setIdentityPath] = useState("");
     const [keyBusy, setKeyBusy] = useState(false);
     const [keyMsg, setKeyMsg] = useState("");
@@ -54,20 +55,22 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
     const [onlineMsg, setOnlineMsg] = useState("");
 
     const zh = lang?.startsWith("zh");
-    const enabled = (config as any)?.clawnet_enabled !== false;
+    const enabled = !!config?.clawnet_enabled;
 
-    // Poll running state
+    // Poll running state; also checks identity when not yet detected.
     const refreshStatus = useCallback(async () => {
         try {
             const isUp = await ClawNetIsRunning();
             setRunning(isUp);
             onRunningChange(isUp);
             if (isUp) {
-                const s = await ClawNetGetStatus();
+                const [s, p, c] = await Promise.all([
+                    ClawNetGetStatus(),
+                    ClawNetGetPeers(),
+                    ClawNetGetCredits(),
+                ]);
                 if (s.ok) setStatus(s);
-                const p = await ClawNetGetPeers();
                 if (p.ok) setPeers(p.peers || []);
-                const c = await ClawNetGetCredits();
                 if (c.ok) setCredits(c);
             } else {
                 setStatus(null);
@@ -78,12 +81,24 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
             setRunning(false);
             onRunningChange(false);
         }
+        // Only poll identity while it hasn't been found yet.
+        if (!identityFoundRef.current) {
+            try {
+                const res = await ClawNetHasIdentity();
+                if (res.ok) {
+                    if (res.exists) identityFoundRef.current = true;
+                    setIdentityExists(!!res.exists);
+                    setIdentityPath(res.path || "");
+                }
+            } catch {}
+        }
     }, [onRunningChange]);
 
     const refreshIdentity = useCallback(async () => {
         try {
             const res = await ClawNetHasIdentity();
             if (res.ok) {
+                if (res.exists) identityFoundRef.current = true;
                 setIdentityExists(!!res.exists);
                 setIdentityPath(res.path || "");
             }
@@ -110,10 +125,9 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
     useEffect(() => {
         ClawNetGetBinaryPath().then(setBinPath).catch(() => {});
         refreshStatus();
-        refreshIdentity();
         const timer = setInterval(refreshStatus, 15000);
         return () => clearInterval(timer);
-    }, [refreshStatus, refreshIdentity]);
+    }, [refreshStatus]);
 
     // Listen for download progress events from backend
     useEffect(() => {
@@ -146,6 +160,9 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                 setError(res.error || "Failed to start");
             }
             await refreshStatus();
+            // Force an identity re-check after daemon start regardless of
+            // current state, since the daemon may have just generated the key.
+            await refreshIdentity();
         } catch (e) {
             setError(String(e));
         } finally {
@@ -175,7 +192,7 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
     };
 
     const handleToggle = (checked: boolean) => {
-        saveRemoteConfigField({ clawnet_enabled: checked } as any);
+        saveRemoteConfigField({ clawnet_enabled: checked });
         if (!checked && running) {
             handleStop();
         } else if (checked && !running) {

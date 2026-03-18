@@ -185,6 +185,7 @@ func (c *ClawNetClient) EnsureDaemonWithProgress(emitProgress func(stage string,
 	cmd := exec.Command(bin, "start")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
+	hideCommandWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		c.mu.Unlock()
 		return fmt.Errorf("failed to start clawnet daemon: %w", err)
@@ -221,6 +222,7 @@ func (c *ClawNetClient) StopDaemon() {
 	}
 	if bin != "" {
 		cmd := exec.Command(bin, "stop")
+		hideCommandWindow(cmd)
 		_ = cmd.Run()
 	} else if c.daemon != nil && c.daemon.Process != nil {
 		// Fallback: kill the launcher process directly.
@@ -695,6 +697,7 @@ func (c *ClawNetClient) SelfUpdate() error {
 		return fmt.Errorf("clawnet binary not found")
 	}
 	cmd := exec.Command(bin, "update")
+	hideCommandWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("update failed: %w — %s", err, string(out))

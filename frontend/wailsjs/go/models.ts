@@ -152,6 +152,7 @@ export namespace main {
 	    local_mcp_servers: any[];
 	    nl_skills: any[];
 	    memory_auto_compress: boolean;
+	    clawnet_enabled: boolean;
 	    skill_hub_urls: any[];
 	
 	    static createFrom(source: any = {}) {
@@ -221,6 +222,7 @@ export namespace main {
 	        this.local_mcp_servers = source["local_mcp_servers"];
 	        this.nl_skills = source["nl_skills"];
 	        this.memory_auto_compress = source["memory_auto_compress"];
+	        this.clawnet_enabled = source["clawnet_enabled"];
 	        this.skill_hub_urls = source["skill_hub_urls"];
 	    }
 	

@@ -1,4 +1,4 @@
-Unicode true
+﻿Unicode true
 
 !ifndef INFO_PROJECTNAME
 !define INFO_PROJECTNAME "CodeClaw"
