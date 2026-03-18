@@ -66,6 +66,9 @@ var (
 	pTranslateMessage      = u32.NewProc("TranslateMessage")
 	pUnregisterClass       = u32.NewProc("UnregisterClassW")
 	pUpdateWindow          = u32.NewProc("UpdateWindow")
+	pFlashWindowEx         = u32.NewProc("FlashWindowEx")
+	pMessageBeep           = u32.NewProc("MessageBeep")
+	pFindWindow            = u32.NewProc("FindWindowW")
 
 	// ErrTrayNotReadyYet is returned by functions when they are called before the tray has been initialized.
 	ErrTrayNotReadyYet = errors.New("tray not ready yet")
@@ -1135,4 +1138,38 @@ func ShowBalloonNotification(title, message string, iconFlag uint32) error {
 	wt.nid.Size = uint32(unsafe.Sizeof(*wt.nid))
 
 	return wt.nid.modify()
+}
+
+// flashWindowInfo is the FLASHWINFO structure for FlashWindowEx.
+// https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-flashwinfo
+type flashWindowInfo struct {
+	CbSize    uint32
+	Hwnd      windows.Handle
+	DwFlags   uint32
+	UCount    uint32
+	DwTimeout uint32
+}
+
+// FlashAndBeep plays the system notification sound and flashes the taskbar
+// icon to draw the user's attention. This is used for scheduled task alerts.
+func FlashAndBeep() {
+	// Play the system "asterisk" (info) sound.
+	const MB_ICONASTERISK = 0x00000040
+	pMessageBeep.Call(uintptr(MB_ICONASTERISK))
+
+	// Flash the tray's hidden window (which flashes the taskbar button).
+	if !wt.isReady() {
+		return
+	}
+	const (
+		FLASHW_ALL       = 0x00000003 // flash both caption and taskbar button
+		FLASHW_TIMERNOFG = 0x0000000C // flash until window comes to foreground
+	)
+	fi := flashWindowInfo{
+		Hwnd:    wt.window,
+		DwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+		UCount:  3,
+	}
+	fi.CbSize = uint32(unsafe.Sizeof(fi))
+	pFlashWindowEx.Call(uintptr(unsafe.Pointer(&fi)))
 }

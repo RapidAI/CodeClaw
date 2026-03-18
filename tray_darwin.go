@@ -58,6 +58,11 @@ func setupTray(app *App, appOptions *options.App) {
 				_ = systray.ShowBalloonNotification(title, message, iconFlag)
 			}
 
+			// Register flash + sound function
+			FlashAndBeep = func() {
+				systray.FlashAndBeep()
+			}
+
 			// Handle menu clicks
 			mShow.Click(func() {
 				go runtime.WindowShow(app.ctx)

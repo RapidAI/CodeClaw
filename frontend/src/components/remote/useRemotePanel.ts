@@ -302,6 +302,18 @@ export function useRemotePanel(params: UseRemotePanelParams) {
             } else if (errMsg.includes("INVALID_INVITATION_CODE")) {
                 setInvitationCodeRequired(true);
                 setInvitationCodeError("邀请码无效或已被使用");
+            } else if (errMsg.includes("INVITATION_EXPIRED")) {
+                setInvitationCodeRequired(true);
+                let expiredMsg = "用户已失效，请使用新的邀请码重新绑定";
+                const expiresAtMatch = errMsg.match(/expires_at[:\s]*(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}[^\s"]*)/i);
+                if (expiresAtMatch) {
+                    const expiresDate = new Date(expiresAtMatch[1]);
+                    if (!isNaN(expiresDate.getTime())) {
+                        expiredMsg += `（过期时间：${expiresDate.toLocaleDateString()}）`;
+                    }
+                }
+                setInvitationCodeError(expiredMsg);
+                showToastMessage(expiredMsg, 4000);
             } else {
                 console.error("Failed to activate remote:", err);
                 showToastMessage(formatText("remoteActivationFailed", { error: errMsg }), 4000);

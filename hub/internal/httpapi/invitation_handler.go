@@ -168,3 +168,11 @@ func toInvitationCodeResponse(c *store.InvitationCode) invitationCodeResponse {
 	}
 	return resp
 }
+
+// DeprecatedEmailInviteHandler returns HTTP 410 Gone for the removed Email invite API.
+// The Email invite feature has been removed. Use invitation codes instead.
+func DeprecatedEmailInviteHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusGone, "FEATURE_REMOVED", "Email invite feature has been removed. Use invitation codes instead.")
+	}
+}

@@ -18,6 +18,7 @@ type RemoteActivationResult struct {
 	SN           string `json:"sn,omitempty"`
 	MachineID    string `json:"machine_id,omitempty"`
 	MachineToken string `json:"machine_token,omitempty"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
 }
 
 type RemoteProbeResult struct {
@@ -178,6 +179,9 @@ func (a *App) ActivateRemote(email string, invitationCode string, mobile string)
 	}
 	if resp.StatusCode >= 300 {
 		if result.Code != "" {
+			if result.ExpiresAt != "" {
+				return RemoteActivationResult{}, fmt.Errorf("%s: %s expires_at:%s", result.Code, result.Message, result.ExpiresAt)
+			}
 			return RemoteActivationResult{}, fmt.Errorf("%s: %s", result.Code, result.Message)
 		}
 		if result.Message != "" {

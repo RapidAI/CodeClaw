@@ -868,6 +868,26 @@ func (c *RemoteHubClient) SendSessionImageError(sessionID, errorMsg string) erro
 	return c.conn.WriteJSON(msg)
 }
 
+// SendIMProactiveMessage sends a proactive (non-request-based) message to the
+// Hub for delivery to the user's IM channels. Used for scheduled task results.
+func (c *RemoteHubClient) SendIMProactiveMessage(text string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return fmt.Errorf("not connected to hub")
+	}
+
+	msg := HubEnvelope{
+		Type:      "im.proactive_message",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		Payload: map[string]string{
+			"text": text,
+		},
+	}
+	return c.conn.WriteJSON(msg)
+}
+
 func (c *RemoteHubClient) storeHubError(payload json.RawMessage) {
 	var body struct {
 		Message string `json:"message"`

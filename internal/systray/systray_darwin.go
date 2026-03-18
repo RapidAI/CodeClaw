@@ -19,6 +19,13 @@ static void showNotification(const char* title, const char* message) {
         [[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
     }
 }
+
+// requestAttention bounces the dock icon to draw user attention.
+static void requestAttention() {
+    @autoreleasepool {
+        [NSApp requestUserAttention:NSCriticalRequest];
+    }
+}
 */
 import "C"
 
@@ -259,4 +266,14 @@ func systray_on_rclick() {
 func ShowBalloonNotification(title, message string, iconFlag uint32) error {
 	C.showNotification(C.CString(title), C.CString(message))
 	return nil
+}
+
+// FlashAndBeep bounces the dock icon and plays the default notification sound
+// on macOS to draw the user's attention for scheduled task alerts.
+// The notification sound is already played by ShowBalloonNotification via
+// NSUserNotificationDefaultSoundName, so this is a supplementary dock bounce.
+func FlashAndBeep() {
+	// NSApplication requestUserAttention bounces the dock icon.
+	// NSCriticalRequest bounces until the app is activated.
+	C.requestAttention()
 }

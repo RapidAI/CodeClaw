@@ -57,6 +57,7 @@ withParentMenuId: (int)theParentMenuId
   - (void) add_or_update_menu_item:(MenuItem*) item;
   - (IBAction)menuHandler:(id)sender;
   - (void)statusOnClick:(NSButton *)btn;
+  - (void)initStatusBar;
   @property (assign) IBOutlet NSWindow *window;
   @end
 
@@ -69,14 +70,14 @@ withParentMenuId: (int)theParentMenuId
 @synthesize window = _window;
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
+  [self initStatusBar];
+  systray_ready();
+}
+
+- (void)initStatusBar {
   self->statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
   self->menu = [[NSMenu alloc] init];
   [self->menu setAutoenablesItems: FALSE];
-  //[self->statusItem.button setTarget:self];
-  //[self->menu setDelegate:(SystrayDelegate *)self];
-  //[self->statusItem.button setAction:@selector(statusOnClick:)];
-  //[self->statusItem setMenu:self->menu]; //注释掉，不然不设置菜单事件也不启作用
-  systray_ready();
 }
 
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
@@ -279,19 +280,19 @@ int nativeLoop(void) {
 }
 
 void nativeStart(void) {
-  // Dispatch to main thread — AppKit requires all UI work on the main thread.
   // When used with an external event loop (e.g. Wails), this function is called
-  // from a background goroutine, so we must bounce to the main queue.
-  dispatch_async(dispatch_get_main_queue(), ^{
+  // from a background goroutine.  AppKit requires all UI work on the main thread,
+  // so we use dispatch_sync to bounce there and block until initialization is done.
+  // This is safe because we are NOT on the main thread (called via `go start()`).
+  dispatch_sync(dispatch_get_main_queue(), ^{
     owner = [[SystrayDelegate alloc] init];
-    NSNotification *launched = [NSNotification
-                                    notificationWithName: NSApplicationDidFinishLaunchingNotification
-                                                  object: [NSApplication sharedApplication]];
-    // Do NOT call setDelegate here — an external framework (e.g. Wails) already
-    // owns the NSApplication delegate.  We only need to bootstrap the status-bar
-    // item, which applicationDidFinishLaunching does for us.
-    [owner applicationDidFinishLaunching:launched];
+    // Only create the status bar item — do NOT set NSApp delegate (Wails owns it)
+    // and do NOT call systray_ready from here (it's a CGo callback that must not
+    // be invoked inside dispatch_sync to avoid potential deadlocks).
+    [owner initStatusBar];
   });
+  // Signal Go side that systray is ready (runs on the background goroutine)
+  systray_ready();
 }
 
 void runInMainThread(SEL method, id object) {

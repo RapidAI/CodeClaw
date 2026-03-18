@@ -14,27 +14,28 @@ interface LLMProvider {
     key: string;
     model: string;
     protocol?: string; // "openai" (default) or "anthropic"
+    context_length?: number; // max context tokens (0 = default 128k)
     is_custom?: boolean;
 }
 
 const NONE_PROVIDER = "__none__";
 
 /** Known OpenAI-compatible providers for quick-fill in custom provider config. */
-const KNOWN_OPENAI_ENDPOINTS: { name: string; url: string; model: string }[] = [
-    { name: "OpenAI Official", url: "https://api.openai.com/v1", model: "gpt-4o" },
-    { name: "DeepSeek", url: "https://api.deepseek.com/v1", model: "deepseek-chat" },
-    { name: "GLM (智谱)", url: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4.7" },
-    { name: "Kimi (月之暗面)", url: "https://api.kimi.com/coding/v1", model: "kimi-k2-thinking" },
-    { name: "Doubao (豆包)", url: "https://ark.cn-beijing.volces.com/api/coding", model: "doubao-seed-code-preview-latest" },
-    { name: "MiniMax", url: "https://api.minimaxi.com/v1", model: "MiniMax-M2.1" },
-    { name: "腾讯云", url: "https://api.lkeap.cloud.tencent.com/coding/v3", model: "glm-5" },
-    { name: "xAI (Grok)", url: "https://api.x.ai/v1", model: "grok-3" },
-    { name: "OpenRouter", url: "https://openrouter.ai/api/v1", model: "openai/gpt-4o" },
-    { name: "Together AI", url: "https://api.together.xyz/v1", model: "meta-llama/Llama-3-70b-chat-hf" },
-    { name: "Groq", url: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
-    { name: "Perplexity", url: "https://api.perplexity.ai", model: "sonar-pro" },
-    { name: "阿里云 (百炼)", url: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen3.5-plus" },
-    { name: "ChatFire", url: "https://api.chatfire.cn/v1", model: "gpt-4o" },
+const KNOWN_OPENAI_ENDPOINTS: { name: string; url: string; model: string; context_length?: number }[] = [
+    { name: "OpenAI Official", url: "https://api.openai.com/v1", model: "gpt-4o", context_length: 128000 },
+    { name: "DeepSeek", url: "https://api.deepseek.com/v1", model: "deepseek-chat", context_length: 128000 },
+    { name: "GLM (智谱)", url: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4.7", context_length: 200000 },
+    { name: "Kimi (月之暗面)", url: "https://api.kimi.com/coding/v1", model: "kimi-k2-thinking", context_length: 128000 },
+    { name: "Doubao (豆包)", url: "https://ark.cn-beijing.volces.com/api/coding", model: "doubao-seed-code-preview-latest", context_length: 128000 },
+    { name: "MiniMax", url: "https://api.minimaxi.com/v1", model: "MiniMax-M2.1", context_length: 128000 },
+    { name: "腾讯云", url: "https://api.lkeap.cloud.tencent.com/coding/v3", model: "glm-5", context_length: 128000 },
+    { name: "xAI (Grok)", url: "https://api.x.ai/v1", model: "grok-3", context_length: 131072 },
+    { name: "OpenRouter", url: "https://openrouter.ai/api/v1", model: "openai/gpt-4o", context_length: 128000 },
+    { name: "Together AI", url: "https://api.together.xyz/v1", model: "meta-llama/Llama-3-70b-chat-hf", context_length: 128000 },
+    { name: "Groq", url: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", context_length: 128000 },
+    { name: "Perplexity", url: "https://api.perplexity.ai", model: "sonar-pro", context_length: 128000 },
+    { name: "阿里云 (百炼)", url: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen3.5-plus", context_length: 128000 },
+    { name: "ChatFire", url: "https://api.chatfire.cn/v1", model: "gpt-4o", context_length: 128000 },
 ];
 
 /* ── Hoisted style objects (avoid re-creation per render) ── */
@@ -74,7 +75,7 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
             const data = await GetMaclawLLMProviders();
             if (data?.providers) { setProviders(data.providers); setCurrentName(data.current || NONE_PROVIDER); }
             const iter = await GetMaclawAgentMaxIterations();
-            setMaxIter(iter || 12);
+            setMaxIter(typeof iter === "number" ? iter : 12);
         } catch { /* ignore */ }
         setLoading(false);
     }, []);
@@ -136,7 +137,7 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
         if (!ep || dlgSelectedIdx === null) return;
         setDlgProviders(prev => {
             const copy = [...prev];
-            copy[dlgSelectedIdx] = { ...copy[dlgSelectedIdx], name: ep.name, url: ep.url, model: ep.model, protocol: "openai" };
+            copy[dlgSelectedIdx] = { ...copy[dlgSelectedIdx], name: ep.name, url: ep.url, model: ep.model, protocol: "openai", context_length: ep.context_length || 128000 };
             return copy;
         });
         setDlgDirty(true);
@@ -231,11 +232,11 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                     )}
                 </p>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input type="range" min={0} max={100} step={1} value={maxIter}
+                    <input type="range" min={0} max={300} step={1} value={maxIter}
                         onChange={e => { const v = Number(e.target.value); setMaxIter(v); SetMaclawAgentMaxIterations(v).catch(() => {}); }}
                         style={{ flex: 1, accentColor: "#6366f1" }} />
-                    <input type="number" min={0} max={200} value={maxIter}
-                        onChange={e => { const v = Math.max(0, Math.min(200, Number(e.target.value) || 0)); setMaxIter(v); SetMaclawAgentMaxIterations(v).catch(() => {}); }}
+                    <input type="number" min={0} max={300} value={maxIter}
+                        onChange={e => { const v = Math.max(0, Math.min(300, Number(e.target.value) || 0)); setMaxIter(v); SetMaclawAgentMaxIterations(v).catch(() => {}); }}
                         style={{ ...inputStyle, width: 60, textAlign: "center" as const }} />
                     <span style={{ fontSize: "0.72rem", color: colors.textSecondary, whiteSpace: "nowrap" }}>
                         {maxIter === 0 ? t("不限制", "Unlimited") : `${maxIter} ${t("轮", "rounds")}`}
@@ -429,6 +430,21 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                                     <input style={inputStyle} type="password" value={dlgProvider.key}
                                         onChange={e => dlgUpdateField("key", e.target.value)}
                                         placeholder={(dlgProvider.protocol || "openai") === "anthropic" ? "sk-ant-..." : "sk-..."} autoComplete="off" />
+                                </div>
+
+                                {/* Context Length */}
+                                <div style={{ marginTop: 12 }}>
+                                    <label style={labelStyle}>{t("上下文长度 (tokens)", "Context Length (tokens)")}</label>
+                                    <input style={inputStyle} type="number" min={0} step={1000}
+                                        value={dlgProvider.context_length || ""}
+                                        onChange={e => dlgUpdateField("context_length", e.target.value ? parseInt(e.target.value, 10) || 0 : 0)}
+                                        placeholder="128000" />
+                                    <p style={{ fontSize: "0.68rem", color: colors.textMuted, margin: "4px 0 0 0", lineHeight: 1.4 }}>
+                                        {t(
+                                            "模型支持的最大上下文长度。智谱 GLM 为 200000，留空默认 128000。",
+                                            "Max context window of the model. GLM supports 200000. Defaults to 128000 if empty."
+                                        )}
+                                    </p>
                                 </div>
                             </div>
                         )}

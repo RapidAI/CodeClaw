@@ -205,3 +205,30 @@ func joinChannels(channels []string) string {
 	}
 	return result
 }
+
+// UserLookup resolves an internal user ID to an email address.
+type UserLookup interface {
+	GetEmail(ctx context.Context, userID string) (string, error)
+}
+
+// ProactiveSender implements ws.IMProactiveSender by resolving userID → email
+// and then broadcasting via NotifyBroadcaster.
+type ProactiveSender struct {
+	broadcaster *NotifyBroadcaster
+	users       UserLookup
+}
+
+// NewProactiveSender creates a ProactiveSender wired to the broadcaster and user lookup.
+func NewProactiveSender(broadcaster *NotifyBroadcaster, users UserLookup) *ProactiveSender {
+	return &ProactiveSender{broadcaster: broadcaster, users: users}
+}
+
+// SendProactiveMessage resolves the user's email and broadcasts the text to all IM channels.
+func (p *ProactiveSender) SendProactiveMessage(ctx context.Context, userID, text string) error {
+	email, err := p.users.GetEmail(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("resolve user email for %s: %w", userID, err)
+	}
+	p.broadcaster.BroadcastText(ctx, email, "MaClaw 定时任务通知", text)
+	return nil
+}

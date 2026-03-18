@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"path/filepath"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
 	"github.com/RapidAI/CodeClaw/hub/internal/skill"
+	"github.com/RapidAI/CodeClaw/hub/internal/store"
 	"github.com/RapidAI/CodeClaw/hub/internal/store/sqlite"
 	"github.com/RapidAI/CodeClaw/hub/internal/ws"
 )
@@ -172,6 +174,11 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	qqbotPlugin.SetBroadcaster(broadcaster)
 	feishuNotifier.SetBroadcaster(broadcaster)
 
+	// 10. Proactive message sender — allows MaClaw clients to push
+	//     non-request-based messages (e.g. scheduled task results) to users.
+	proactiveSender := im.NewProactiveSender(broadcaster, &userEmailLookup{users: st.Users})
+	gateway.SetIMProactiveSender(proactiveSender)
+
 	// Wire login link broadcaster into identity service so PWA login
 	// confirmation links are also sent to bound IM channels.
 	identityService.SetLoginNotifier(broadcaster)
@@ -226,4 +233,22 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		// Skill store
 		SkillStore: skillStore,
 	}, nil
+}
+
+// userEmailLookup adapts store.UserRepository to im.UserLookup.
+type userEmailLookup struct {
+	users interface {
+		GetByID(ctx context.Context, id string) (*store.User, error)
+	}
+}
+
+func (u *userEmailLookup) GetEmail(ctx context.Context, userID string) (string, error) {
+	user, err := u.users.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if user == nil {
+		return "", fmt.Errorf("user not found: %s", userID)
+	}
+	return user.Email, nil
 }

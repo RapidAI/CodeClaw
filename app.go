@@ -84,6 +84,10 @@ var UpdateTrayVisibility func(bool)
 // iconFlag: 0=none, 1=info, 2=warning, 3=error
 var ShowNotification func(title, message string, iconFlag uint32)
 
+// FlashAndBeep plays a notification sound and flashes the taskbar/dock icon.
+// Set by platform-specific tray setup code.
+var FlashAndBeep func()
+
 type ModelConfig struct {
 	ModelName       string `json:"model_name"`
 	ModelId         string `json:"model_id"`
@@ -187,6 +191,7 @@ type AppConfig struct {
 	MaclawLLMKey             string              `json:"maclaw_llm_key"`
 	MaclawLLMModel           string              `json:"maclaw_llm_model"`
 	MaclawLLMProtocol        string              `json:"maclaw_llm_protocol,omitempty"` // "openai" (default) or "anthropic"
+	MaclawLLMContextLength   int                 `json:"maclaw_llm_context_length,omitempty"` // max context tokens
 	MaclawLLMProviders       []MaclawLLMProvider `json:"maclaw_llm_providers,omitempty"`
 	MaclawLLMCurrentProvider string              `json:"maclaw_llm_current_provider,omitempty"`
 	MaclawAgentMaxIterations int                 `json:"maclaw_agent_max_iterations,omitempty"` // 0/absent=default(12), >0=fixed limit, -1=unlimited
@@ -431,6 +436,10 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 	if a.scheduledTaskManager != nil {
 		handler := hubClient.imHandler
 		a.scheduledTaskManager.SetExecutor(func(task *ScheduledTask) (string, error) {
+			// Play sound + flash taskbar icon to draw attention.
+			if FlashAndBeep != nil {
+				FlashAndBeep()
+			}
 			// Show system tray notification when a scheduled task fires.
 			if ShowNotification != nil {
 				ShowNotification(
@@ -448,6 +457,30 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 			if resp == nil {
 				return "", fmt.Errorf("nil response from agent")
 			}
+
+			// Push the result to the user's IM channels (Feishu/QQ) via Hub.
+			resultText := resp.Text
+			if resultText != "" {
+				proactiveMsg := fmt.Sprintf("⏰ 定时任务「%s」执行结果:\n\n%s", task.Name, resultText)
+				if err := hubClient.SendIMProactiveMessage(proactiveMsg); err != nil {
+					a.log(fmt.Sprintf("[scheduled-task] proactive message send failed: %v", err))
+				}
+			}
+
+			// Show local notification with the result + sound + flash.
+			if resultText != "" {
+				if FlashAndBeep != nil {
+					FlashAndBeep()
+				}
+				if ShowNotification != nil {
+					ShowNotification(
+						"⏰ 定时任务完成",
+						fmt.Sprintf("%s: %s", task.Name, truncateStr(resultText, 200)),
+						1,
+					)
+				}
+			}
+
 			if resp.Error != "" {
 				return resp.Text, fmt.Errorf("%s", resp.Error)
 			}

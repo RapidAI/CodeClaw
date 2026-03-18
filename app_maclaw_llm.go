@@ -13,26 +13,28 @@ import (
 
 // MaclawLLMProvider represents a single LLM provider entry for MaClaw.
 type MaclawLLMProvider struct {
-	Name     string `json:"name"`
-	URL      string `json:"url"`
-	Key      string `json:"key"`
-	Model    string `json:"model"`
-	Protocol string `json:"protocol,omitempty"` // "openai" (default) or "anthropic"
-	IsCustom bool   `json:"is_custom,omitempty"`
+	Name          string `json:"name"`
+	URL           string `json:"url"`
+	Key           string `json:"key"`
+	Model         string `json:"model"`
+	Protocol      string `json:"protocol,omitempty"`       // "openai" (default) or "anthropic"
+	ContextLength int    `json:"context_length,omitempty"` // max context tokens (0 = use default 128k)
+	IsCustom      bool   `json:"is_custom,omitempty"`
 }
 
 // MaclawLLMConfig is the LLM configuration for the MaClaw desktop agent.
 type MaclawLLMConfig struct {
-	URL      string `json:"url"`
-	Key      string `json:"key"`
-	Model    string `json:"model"`
-	Protocol string `json:"protocol,omitempty"` // "openai" (default) or "anthropic"
+	URL           string `json:"url"`
+	Key           string `json:"key"`
+	Model         string `json:"model"`
+	Protocol      string `json:"protocol,omitempty"`       // "openai" (default) or "anthropic"
+	ContextLength int    `json:"context_length,omitempty"` // max context tokens (0 = use default)
 }
 
 // defaultMaclawLLMProviders returns the built-in provider list.
 func defaultMaclawLLMProviders() []MaclawLLMProvider {
 	return []MaclawLLMProvider{
-		{Name: "智谱", URL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-5-turbo"},
+		{Name: "智谱", URL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-5-turbo", ContextLength: 200000},
 		{Name: "Custom1", URL: "", Model: "", IsCustom: true},
 		{Name: "Custom2", URL: "", Model: "", IsCustom: true},
 	}
@@ -59,6 +61,24 @@ func (a *App) GetMaclawLLMProviders() struct {
 			providers[0].URL = cfg.MaclawLLMUrl
 			providers[0].Key = cfg.MaclawLLMKey
 			providers[0].Model = cfg.MaclawLLMModel
+			if cfg.MaclawLLMContextLength > 0 {
+				providers[0].ContextLength = cfg.MaclawLLMContextLength
+			}
+		}
+	}
+	// Backfill context_length for known providers that predate this field.
+	defaults := defaultMaclawLLMProviders()
+	defaultCtx := make(map[string]int, len(defaults))
+	for _, d := range defaults {
+		if d.ContextLength > 0 {
+			defaultCtx[d.Name] = d.ContextLength
+		}
+	}
+	for i := range providers {
+		if providers[i].ContextLength == 0 {
+			if cl, ok := defaultCtx[providers[i].Name]; ok {
+				providers[i].ContextLength = cl
+			}
 		}
 	}
 	current := cfg.MaclawLLMCurrentProvider
@@ -84,12 +104,14 @@ func (a *App) SaveMaclawLLMProviders(providers []MaclawLLMProvider, current stri
 	cfg.MaclawLLMKey = ""
 	cfg.MaclawLLMModel = ""
 	cfg.MaclawLLMProtocol = ""
+	cfg.MaclawLLMContextLength = 0
 	for _, p := range providers {
 		if p.Name == current {
 			cfg.MaclawLLMUrl = strings.TrimRight(strings.TrimSpace(p.URL), "/")
 			cfg.MaclawLLMKey = strings.TrimSpace(p.Key)
 			cfg.MaclawLLMModel = strings.TrimSpace(p.Model)
 			cfg.MaclawLLMProtocol = p.Protocol
+			cfg.MaclawLLMContextLength = p.ContextLength
 			break
 		}
 	}
@@ -125,10 +147,11 @@ func (a *App) GetMaclawLLMConfig() MaclawLLMConfig {
 		return MaclawLLMConfig{}
 	}
 	return MaclawLLMConfig{
-		URL:      cfg.MaclawLLMUrl,
-		Key:      cfg.MaclawLLMKey,
-		Model:    cfg.MaclawLLMModel,
-		Protocol: cfg.MaclawLLMProtocol,
+		URL:           cfg.MaclawLLMUrl,
+		Key:           cfg.MaclawLLMKey,
+		Model:         cfg.MaclawLLMModel,
+		Protocol:      cfg.MaclawLLMProtocol,
+		ContextLength: cfg.MaclawLLMContextLength,
 	}
 }
 
@@ -151,6 +174,7 @@ func (a *App) SaveMaclawLLMConfig(llm MaclawLLMConfig) error {
 	cfg.MaclawLLMKey = strings.TrimSpace(llm.Key)
 	cfg.MaclawLLMModel = strings.TrimSpace(llm.Model)
 	cfg.MaclawLLMProtocol = llm.Protocol
+	cfg.MaclawLLMContextLength = llm.ContextLength
 	if err := a.SaveConfig(cfg); err != nil {
 		return err
 	}
@@ -293,6 +317,9 @@ func (a *App) testAnthropicLLM(url, key, model string) (string, error) {
 // defaultAgentMaxIterations is the fallback when the user has not configured a custom value.
 const defaultAgentMaxIterations = 12
 
+// maxAgentIterationsCap is the hard safety ceiling for agent loops.
+const maxAgentIterationsCap = 300
+
 // GetMaclawAgentMaxIterations returns the configured max agent iterations.
 //   - positive value: use that as the limit
 //   - -1: unlimited (agent self-manages via set_max_iterations tool)
@@ -319,6 +346,9 @@ func (a *App) SetMaclawAgentMaxIterations(n int) error {
 	}
 	switch {
 	case n > 0:
+		if n > maxAgentIterationsCap {
+			n = maxAgentIterationsCap
+		}
 		cfg.MaclawAgentMaxIterations = n
 	case n == 0:
 		cfg.MaclawAgentMaxIterations = -1 // sentinel for "unlimited"

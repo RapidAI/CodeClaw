@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -204,7 +205,17 @@ func (m *ConfigManager) formatMaclawLLMConfig(cfg AppConfig) string {
 		proto = "openai"
 	}
 	b.WriteString(fmt.Sprintf("maclaw_llm_protocol: %s\n", proto))
+	b.WriteString(fmt.Sprintf("maclaw_llm_context_length: %d\n", cfg.MaclawLLMContextLength))
 	b.WriteString(fmt.Sprintf("maclaw_llm_current_provider: %s\n", cfg.MaclawLLMCurrentProvider))
+	maxIter := cfg.MaclawAgentMaxIterations
+	switch {
+	case maxIter > 0:
+		b.WriteString(fmt.Sprintf("maclaw_agent_max_iterations: %d\n", maxIter))
+	case maxIter < 0:
+		b.WriteString("maclaw_agent_max_iterations: unlimited\n")
+	default:
+		b.WriteString("maclaw_agent_max_iterations: 12 (default)\n")
+	}
 	return b.String()
 }
 
@@ -641,9 +652,32 @@ func (m *ConfigManager) applyMaclawLLMChange(cfg *AppConfig, key, value string) 
 		old := cfg.MaclawLLMProtocol
 		cfg.MaclawLLMProtocol = value
 		return old, nil
+	case "maclaw_llm_context_length":
+		old := fmt.Sprintf("%d", cfg.MaclawLLMContextLength)
+		n, _ := strconv.Atoi(value)
+		cfg.MaclawLLMContextLength = n
+		return old, nil
 	case "maclaw_llm_current_provider":
 		old := cfg.MaclawLLMCurrentProvider
 		cfg.MaclawLLMCurrentProvider = value
+		return old, nil
+	case "maclaw_agent_max_iterations":
+		old := fmt.Sprintf("%d", cfg.MaclawAgentMaxIterations)
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return "", fmt.Errorf("invalid integer value for maclaw_agent_max_iterations: %q", value)
+		}
+		switch {
+		case n > 0:
+			if n > maxAgentIterationsCap {
+				n = maxAgentIterationsCap
+			}
+			cfg.MaclawAgentMaxIterations = n
+		case n == 0:
+			cfg.MaclawAgentMaxIterations = -1 // sentinel for "unlimited"
+		default:
+			cfg.MaclawAgentMaxIterations = 0 // zero-value = not configured → default(12)
+		}
 		return old, nil
 	}
 	return "", fmt.Errorf("unsupported maclaw_llm key %q", key)
@@ -810,7 +844,9 @@ func (m *ConfigManager) initSchema() {
 				{Key: "maclaw_llm_url", Description: "Maclaw LLM 服务地址", Type: "string"},
 				{Key: "maclaw_llm_key", Description: "Maclaw LLM API 密钥", Type: "string"},
 				{Key: "maclaw_llm_model", Description: "Maclaw LLM 模型名称", Type: "string"},
+				{Key: "maclaw_llm_context_length", Description: "LLM 上下文长度 (tokens)，0=默认128000", Type: "int", Default: "0"},
 				{Key: "maclaw_llm_current_provider", Description: "当前 LLM 提供商", Type: "string"},
+				{Key: "maclaw_agent_max_iterations", Description: "Agent 最大推理轮次（正整数=固定上限，0=无限制，负数=恢复默认12）", Type: "int", Default: "12"},
 			},
 		},
 

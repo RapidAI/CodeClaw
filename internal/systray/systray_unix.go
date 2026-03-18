@@ -473,3 +473,16 @@ func ShowBalloonNotification(title, message string, iconFlag uint32) error {
 	cmd := exec.Command("notify-send", "-u", urgency, title, message)
 	return cmd.Start()
 }
+
+// FlashAndBeep plays a notification sound on Linux using paplay or aplay,
+// and sends a critical-urgency notification to flash the taskbar.
+func FlashAndBeep() {
+	// Try paplay (PulseAudio) with the freedesktop notification sound.
+	sound := "/usr/share/sounds/freedesktop/stereo/complete.oga"
+	if _, err := os.Stat(sound); err == nil {
+		_ = exec.Command("paplay", sound).Start()
+	} else {
+		// Fallback: try aplay with a WAV file or just use bell.
+		_ = exec.Command("bash", "-c", "echo -e '\\a'").Start()
+	}
+}

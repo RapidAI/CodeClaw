@@ -175,7 +175,136 @@ func estimateTokens(entries []conversationEntry) int {
 		data, _ := json.Marshal(e)
 		total += len(data)
 	}
-	return total / 4
+	return total / 3 // conservative: CJK chars are multi-byte but ~1-2 tokens
+}
+
+// estimateConversationTokens estimates the token count for a raw conversation
+// slice ([]interface{}) used inside the agent loop.
+// For Chinese-heavy content the JSON byte length underestimates token count
+// because CJK characters are 3 bytes in UTF-8 but typically 1-2 tokens.
+// We use len/3 instead of len/4 to be more conservative.
+func estimateConversationTokens(msgs []interface{}) int {
+	total := 0
+	for _, m := range msgs {
+		data, _ := json.Marshal(m)
+		total += len(data)
+	}
+	return total / 3
+}
+
+// defaultContextTokens is the fallback context limit when no explicit
+// context_length is configured on the LLM provider.
+const defaultContextTokens = 128_000
+
+// EffectiveContextTokens returns the usable context window in tokens.
+// It uses the configured ContextLength, falling back to defaultContextTokens.
+// A safety margin of 20% is reserved for the model's output.
+func (c MaclawLLMConfig) EffectiveContextTokens() int {
+	limit := c.ContextLength
+	if limit <= 0 {
+		limit = defaultContextTokens
+	}
+	return limit * 80 / 100 // reserve 20% for output
+}
+
+// msgRole extracts the "role" field from a conversation message regardless
+// of whether it's map[string]string or map[string]interface{}.
+func msgRole(m interface{}) string {
+	switch v := m.(type) {
+	case map[string]interface{}:
+		r, _ := v["role"].(string)
+		return r
+	case map[string]string:
+		return v["role"]
+	}
+	return ""
+}
+
+// msgHasToolCalls checks if a conversation message has a non-nil tool_calls field.
+func msgHasToolCalls(m interface{}) bool {
+	if v, ok := m.(map[string]interface{}); ok {
+		return v["tool_calls"] != nil
+	}
+	return false
+}
+
+// trimConversation keeps the first message (system prompt) and trims older
+// middle messages so the total estimated tokens stay under the limit.
+// It preserves tool-call integrity: assistant messages with tool_calls and
+// their corresponding tool-result messages are always kept or dropped together.
+func trimConversation(msgs []interface{}, tokenLimit int) []interface{} {
+	if tokenLimit <= 0 {
+		tokenLimit = defaultContextTokens * 80 / 100
+	}
+	if estimateConversationTokens(msgs) <= tokenLimit {
+		return msgs
+	}
+	if len(msgs) <= 3 {
+		return msgs
+	}
+
+	// Strategy: keep msgs[0] (system prompt), drop oldest middle messages
+	// until we fit. We scan from index 1 forward, skipping the tail we want
+	// to keep, and grow the tail until it fits.
+	//
+	// To avoid breaking tool-call pairs we identify "logical groups":
+	// an assistant message with tool_calls + all immediately following tool
+	// messages form one indivisible group.
+
+	type msgGroup struct {
+		start, end int // half-open range [start, end) in msgs
+	}
+
+	// Build groups from msgs[1:]
+	var groups []msgGroup
+	i := 1
+	for i < len(msgs) {
+		gStart := i
+		role := msgRole(msgs[i])
+		if role == "assistant" && msgHasToolCalls(msgs[i]) {
+			// This assistant message + all following tool messages = one group
+			i++
+			for i < len(msgs) {
+				if msgRole(msgs[i]) != "tool" {
+					break
+				}
+				i++
+			}
+		} else {
+			i++
+		}
+		groups = append(groups, msgGroup{start: gStart, end: i})
+	}
+
+	// Try keeping only the last N groups, increasing N until we exceed the limit
+	// or run out of groups. We want the maximum tail that fits.
+	systemMsg := msgs[:1]
+	placeholder := []interface{}{map[string]string{
+		"role":    "user",
+		"content": "[注意：中间的对话历史因上下文长度限制已被省略，请基于最近的上下文继续工作]",
+	}}
+
+	// Start from keeping all groups, then drop from the front.
+	for dropCount := 1; dropCount < len(groups); dropCount++ {
+		kept := groups[dropCount:]
+		var result []interface{}
+		result = append(result, systemMsg...)
+		result = append(result, placeholder...)
+		for _, g := range kept {
+			result = append(result, msgs[g.start:g.end]...)
+		}
+		if estimateConversationTokens(result) <= tokenLimit {
+			return result
+		}
+	}
+
+	// Even keeping only the last group doesn't fit — return system + placeholder + last group.
+	lastG := groups[len(groups)-1]
+	var result []interface{}
+	result = append(result, systemMsg...)
+	result = append(result, placeholder...)
+	result = append(result, msgs[lastG.start:lastG.end]...)
+	return result
 }
 
 func trimHistory(entries []conversationEntry) []conversationEntry {
@@ -865,10 +994,10 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 	history = append(history, conversationEntry{Role: "user", Content: userText})
 
 	// maxIter == 0 means "unlimited" — agent decides when to stop.
-	// We still enforce a hard safety cap of 200 to prevent runaway loops.
+	// We still enforce a hard safety cap to prevent runaway loops.
 	effectiveMax := maxIter
 	if effectiveMax <= 0 {
-		effectiveMax = 200
+		effectiveMax = maxAgentIterationsCap
 	}
 
 	for iteration := 0; ; iteration++ {
@@ -886,6 +1015,7 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 				sendProgress(fmt.Sprintf("🔄 Agent 推理中（第 %d 轮）…", iteration+1))
 			}
 		}
+		conversation = trimConversation(conversation, cfg.EffectiveContextTokens())
 		resp, err := h.doLLMRequest(cfg, conversation, tools)
 		if err != nil {
 			return &IMAgentResponse{Error: fmt.Sprintf("LLM 调用失败: %s", err.Error())}
@@ -1053,6 +1183,8 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 	b.WriteString(fmt.Sprintf("- 设备名: %s\n", hostname))
 	b.WriteString(fmt.Sprintf("- 平台: %s\n", normalizedRemotePlatform()))
 	b.WriteString(fmt.Sprintf("- App 版本: %s\n", remoteAppVersion()))
+	now := time.Now()
+	b.WriteString(fmt.Sprintf("- 当前时间: %s（%s）\n", now.Format("2006-01-02 15:04"), now.Weekday()))
 
 	if h.manager != nil {
 		sessions := h.manager.List()
@@ -1364,13 +1496,13 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 				"json_data": map[string]string{"type": "string", "description": "要导入的配置 JSON 字符串"},
 			}, []string{"json_data"}),
 		// --- Agent 自管理工具 ---
-		toolDef("set_max_iterations", "动态调整当前对话的最大推理轮数。当你判断任务复杂需要更多轮次时调用此工具扩展上限，任务简单时可缩减。仅影响当前对话，不修改全局配置。上限不超过 200。",
+		toolDef("set_max_iterations", fmt.Sprintf("调整最大推理轮数。设置后会持久化保存，后续对话也会生效。当你判断任务复杂需要更多轮次时调用此工具扩展上限，任务简单时可缩减。上限不超过 %d。", maxAgentIterationsCap),
 			map[string]interface{}{
-				"max_iterations": map[string]string{"type": "integer", "description": "新的最大轮数（1-200）"},
+				"max_iterations": map[string]string{"type": "integer", "description": fmt.Sprintf("新的最大轮数（1-%d）", maxAgentIterationsCap)},
 				"reason":         map[string]string{"type": "string", "description": "调整原因（用于日志记录）"},
 			}, []string{"max_iterations"}),
 		// --- 定时任务工具 ---
-		toolDef("create_scheduled_task", "创建定时任务。用户说 每天9点做XX、每周一下午3点做YY、从3月1号到15号每天上午10点做ZZ 时，解析出时间参数并调用此工具。day_of_week: -1=每天, 0=周日, 1=周一...6=周六。day_of_month: -1=不限, 1-31=每月几号。",
+		toolDef("create_scheduled_task", "创建定时任务。用户说 每天9点做XX、每周一下午3点做YY、从3月1号到15号每天上午10点做ZZ 时，解析出时间参数并调用此工具。day_of_week: -1=每天, 0=周日, 1=周一...6=周六。day_of_month: -1=不限, 1-31=每月几号。重要：如果用户说的是一次性任务（如'今天中午提醒我'、'明天下午3点做XX'），必须将 start_date 和 end_date 都设为目标日期，确保只执行一次。",
 			map[string]interface{}{
 				"name":         map[string]string{"type": "string", "description": "任务名称（简短描述）"},
 				"action":       map[string]string{"type": "string", "description": "到时要执行的操作（自然语言描述，会发送给 agent 执行）"},
@@ -2785,18 +2917,25 @@ func (h *IMMessageHandler) toolImportConfig(args map[string]interface{}) string 
 func (h *IMMessageHandler) toolSetMaxIterations(args map[string]interface{}) string {
 	n, ok := args["max_iterations"].(float64)
 	if !ok || n < 1 {
-		return "缺少或无效的 max_iterations 参数（需要 1-200 的整数）"
+		return fmt.Sprintf("缺少或无效的 max_iterations 参数（需要 1-%d 的整数）", maxAgentIterationsCap)
 	}
 	limit := int(n)
-	if limit > 200 {
-		limit = 200
+	if limit > maxAgentIterationsCap {
+		limit = maxAgentIterationsCap
 	}
 	reason := stringVal(args, "reason")
 	h.loopMaxOverride = limit
-	if reason != "" {
-		return fmt.Sprintf("✅ 已将当前对话最大轮数调整为 %d（原因: %s）", limit, reason)
+
+	// Persist to config so the setting survives across conversations.
+	if err := h.app.SetMaclawAgentMaxIterations(limit); err != nil {
+		// Non-fatal: the override still applies to the current loop.
+		_ = err
 	}
-	return fmt.Sprintf("✅ 已将当前对话最大轮数调整为 %d", limit)
+
+	if reason != "" {
+		return fmt.Sprintf("✅ 已将最大轮数调整为 %d（已持久化，原因: %s）", limit, reason)
+	}
+	return fmt.Sprintf("✅ 已将最大轮数调整为 %d（已持久化）", limit)
 }
 
 // ---------------------------------------------------------------------------
@@ -2850,6 +2989,15 @@ func (h *IMMessageHandler) toolCreateScheduledTask(args map[string]interface{}) 
 
 	// Notify frontend to refresh the scheduled tasks panel.
 	h.app.emitEvent("scheduled-tasks-changed")
+
+	// 非一次性任务同步到系统日历
+	if created := h.scheduledTaskManager.Get(id); created != nil && isRecurringTask(created) {
+		go func() {
+			if err := SyncTaskToSystemCalendar(created); err != nil {
+				h.app.log(fmt.Sprintf("[scheduled-task] calendar sync failed: %v", err))
+			}
+		}()
+	}
 
 	// Format next run time for display.
 	if task := h.scheduledTaskManager.Get(id); task != nil && task.NextRunAt != nil {
