@@ -2970,7 +2970,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 			RemoteMachineToken: "",
 			RemoteHeartbeatSec:  10,
 			ScreenDimTimeoutMin: 3, // Default: dim display after 3 minutes of inactivity
-			ClawNetEnabled:      true,
+			ClawNetEnabled:      false,
 		}
 		err = a.SaveConfig(defaultConfig)
 		return defaultConfig, err
