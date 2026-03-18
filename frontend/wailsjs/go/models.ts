@@ -142,6 +142,16 @@ export namespace main {
 	    maclaw_llm_model: string;
 	    maclaw_role_name: string;
 	    maclaw_role_description: string;
+	    maclaw_llm_protocol: string;
+	    maclaw_llm_context_length: number;
+	    maclaw_llm_providers: any[];
+	    maclaw_llm_current_provider: string;
+	    maclaw_agent_max_iterations: number;
+	    screen_dim_timeout_min: number;
+	    mcp_servers: any[];
+	    local_mcp_servers: any[];
+	    nl_skills: any[];
+	    memory_auto_compress: boolean;
 	    skill_hub_urls: any[];
 	
 	    static createFrom(source: any = {}) {
@@ -201,6 +211,16 @@ export namespace main {
 	        this.maclaw_llm_model = source["maclaw_llm_model"];
 	        this.maclaw_role_name = source["maclaw_role_name"];
 	        this.maclaw_role_description = source["maclaw_role_description"];
+	        this.maclaw_llm_protocol = source["maclaw_llm_protocol"];
+	        this.maclaw_llm_context_length = source["maclaw_llm_context_length"];
+	        this.maclaw_llm_providers = source["maclaw_llm_providers"];
+	        this.maclaw_llm_current_provider = source["maclaw_llm_current_provider"];
+	        this.maclaw_agent_max_iterations = source["maclaw_agent_max_iterations"];
+	        this.screen_dim_timeout_min = source["screen_dim_timeout_min"];
+	        this.mcp_servers = source["mcp_servers"];
+	        this.local_mcp_servers = source["local_mcp_servers"];
+	        this.nl_skills = source["nl_skills"];
+	        this.memory_auto_compress = source["memory_auto_compress"];
 	        this.skill_hub_urls = source["skill_hub_urls"];
 	    }
 	

@@ -216,12 +216,12 @@ function MemoryEditTab({ t, isZh, revision, onCountChange, createRef }: EditTabP
     // Report entry count to parent for tab-bar display.
     useEffect(() => { onCountChange(entries.length); }, [entries.length, onCountChange]);
 
-    const openCreate = () => {
+    const openCreate = useCallback(() => {
         setEditEntry(null); setFormContent(""); setFormCategory("user_fact"); setFormTags(""); setError(""); setDlgOpen(true);
-    };
+    }, []);
 
     // Expose openCreate to parent via ref.
-    useEffect(() => { createRef.current = openCreate; }, [createRef]);
+    useEffect(() => { createRef.current = openCreate; }, [createRef, openCreate]);
     const openEdit = (entry: MemoryEntry) => {
         setEditEntry(entry); setFormContent(entry.content); setFormCategory(entry.category);
         setFormTags((entry.tags || []).join(", ")); setError(""); setDlgOpen(true);
@@ -259,7 +259,7 @@ function MemoryEditTab({ t, isZh, revision, onCountChange, createRef }: EditTabP
             {loading && <div style={{ fontSize: "0.76rem", color: colors.textMuted }}>{t("加载中…", "Loading…")}</div>}
 
             {/* Entry list */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "360px", overflowY: "auto" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "360px", overflowY: "auto", border: `1px solid ${colors.border}`, borderRadius: radius.md, padding: 6 }}>
                 {entries.length === 0 && !loading && (
                     <div style={{ fontSize: "0.78rem", color: colors.textMuted, textAlign: "center", padding: "20px 0" }}>{t("暂无记忆条目", "No memory entries")}</div>
                 )}
