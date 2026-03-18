@@ -308,6 +308,13 @@ func (a *Adapter) sendResponse(ctx context.Context, plugin IMPlugin, target User
 			// Fallback to text on card send failure.
 			_ = plugin.SendText(ctx, target, out.FallbackText)
 		}
+		// If urgent, also send a buzz/urgent notification via the card's fallback text.
+		if out.Urgent {
+			if urgentPlugin, ok := plugin.(UrgentSender); ok {
+				// Send a lightweight urgent text to trigger the buzz notification.
+				_ = urgentPlugin.SendUrgentText(ctx, target, "⚡ "+out.Title)
+			}
+		}
 		return
 	}
 
@@ -320,6 +327,17 @@ func (a *Adapter) sendResponse(ctx context.Context, plugin IMPlugin, target User
 	// Truncate if platform has a max text length.
 	if caps.MaxTextLength > 0 && len(text) > caps.MaxTextLength {
 		text = truncateAtLine(text, caps.MaxTextLength)
+	}
+
+	// If the message is marked urgent and the plugin supports it, use urgent delivery.
+	if out.Urgent {
+		if urgentPlugin, ok := plugin.(UrgentSender); ok {
+			if err := urgentPlugin.SendUrgentText(ctx, target, text); err != nil {
+				log.Printf("[IM Adapter] SendUrgentText failed for %s, falling back to normal: %v", plugin.Name(), err)
+				_ = plugin.SendText(ctx, target, text)
+			}
+			return
+		}
 	}
 
 	_ = plugin.SendText(ctx, target, text)

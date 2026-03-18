@@ -1101,3 +1101,38 @@ func showMenuItem(item *MenuItem) {
 func resetMenu() {
 	wt.createMenu()
 }
+
+// ShowBalloonNotification displays a balloon notification from the system tray icon.
+// title is the notification title, message is the body text.
+// iconFlag: 0=none, 1=info, 2=warning, 3=error
+func ShowBalloonNotification(title, message string, iconFlag uint32) error {
+	if !wt.isReady() {
+		return ErrTrayNotReadyYet
+	}
+	const (
+		NIF_INFO = 0x00000010
+	)
+
+	wt.muNID.Lock()
+	defer wt.muNID.Unlock()
+
+	// Set info text (balloon body).
+	infoUTF16, err := windows.UTF16FromString(message)
+	if err != nil {
+		return err
+	}
+	copy(wt.nid.Info[:], infoUTF16)
+
+	// Set info title (balloon title).
+	titleUTF16, err := windows.UTF16FromString(title)
+	if err != nil {
+		return err
+	}
+	copy(wt.nid.InfoTitle[:], titleUTF16)
+
+	wt.nid.InfoFlags = iconFlag
+	wt.nid.Flags |= NIF_INFO
+	wt.nid.Size = uint32(unsafe.Sizeof(*wt.nid))
+
+	return wt.nid.modify()
+}

@@ -36,12 +36,13 @@ type TaskExecutor func(task *ScheduledTask) (result string, err error)
 // ScheduledTaskManager manages scheduled tasks with JSON persistence
 // and a background ticker that fires due tasks.
 type ScheduledTaskManager struct {
-	mu       sync.RWMutex
-	tasks    []ScheduledTask
-	path     string
-	stopCh   chan struct{}
-	running  bool
-	executor TaskExecutor
+	mu        sync.RWMutex
+	tasks     []ScheduledTask
+	path      string
+	stopCh    chan struct{}
+	running   bool
+	executor  TaskExecutor
+	onChange  func() // optional callback after task state changes (fire/expire)
 }
 
 // NewScheduledTaskManager creates a manager persisting to the given path.
@@ -80,6 +81,14 @@ func (m *ScheduledTaskManager) SetExecutor(fn TaskExecutor) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.executor = fn
+}
+
+// SetOnChange sets an optional callback invoked after task state changes
+// (e.g. after a task fires or expires), useful for notifying the frontend.
+func (m *ScheduledTaskManager) SetOnChange(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onChange = fn
 }
 
 // Start begins the background scheduler (checks every 30s).
@@ -132,42 +141,58 @@ func (m *ScheduledTaskManager) tick() {
 	m.mu.RUnlock()
 
 	for _, id := range dueIDs {
-		m.fireByID(id, executor)
+		go m.fireByID(id, executor)
 	}
 }
 
 func (m *ScheduledTaskManager) fireByID(id string, executor TaskExecutor) {
-	// Read the full task under lock.
-	m.mu.RLock()
+	// Atomically claim the task: read it and clear NextRunAt so the next
+	// tick() won't fire it again while the executor is still running.
+	m.mu.Lock()
 	var taskCopy *ScheduledTask
-	for _, t := range m.tasks {
+	for i, t := range m.tasks {
 		if t.ID == id {
+			if t.NextRunAt == nil {
+				// Already claimed by another goroutine.
+				m.mu.Unlock()
+				return
+			}
 			cp := t // copy the struct
 			taskCopy = &cp
+			m.tasks[i].NextRunAt = nil // prevent double-fire
 			break
 		}
 	}
-	m.mu.RUnlock()
+	m.mu.Unlock()
 	if taskCopy == nil {
 		return
 	}
 
-	// Execute outside lock.
+	fmt.Printf("[ScheduledTaskManager] firing task %s (%s)\n", taskCopy.ID, taskCopy.Name)
+
+	// Execute outside lock (with panic recovery).
 	var result, errStr string
 	if executor != nil {
-		res, err := executor(taskCopy)
-		result = res
-		if err != nil {
-			errStr = err.Error()
-		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					errStr = fmt.Sprintf("panic: %v", r)
+				}
+			}()
+			res, err := executor(taskCopy)
+			result = res
+			if err != nil {
+				errStr = err.Error()
+			}
+		}()
 	} else {
 		result = "no executor configured"
+		fmt.Printf("[ScheduledTaskManager] WARNING: no executor for task %s\n", id)
 	}
 
 	// Update state under lock.
 	now := time.Now()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for i := range m.tasks {
 		if m.tasks[i].ID != id {
 			continue
@@ -186,6 +211,12 @@ func (m *ScheduledTaskManager) fireByID(id string, executor TaskExecutor) {
 		break
 	}
 	_ = m.save()
+	cb := m.onChange
+	m.mu.Unlock()
+
+	if cb != nil {
+		cb()
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -445,7 +476,12 @@ func (m *ScheduledTaskManager) save() error {
 	if err != nil {
 		return fmt.Errorf("scheduled_task: marshal: %w", err)
 	}
-	return os.WriteFile(m.path, data, 0o644)
+	// Atomic write: write to temp file then rename to avoid corruption on crash.
+	tmp := m.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("scheduled_task: write tmp: %w", err)
+	}
+	return os.Rename(tmp, m.path)
 }
 
 // truncateStr truncates s to maxLen runes.

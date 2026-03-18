@@ -8,6 +8,17 @@ package systray
 #include "systray.h"
 
 void setInternalLoop(bool);
+
+// showNotification displays a macOS user notification with title and message.
+static void showNotification(const char* title, const char* message) {
+    @autoreleasepool {
+        NSUserNotification *notification = [[NSUserNotification alloc] init];
+        notification.title = [NSString stringWithUTF8String:title];
+        notification.informativeText = [NSString stringWithUTF8String:message];
+        notification.soundName = NSUserNotificationDefaultSoundName;
+        [[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
+    }
+}
 */
 import "C"
 
@@ -241,4 +252,11 @@ func systray_on_rclick() {
 	} else {
 		C.show_menu()
 	}
+}
+
+// ShowBalloonNotification displays a macOS notification with sound.
+// iconFlag is ignored on macOS (always uses default notification style).
+func ShowBalloonNotification(title, message string, iconFlag uint32) error {
+	C.showNotification(C.CString(title), C.CString(message))
+	return nil
 }

@@ -498,6 +498,33 @@ func feishuGenerateTempToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// SendUrgentText sends a text message with Feishu in-app urgent (加急) notification.
+// Implements the im.UrgentSender interface.
+func (p *FeishuPlugin) SendUrgentText(ctx context.Context, target im.UserTarget, text string) error {
+	openID := target.PlatformUID
+	if openID == "" {
+		return fmt.Errorf("feishu: PlatformUID (open_id) is required")
+	}
+	bot := p.notifier.Bot()
+	if bot == nil {
+		return fmt.Errorf("feishu bot not initialized")
+	}
+	// Send the text message.
+	msg := lark.NewMsgBuffer(lark.MsgText).
+		BindOpenID(openID).
+		Text(text).
+		Build()
+	resp, err := bot.PostMessage(ctx, msg)
+	if err != nil {
+		return fmt.Errorf("feishu: send urgent text: %w", err)
+	}
+	// Follow up with BuzzMessage (in-app urgent).
+	if resp != nil && resp.Data.MessageID != "" {
+		p.notifier.buzzMessage(resp.Data.MessageID, openID)
+	}
+	return nil
+}
+
 // ResolveUser maps a Feishu open_id to the unified internal user ID.
 // Reuses the existing resolveUserID logic (open_id → email → userID).
 func (p *FeishuPlugin) ResolveUser(ctx context.Context, platformUID string) (string, error) {

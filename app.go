@@ -79,6 +79,11 @@ var OnConfigChanged func(AppConfig)
 var UpdateTrayMenu func(string)
 var UpdateTrayVisibility func(bool)
 
+// ShowNotification displays a system tray balloon/toast notification.
+// title is the notification title, message is the body text.
+// iconFlag: 0=none, 1=info, 2=warning, 3=error
+var ShowNotification func(title, message string, iconFlag uint32)
+
 type ModelConfig struct {
 	ModelName       string `json:"model_name"`
 	ModelId         string `json:"model_id"`
@@ -420,6 +425,37 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 	}
 	if a.ioRelay != nil {
 		hubClient.SetIORelay(a.ioRelay)
+	}
+	// Wire the scheduled task executor so that due tasks are sent to the
+	// agent loop via the IM handler, making scheduled tasks actually fire.
+	if a.scheduledTaskManager != nil {
+		handler := hubClient.imHandler
+		a.scheduledTaskManager.SetExecutor(func(task *ScheduledTask) (string, error) {
+			// Show system tray notification when a scheduled task fires.
+			if ShowNotification != nil {
+				ShowNotification(
+					"⏰ 定时任务执行",
+					fmt.Sprintf("%s: %s", task.Name, truncateStr(task.Action, 100)),
+					1, // info icon
+				)
+			}
+
+			resp := handler.HandleIMMessage(IMUserMessage{
+				UserID:   "scheduled_task",
+				Platform: "scheduler",
+				Text:     task.Action,
+			})
+			if resp == nil {
+				return "", fmt.Errorf("nil response from agent")
+			}
+			if resp.Error != "" {
+				return resp.Text, fmt.Errorf("%s", resp.Error)
+			}
+			return resp.Text, nil
+		})
+		a.scheduledTaskManager.SetOnChange(func() {
+			a.emitEvent("scheduled-tasks-changed")
+		})
 	}
 	_ = hubClient.Connect()
 	return hubClient

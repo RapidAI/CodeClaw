@@ -53,6 +53,11 @@ func setupTray(app *App, appOptions *options.App) {
 				runtime.EventsEmit(app.ctx, "config-changed", cfg)
 			}
 
+			// Register system notification function
+			ShowNotification = func(title, message string, iconFlag uint32) {
+				_ = systray.ShowBalloonNotification(title, message, iconFlag)
+			}
+
 			// Handle menu clicks
 			mShow.Click(func() {
 				go runtime.WindowShow(app.ctx)

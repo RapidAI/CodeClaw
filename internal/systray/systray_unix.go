@@ -14,6 +14,7 @@ import (
 	_ "image/png" // used only here
 	"log"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -454,4 +455,21 @@ func argbForImage(img image.Image) []byte {
 		}
 	}
 	return data
+}
+
+// ShowBalloonNotification displays a desktop notification on Linux using notify-send.
+// iconFlag: 0=none, 1=info, 2=warning, 3=error (mapped to urgency levels).
+func ShowBalloonNotification(title, message string, iconFlag uint32) error {
+	urgency := "normal"
+	switch iconFlag {
+	case 2:
+		urgency = "normal"
+	case 3:
+		urgency = "critical"
+	default:
+		urgency = "low"
+	}
+	// Use notify-send which is available on most Linux desktops.
+	cmd := exec.Command("notify-send", "-u", urgency, title, message)
+	return cmd.Start()
 }

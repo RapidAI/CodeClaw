@@ -576,7 +576,12 @@ func (n *Notifier) onSessionSummary(event session.Event) {
 		fields = append(fields, cardField{"⚠️ 等待用户操作", defaultStr(s.SuggestedAction, "请查看终端")})
 	}
 	cardJSON := buildCardJSON("📊 会话状态更新", statusColor(s.Status), fields)
-	n.sendToUser(event.UserID, cardJSON)
+	// Use urgent notification when the session is waiting for user action.
+	if s.WaitingForUser {
+		n.sendToUserUrgent(event.UserID, cardJSON)
+	} else {
+		n.sendToUser(event.UserID, cardJSON)
+	}
 }
 
 func (n *Notifier) onImportantEvent(event session.Event) {
@@ -619,7 +624,12 @@ func (n *Notifier) onImportantEvent(event session.Event) {
 		fields = append(fields, cardField{"命令", truncate(ie.Command, 80)})
 	}
 	cardJSON := buildCardJSON("🔔 重要事件", severityColor(ie.Severity), fields)
-	n.sendToUser(event.UserID, cardJSON)
+	// Use urgent notification for error/critical severity events.
+	if sev == "error" || sev == "critical" {
+		n.sendToUserUrgent(event.UserID, cardJSON)
+	} else {
+		n.sendToUser(event.UserID, cardJSON)
+	}
 }
 
 // previewPushInterval is the minimum interval between preview pushes for the
@@ -999,6 +1009,15 @@ func buildCardJSON(title, color string, fields []cardField) string {
 // ---------------------------------------------------------------------------
 
 func (n *Notifier) sendToUser(userID string, cardJSON string) {
+	n.sendToUserWithUrgent(userID, cardJSON, false)
+}
+
+// sendToUserUrgent sends a card and follows up with a BuzzMessage (in-app urgent).
+func (n *Notifier) sendToUserUrgent(userID string, cardJSON string) {
+	n.sendToUserWithUrgent(userID, cardJSON, true)
+}
+
+func (n *Notifier) sendToUserWithUrgent(userID string, cardJSON string, urgent bool) {
 	email := n.resolveEmail(userID)
 	if email == "" {
 		log.Printf("[feishu] cannot resolve email for user_id=%s, skipping", userID)
@@ -1030,6 +1049,82 @@ func (n *Notifier) sendToUser(userID string, cardJSON string) {
 	}
 	if resp != nil && resp.Code != 0 {
 		log.Printf("[feishu] API error (email=%s, open_id=%s): code=%d msg=%s", email, openID, resp.Code, resp.Msg)
+		return
+	}
+
+	// Follow up with BuzzMessage (in-app urgent notification) if requested.
+	if urgent && openID != "" && resp != nil && resp.Data.MessageID != "" {
+		n.buzzMessage(resp.Data.MessageID, openID)
+	}
+}
+
+// buzzMessage sends an in-app urgent (加急) notification for a message.
+// Requires the im:message:urgent scope on the Feishu app.
+func (n *Notifier) buzzMessage(messageID, openID string) {
+	if n == nil || n.bot == nil || messageID == "" || openID == "" {
+		return
+	}
+	// Create a dedicated bot clone for buzz to avoid mutating the shared
+	// bot's userIDType (which would be a data race with concurrent senders).
+	n.mu.RLock()
+	bot := n.bot
+	n.mu.RUnlock()
+	if bot == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Call the Feishu urgent_app API directly instead of using
+	// bot.BuzzMessage, which requires WithUserIDType mutation.
+	url := fmt.Sprintf("/open-apis/im/v1/messages/%s/urgent_app?user_id_type=open_id", messageID)
+	req := map[string][]string{
+		"user_id_list": {openID},
+	}
+	var respData struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	err := bot.PatchAPIRequest(ctx, "BuzzMessage", url, true, req, &respData)
+	if err != nil {
+		log.Printf("[feishu/buzz] urgent failed (msg=%s, open_id=%s): %v", messageID, openID, err)
+		return
+	}
+	if respData.Code != 0 {
+		log.Printf("[feishu/buzz] API error (msg=%s): code=%d msg=%s", messageID, respData.Code, respData.Msg)
+		return
+	}
+	log.Printf("[feishu/buzz] urgent sent (msg=%s, open_id=%s)", messageID, openID)
+}
+
+// SendUrgentText sends a text message with in-app urgent notification.
+// Used by external callers (e.g. scheduled task notifier) for important alerts.
+func (n *Notifier) SendUrgentText(userID, text string) {
+	if n == nil || n.bot == nil {
+		return
+	}
+	email := n.resolveEmail(userID)
+	if email == "" {
+		return
+	}
+	openID := n.resolveOpenID(email)
+	if openID == "" {
+		return
+	}
+	// Send text message.
+	msg := lark.NewMsgBuffer(lark.MsgText).
+		BindOpenID(openID).
+		Text(text).
+		Build()
+	ctx := context.Background()
+	resp, err := n.bot.PostMessage(ctx, msg)
+	if err != nil {
+		log.Printf("[feishu] SendUrgentText failed: %v", err)
+		return
+	}
+	if resp != nil && resp.Data.MessageID != "" {
+		n.buzzMessage(resp.Data.MessageID, openID)
 	}
 }
 

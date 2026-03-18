@@ -21,7 +21,12 @@ var (
 )
 
 func init() {
-	runtime.LockOSThread()
+	// LockOSThread is needed for platforms where systray owns the event loop
+	// (e.g. Windows). On macOS, the host app (Wails) manages the main thread
+	// and Cocoa event loop, so locking here would conflict.
+	if runtime.GOOS != "darwin" {
+		runtime.LockOSThread()
+	}
 }
 
 type IMenu interface {

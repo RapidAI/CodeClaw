@@ -279,14 +279,19 @@ int nativeLoop(void) {
 }
 
 void nativeStart(void) {
-  owner = [[SystrayDelegate alloc] init];
-  NSNotification *launched = [NSNotification
-                                  notificationWithName: NSApplicationDidFinishLaunchingNotification
-                                                object: [NSApplication sharedApplication]];
-  // Do NOT call setDelegate here — an external framework (e.g. Wails) already
-  // owns the NSApplication delegate.  We only need to bootstrap the status-bar
-  // item, which applicationDidFinishLaunching does for us.
-  [owner applicationDidFinishLaunching:launched];
+  // Dispatch to main thread — AppKit requires all UI work on the main thread.
+  // When used with an external event loop (e.g. Wails), this function is called
+  // from a background goroutine, so we must bounce to the main queue.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    owner = [[SystrayDelegate alloc] init];
+    NSNotification *launched = [NSNotification
+                                    notificationWithName: NSApplicationDidFinishLaunchingNotification
+                                                  object: [NSApplication sharedApplication]];
+    // Do NOT call setDelegate here — an external framework (e.g. Wails) already
+    // owns the NSApplication delegate.  We only need to bootstrap the status-bar
+    // item, which applicationDidFinishLaunching does for us.
+    [owner applicationDidFinishLaunching:launched];
+  });
 }
 
 void runInMainThread(SEL method, id object) {

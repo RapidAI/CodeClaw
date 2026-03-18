@@ -7,6 +7,7 @@ import {
     PauseScheduledTask,
     ResumeScheduledTask,
 } from "../../../wailsjs/go/main/App";
+import { EventsOn, EventsOff } from "../../../wailsjs/runtime";
 import { colors, radius } from "./styles";
 
 interface ScheduledTask {
@@ -103,6 +104,12 @@ export function ScheduledTasksPanel({ lang }: Props) {
     }, []);
 
     useEffect(() => { loadTasks(); }, [loadTasks]);
+
+    // Refresh when tasks are changed from the agent chat side.
+    useEffect(() => {
+        EventsOn("scheduled-tasks-changed", loadTasks);
+        return () => { EventsOff("scheduled-tasks-changed"); };
+    }, [loadTasks]);
 
     const openCreate = () => {
         setEditTask(null); setFName(""); setFAction(""); setFHour(9); setFMinute(0);

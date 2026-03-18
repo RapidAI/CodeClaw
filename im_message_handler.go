@@ -2848,6 +2848,9 @@ func (h *IMMessageHandler) toolCreateScheduledTask(args map[string]interface{}) 
 		return fmt.Sprintf("创建定时任务失败: %s", err.Error())
 	}
 
+	// Notify frontend to refresh the scheduled tasks panel.
+	h.app.emitEvent("scheduled-tasks-changed")
+
 	// Format next run time for display.
 	if task := h.scheduledTaskManager.Get(id); task != nil && task.NextRunAt != nil {
 		return fmt.Sprintf("✅ 定时任务已创建\nID: %s\n名称: %s\n操作: %s\n下次执行: %s", id, name, action, task.NextRunAt.Format("2006-01-02 15:04"))
@@ -2913,6 +2916,7 @@ func (h *IMMessageHandler) toolDeleteScheduledTask(args map[string]interface{}) 
 	if err != nil {
 		return fmt.Sprintf("删除失败: %s", err.Error())
 	}
+	h.app.emitEvent("scheduled-tasks-changed")
 	return "✅ 定时任务已删除"
 }
 
@@ -2928,6 +2932,7 @@ func (h *IMMessageHandler) toolUpdateScheduledTask(args map[string]interface{}) 
 	if err != nil {
 		return fmt.Sprintf("更新失败: %s", err.Error())
 	}
+	h.app.emitEvent("scheduled-tasks-changed")
 	// Show updated task info.
 	if t := h.scheduledTaskManager.Get(id); t != nil {
 		next := "-"

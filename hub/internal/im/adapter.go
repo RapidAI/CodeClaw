@@ -37,6 +37,14 @@ type IMPlugin interface {
 	Stop(ctx context.Context) error
 }
 
+// UrgentSender is an optional interface that IM plugins can implement to
+// support urgent/buzz notifications (e.g. Feishu in-app urgent, phone call).
+// Plugins that don't support urgent notifications simply don't implement this.
+type UrgentSender interface {
+	// SendUrgentText sends a text message with platform-specific urgent notification.
+	SendUrgentText(ctx context.Context, target UserTarget, text string) error
+}
+
 // CapabilityDeclaration declares the message types supported by an IM platform.
 type CapabilityDeclaration struct {
 	SupportsRichCard    bool // Supports rich text cards
@@ -68,6 +76,7 @@ type OutgoingMessage struct {
 	StatusCode   int             `json:"status_code"`
 	StatusIcon   string          `json:"status_icon"`
 	FallbackText string          `json:"fallback_text"` // Plain text fallback
+	Urgent       bool            `json:"urgent,omitempty"` // When true, send with platform-specific urgent/buzz notification
 }
 
 // UserTarget identifies the target user for outbound messages.

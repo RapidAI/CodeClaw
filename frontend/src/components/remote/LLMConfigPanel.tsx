@@ -62,7 +62,6 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
     const [dlgOpen, setDlgOpen] = useState(false);
     const [dlgProviders, setDlgProviders] = useState<LLMProvider[]>([]);
     const [dlgSelectedIdx, setDlgSelectedIdx] = useState<number | null>(null); // null = "None"
-    const [dlgMaxIter, setDlgMaxIter] = useState(12);
     const [dlgSaving, setDlgSaving] = useState(false);
     const [dlgTestResult, setDlgTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
     const [dlgDirty, setDlgDirty] = useState(false);
@@ -83,7 +82,6 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
     useEffect(() => { loadProviders(); }, [loadProviders]);
 
     const isNone = currentName === NONE_PROVIDER;
-    const selectedProvider = providers.find(p => p.name === currentName);
 
     /* ── Dialog helpers ── */
 
@@ -92,12 +90,11 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
         setDlgProviders(snapshot);
         const idx = currentName === NONE_PROVIDER ? null : snapshot.findIndex(p => p.name === currentName);
         setDlgSelectedIdx(idx === -1 ? null : idx);
-        setDlgMaxIter(maxIter);
         setDlgSaving(false);
         setDlgTestResult(null);
         setDlgDirty(false);
         setDlgOpen(true);
-    }, [providers, currentName, maxIter]);
+    }, [providers, currentName]);
 
     const closeDialog = useCallback(() => {
         if (dlgDirty && !dlgSaving) {
@@ -147,8 +144,6 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
     }, [dlgSelectedIdx]);
 
     const dlgHandleSave = async () => {
-        try { await SetMaclawAgentMaxIterations(dlgMaxIter); } catch { /* ignore */ }
-
         if (dlgIsNone) {
             setDlgSaving(true);
             try {
@@ -156,7 +151,6 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                 setDlgDirty(false);
                 setProviders(dlgProviders.map(p => ({ ...p })));
                 setCurrentName(NONE_PROVIDER);
-                setMaxIter(dlgMaxIter);
                 onStatusChange?.(false, false);
                 setDlgOpen(false);
             } catch (e) { alert(String(e)); }
@@ -176,7 +170,6 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                 setDlgTestResult({ ok: true, msg: reply });
                 setProviders(dlgProviders.map(p => ({ ...p })));
                 setCurrentName(saveName);
-                setMaxIter(dlgMaxIter);
                 onStatusChange?.(true, true);
                 // Auto-close after brief delay so user sees the success message
                 setTimeout(() => setDlgOpen(false), 1200);
@@ -225,18 +218,29 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                 </span>
             </div>
 
-            {/* Max iterations — standalone display */}
+            {/* Max iterations — inline editable */}
             <div style={{
-                marginBottom: 16, padding: "10px 16px", borderRadius: 6,
+                marginBottom: 16, padding: "12px 16px", borderRadius: 6,
                 border: `1px solid ${colors.border}`, background: colors.surface,
-                display: "flex", justifyContent: "space-between", alignItems: "center",
             }}>
-                <span style={{ fontSize: "0.76rem", color: colors.textSecondary }}>
-                    {t("最大推理轮数", "Max Iterations")}
-                </span>
-                <span style={{ fontSize: "0.76rem", color: colors.text, fontWeight: 600 }}>
-                    {maxIter === 0 ? t("不限制", "Unlimited") : maxIter}
-                </span>
+                <label style={{ ...labelStyle, marginBottom: 2 }}>{t("Agent 最大推理轮数", "Agent Max Iterations")}</label>
+                <p style={{ fontSize: "0.7rem", color: "#888", margin: "0 0 8px 0", lineHeight: 1.4 }}>
+                    {t(
+                        "Agent 每次对话最多执行的推理轮数。设为 0 则由 Agent 自行判断（不限制）。默认 12。",
+                        "Max reasoning rounds per conversation. Set to 0 for unlimited (agent decides). Default 12."
+                    )}
+                </p>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input type="range" min={0} max={100} step={1} value={maxIter}
+                        onChange={e => { const v = Number(e.target.value); setMaxIter(v); SetMaclawAgentMaxIterations(v).catch(() => {}); }}
+                        style={{ flex: 1, accentColor: "#6366f1" }} />
+                    <input type="number" min={0} max={200} value={maxIter}
+                        onChange={e => { const v = Math.max(0, Math.min(200, Number(e.target.value) || 0)); setMaxIter(v); SetMaclawAgentMaxIterations(v).catch(() => {}); }}
+                        style={{ ...inputStyle, width: 60, textAlign: "center" as const }} />
+                    <span style={{ fontSize: "0.72rem", color: colors.textSecondary, whiteSpace: "nowrap" }}>
+                        {maxIter === 0 ? t("不限制", "Unlimited") : `${maxIter} ${t("轮", "rounds")}`}
+                    </span>
+                </div>
             </div>
 
             {isNone && (
@@ -429,27 +433,6 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                             </div>
                         )}
 
-                        {/* Agent max iterations */}
-                        <div style={{ marginBottom: 16 }}>
-                            <label style={labelStyle}>{t("Agent 最大推理轮数", "Agent Max Iterations")}</label>
-                            <p style={{ fontSize: "0.7rem", color: "#888", margin: "0 0 8px 0", lineHeight: 1.4 }}>
-                                {t(
-                                    "Agent 每次对话最多执行的推理轮数。设为 0 则由 Agent 自行判断（不限制）。默认 12。",
-                                    "Max reasoning rounds per conversation. Set to 0 for unlimited (agent decides). Default 12."
-                                )}
-                            </p>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                <input type="range" min={0} max={100} step={1} value={dlgMaxIter}
-                                    onChange={e => { setDlgMaxIter(Number(e.target.value)); setDlgDirty(true); }}
-                                    style={{ flex: 1, accentColor: "#6366f1" }} />
-                                <input type="number" min={0} max={200} value={dlgMaxIter}
-                                    onChange={e => { setDlgMaxIter(Math.max(0, Math.min(200, Number(e.target.value) || 0))); setDlgDirty(true); }}
-                                    style={{ ...inputStyle, width: 60, textAlign: "center" as const }} />
-                                <span style={{ fontSize: "0.72rem", color: colors.textSecondary, whiteSpace: "nowrap" }}>
-                                    {dlgMaxIter === 0 ? t("不限制", "Unlimited") : `${dlgMaxIter} ${t("轮", "rounds")}`}
-                                </span>
-                            </div>
-                        </div>
 
                         {/* Footer */}
                         <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "flex-end", marginTop: 20 }}>
