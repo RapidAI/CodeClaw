@@ -23,6 +23,7 @@ type RemoteActivationResult struct {
 
 type RemoteProbeResult struct {
 	InvitationCodeRequired bool   `json:"invitation_code_required"`
+	Status                 string `json:"status,omitempty"`
 	Message                string `json:"message,omitempty"`
 }
 
@@ -240,6 +241,67 @@ func (a *App) GetRemoteActivationStatus() RemoteActivationStatus {
 		MachineID: cfg.RemoteMachineID,
 		HubURL:    cfg.RemoteHubURL,
 	}
+}
+
+// VerifyRemoteActivation checks with the server whether the current activation
+// is still valid. If the server reports the user as not_found or blocked,
+// local machine credentials are cleared so the UI reflects the real state
+// and the user can re-register. Email and hub URL are preserved so the user
+// doesn't need to re-enter them.
+// Returns true if activation is still valid, false if it was invalidated.
+func (a *App) VerifyRemoteActivation() bool {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return true // can't verify, assume valid
+	}
+	if cfg.RemoteMachineID == "" || cfg.RemoteMachineToken == "" {
+		return false // not activated
+	}
+	hubURL := strings.TrimSpace(cfg.RemoteHubURL)
+	email := strings.TrimSpace(cfg.RemoteEmail)
+	if hubURL == "" || email == "" {
+		return true
+	}
+
+	probe, err := a.ProbeRemoteHub(hubURL, email)
+	if err != nil {
+		// Network error — don't clear, assume valid
+		return true
+	}
+
+	switch probe.Status {
+	case "not_found", "blocked":
+		// Server no longer recognizes this user — clear machine credentials
+		// but preserve email and hub URL for easier re-registration.
+		fmt.Printf("[verify-activation] server reports status=%s for %s, clearing local machine credentials\n", probe.Status, email)
+		a.clearMachineCredentials()
+		return false
+	default:
+		return true
+	}
+}
+
+// clearMachineCredentials removes machine_id, machine_token, sn, and user_id
+// from the local config while preserving email and hub URL. It also disconnects
+// the hub client. This is used when the server invalidates the user so they
+// can re-register without re-entering connection details.
+func (a *App) clearMachineCredentials() {
+	if a.remoteSessions != nil && a.remoteSessions.hubClient != nil {
+		a.remoteSessions.hubClient.allowReconnect.Store(false)
+		_ = a.remoteSessions.hubClient.Disconnect()
+	}
+
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return
+	}
+	cfg.RemoteSN = ""
+	cfg.RemoteUserID = ""
+	cfg.RemoteMachineID = ""
+	cfg.RemoteMachineToken = ""
+	_ = a.SaveConfig(cfg)
+
+	a.emitRemoteStateChanged()
 }
 
 func (a *App) ClearRemoteActivation() error {

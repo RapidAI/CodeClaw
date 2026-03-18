@@ -170,7 +170,7 @@ func buildMessage(fromName, fromEmail string, to []string, subject string, body 
 		"Content-Type: text/plain; charset=UTF-8",
 		"",
 	}
-	return []byte(strings.Join(headers, "\r\n") + body)
+	return []byte(strings.Join(headers, "\r\n") + "\r\n" + body)
 }
 
 func sendWithSMTP(ctx context.Context, addr string, cfg ConfigState, fromEmail string, to []string, message []byte) error {

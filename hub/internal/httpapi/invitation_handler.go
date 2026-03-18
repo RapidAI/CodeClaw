@@ -214,6 +214,15 @@ func UnbindInvitationCodeHandler(svc *invitation.Service, identity *auth.Identit
 					cleaner.RemoveBindingByEmail(email)
 				}
 			}
+
+			// Delete the user record so bind-query returns unbound.
+			if identity != nil {
+				if repo := identity.UsersRepo(); repo != nil {
+					if delErr := repo.DeleteByEmail(r.Context(), email); delErr != nil {
+						log.Printf("[admin-unbind] delete user record for %s failed: %v", email, delErr)
+					}
+				}
+			}
 		}
 
 		// Delete the invitation code itself (if not already deleted by DeleteCodeByEmail above).

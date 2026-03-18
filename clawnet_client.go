@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,16 +46,44 @@ type ClawNetPeer struct {
 }
 
 type ClawNetTask struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description,omitempty"`
-	Status      string   `json:"status"` // open, assigned, submitted, approved, rejected, cancelled
-	Reward      float64  `json:"reward"`
-	Creator     string   `json:"creator,omitempty"`
-	Assignee    string   `json:"assignee,omitempty"`
-	TargetPeer  string   `json:"target_peer,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	CreatedAt   string   `json:"created_at,omitempty"`
+	ID          string         `json:"id"`
+	Title       string         `json:"title"`
+	Description string         `json:"description,omitempty"`
+	Status      string         `json:"status"` // open, assigned, submitted, approved, rejected, cancelled
+	Reward      float64        `json:"reward"`
+	Creator     string         `json:"creator,omitempty"`
+	Assignee    string         `json:"assignee,omitempty"`
+	TargetPeer  string         `json:"target_peer,omitempty"`
+	Tags        FlexStringList `json:"tags,omitempty"`
+	CreatedAt   string         `json:"created_at,omitempty"`
+}
+
+// FlexStringList can unmarshal from either a JSON array of strings or a single
+// comma-separated string, so the client tolerates both server formats.
+type FlexStringList []string
+
+func (f *FlexStringList) UnmarshalJSON(data []byte) error {
+	// Try array first.
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*f = arr
+		return nil
+	}
+	// Fall back to a single string (possibly comma-separated).
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	if s == "" {
+		*f = nil
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	*f = parts
+	return nil
 }
 
 type ClawNetCredits struct {
@@ -797,4 +826,134 @@ func (c *ClawNetClient) GetMatrixStatus() (map[string]interface{}, error) {
 func (c *ClawNetClient) GetTraffic() (map[string]interface{}, error) {
 	var traffic map[string]interface{}
 	return traffic, c.get("/api/traffic", &traffic)
+}
+
+// ---------------------------------------------------------------------------
+// Hub-relayed task discovery
+// ---------------------------------------------------------------------------
+
+// PublishTasksToHub pushes local open tasks to the Hub task bulletin board
+// so other peers can discover them.
+func (c *ClawNetClient) PublishTasksToHub(hubURL string) error {
+	if hubURL == "" {
+		return fmt.Errorf("hub URL is empty")
+	}
+	tasks, err := c.ListTasks("open")
+	if err != nil {
+		return fmt.Errorf("list local tasks: %w", err)
+	}
+	if len(tasks) == 0 {
+		return nil
+	}
+	status, _ := c.GetStatus()
+	peerID := ""
+	if status != nil {
+		peerID = status.PeerID
+	}
+
+	type hubTask struct {
+		ID          string   `json:"id"`
+		Title       string   `json:"title"`
+		Description string   `json:"description,omitempty"`
+		Status      string   `json:"status"`
+		Reward      float64  `json:"reward"`
+		Creator     string   `json:"creator,omitempty"`
+		PeerID      string   `json:"peer_id,omitempty"`
+		Tags        []string `json:"tags,omitempty"`
+		CreatedAt   string   `json:"created_at,omitempty"`
+	}
+
+	payload := make([]hubTask, 0, len(tasks))
+	for _, t := range tasks {
+		// Skip the local tutorial task — it's not interesting to others.
+		if t.ID == "tutorial-onboarding" {
+			continue
+		}
+		payload = append(payload, hubTask{
+			ID:          t.ID,
+			Title:       t.Title,
+			Description: t.Description,
+			Status:      t.Status,
+			Reward:      t.Reward,
+			Creator:     t.Creator,
+			PeerID:      peerID,
+			Tags:        []string(t.Tags),
+			CreatedAt:   t.CreatedAt,
+		})
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+
+	body, _ := json.Marshal(payload)
+	endpoint := strings.TrimRight(hubURL, "/") + "/api/clawnet/tasks/publish"
+	resp, err := c.client.Post(endpoint, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("publish to hub: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("hub returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// BrowseHubTasks fetches tasks from the Hub bulletin board (tasks published
+// by other peers). Returns tasks that are NOT from the local peer.
+func (c *ClawNetClient) BrowseHubTasks(hubURL string) ([]ClawNetTask, error) {
+	if hubURL == "" {
+		return nil, fmt.Errorf("hub URL is empty")
+	}
+	endpoint := strings.TrimRight(hubURL, "/") + "/api/clawnet/tasks/browse?limit=50"
+	resp, err := c.client.Get(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("browse hub tasks: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("hub returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		OK    bool `json:"ok"`
+		Tasks []struct {
+			ID          string   `json:"id"`
+			Title       string   `json:"title"`
+			Description string   `json:"description,omitempty"`
+			Status      string   `json:"status"`
+			Reward      float64  `json:"reward"`
+			Creator     string   `json:"creator,omitempty"`
+			PeerID      string   `json:"peer_id,omitempty"`
+			Tags        []string `json:"tags,omitempty"`
+			CreatedAt   string   `json:"created_at,omitempty"`
+		} `json:"tasks"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode hub response: %w", err)
+	}
+
+	// Get local peer ID to filter out own tasks.
+	status, _ := c.GetStatus()
+	localPeerID := ""
+	if status != nil {
+		localPeerID = status.PeerID
+	}
+
+	var tasks []ClawNetTask
+	for _, t := range result.Tasks {
+		if localPeerID != "" && t.PeerID == localPeerID {
+			continue // skip own tasks
+		}
+		tasks = append(tasks, ClawNetTask{
+			ID:          t.ID,
+			Title:       t.Title,
+			Description: t.Description,
+			Status:      t.Status,
+			Reward:      t.Reward,
+			Creator:     t.Creator,
+			Tags:        FlexStringList(t.Tags),
+			CreatedAt:   t.CreatedAt,
+		})
+	}
+	return tasks, nil
 }

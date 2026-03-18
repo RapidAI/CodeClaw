@@ -183,6 +183,10 @@ func NewRouter(
 	mux.HandleFunc("POST /api/clawnet/key/backup", ClawNetKeyBackupHandler())
 	mux.HandleFunc("POST /api/clawnet/key/restore", ClawNetKeyRestoreHandler())
 
+	// ClawNet task bulletin board — Hub-relayed P2P task discovery
+	mux.HandleFunc("POST /api/clawnet/tasks/publish", ClawNetTaskPublishHandler())
+	mux.HandleFunc("GET /api/clawnet/tasks/browse", ClawNetTaskBrowseHandler())
+
 	registerPWAStaticRoutes(mux, staticDir, routePrefix)
 	registerAdminStaticRoutes(mux, "./web/admin", "/admin")
 	registerBindStaticRoutes(mux, "./web/bind", "/bind")

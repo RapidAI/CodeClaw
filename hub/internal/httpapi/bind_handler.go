@@ -292,6 +292,13 @@ func BindUnbindHandler(identity *auth.IdentityService, deviceSvc *device.Service
 			}
 		}
 
+		// Delete the user record so query returns unbound.
+		if repo := identity.UsersRepo(); repo != nil {
+			if err := repo.DeleteByEmail(r.Context(), email); err != nil {
+				log.Printf("[bind] delete user record for %s failed: %v", email, err)
+			}
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":               true,
 			"deleted_machines": deleted,

@@ -46,6 +46,10 @@ export function ClearRemoteActivation() {
   return window['go']['main']['App']['ClearRemoteActivation']();
 }
 
+export function VerifyRemoteActivation() {
+  return window['go']['main']['App']['VerifyRemoteActivation']();
+}
+
 export function GetCurrentProjectPath() {
   return window['go']['main']['App']['GetCurrentProjectPath']();
 }
@@ -678,4 +682,13 @@ export function ClawNetOnlineBackupKey(arg1) {
 
 export function ClawNetOnlineRestoreKey(arg1) {
   return window['go']['main']['App']['ClawNetOnlineRestoreKey'](arg1);
+}
+
+// ClawNet Hub-relayed task discovery
+export function ClawNetBrowseNetworkTasks() {
+  return window['go']['main']['App']['ClawNetBrowseNetworkTasks']();
+}
+
+export function ClawNetPublishTasksToHub() {
+  return window['go']['main']['App']['ClawNetPublishTasksToHub']();
 }

@@ -23,6 +23,7 @@ import {
     KillRemoteSession as KillRemoteSessionAPI,
     StartRemoteHandoffSession,
     StartRemoteSession,
+    VerifyRemoteActivation,
 } from "../../../wailsjs/go/main/App";
 import { main } from "../../../wailsjs/go/models";
 import {
@@ -107,6 +108,12 @@ export function useRemotePanel(params: UseRemotePanelParams) {
     // reflected by the backend.  refreshRemotePanel will filter these out
     // so the optimistic removal isn't overwritten by a stale server response.
     const killedSessionIdsRef = useRef<Set<string>>(new Set());
+
+    // Exponential backoff for server-side activation verification.
+    // Starts at 30s, doubles on each consecutive failure (network error),
+    // resets to 30s on success, caps at 5 minutes.
+    const verifyNextAtRef = useRef<number>(0);
+    const verifyIntervalRef = useRef<number>(30_000);
 
     const setInvitationCode = (code: string) => {
         setInvitationCodeRaw(code);
@@ -219,6 +226,27 @@ export function useRemotePanel(params: UseRemotePanelParams) {
                 } catch {
                     // Probe failure is non-critical; don't block the panel
                 }
+            }
+
+            // Verify activation with server: if the user was unbound or blocked
+            // on the server side, clear local state so the UI reflects reality.
+            // Uses exponential backoff: 30s → 60s → 120s → ... → 5min cap on
+            // consecutive failures; resets to 30s on success.
+            if (activation?.activated && Date.now() >= verifyNextAtRef.current) {
+                try {
+                    const stillValid = await VerifyRemoteActivation();
+                    if (!stillValid) {
+                        // Local state was cleared by the backend; re-fetch activation status
+                        const freshActivation = await GetRemoteActivationStatus();
+                        setRemoteActivationStatus(freshActivation);
+                    }
+                    // Success — reset interval to base
+                    verifyIntervalRef.current = 30_000;
+                } catch {
+                    // Network/timeout — back off
+                    verifyIntervalRef.current = Math.min(verifyIntervalRef.current * 2, 300_000);
+                }
+                verifyNextAtRef.current = Date.now() + verifyIntervalRef.current;
             }
         } catch (err) {
             console.error("Failed to refresh remote panel:", err);

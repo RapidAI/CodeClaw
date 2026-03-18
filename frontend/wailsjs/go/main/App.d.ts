@@ -24,6 +24,8 @@ export function ProbeRemoteHub(arg1:string,arg2:string):Promise<any>;
 
 export function ClearRemoteActivation():Promise<void>;
 
+export function VerifyRemoteActivation():Promise<boolean>;
+
 export function GetCurrentProjectPath():Promise<string>;
 
 export function GetDownloadsFolder():Promise<string>;
@@ -312,3 +314,7 @@ export function ClawNetExportIdentity():Promise<any>;
 export function ClawNetImportIdentity():Promise<any>;
 export function ClawNetOnlineBackupKey(arg1:string):Promise<any>;
 export function ClawNetOnlineRestoreKey(arg1:string):Promise<any>;
+
+// ClawNet Hub-relayed task discovery
+export function ClawNetBrowseNetworkTasks():Promise<any>;
+export function ClawNetPublishTasksToHub():Promise<any>;

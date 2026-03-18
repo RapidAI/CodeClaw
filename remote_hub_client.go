@@ -1044,6 +1044,11 @@ func (c *RemoteHubClient) reconnectLoop() {
 				// Re-enrollment succeeded; retry connect immediately with new creds.
 				continue
 			}
+			// Re-enrollment also failed — the server may have unbound this user.
+			// Verify activation status and clear local state if needed.
+			if !c.app.VerifyRemoteActivation() {
+				return // activation was invalidated, stop reconnecting
+			}
 		}
 
 		time.Sleep(backoff)

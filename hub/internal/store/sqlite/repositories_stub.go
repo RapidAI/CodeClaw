@@ -317,6 +317,11 @@ func (r *userRepo) List(ctx context.Context) ([]*store.User, error) {
 	return items, rows.Err()
 }
 
+func (r *userRepo) DeleteByEmail(ctx context.Context, email string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM users WHERE email = ?`, email)
+	return err
+}
+
 func (r *enrollmentRepo) Create(ctx context.Context, item *store.UserEnrollment) error {
 	_, err := r.db.ExecContext(
 		ctx,

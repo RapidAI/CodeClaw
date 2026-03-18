@@ -26,6 +26,7 @@ func (r *stubUserRepo) GetByEmail(_ context.Context, _ string) (*store.User, err
 	return nil, nil
 }
 func (r *stubUserRepo) List(_ context.Context) ([]*store.User, error) { return nil, nil }
+func (r *stubUserRepo) DeleteByEmail(_ context.Context, _ string) error { return nil }
 
 func TestNewReturnsNotifierWithNilBot(t *testing.T) {
 	n := New("", "", &stubUserRepo{}, nil, nil)

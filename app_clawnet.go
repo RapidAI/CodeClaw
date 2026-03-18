@@ -953,3 +953,37 @@ func (a *App) ClawNetGetOverlayPeersGeo() map[string]interface{} {
 	}
 	return map[string]interface{}{"ok": true, "peers": peers}
 }
+
+// ---------- Hub-relayed task discovery ----------
+
+// ClawNetBrowseNetworkTasks fetches tasks from the Hub bulletin board
+// (tasks published by other ClawNet peers) and merges them with local tasks.
+func (a *App) ClawNetBrowseNetworkTasks() map[string]interface{} {
+	c := a.initClawNet()
+	cfg, err := a.LoadConfig()
+	if err != nil || cfg.RemoteHubURL == "" {
+		return map[string]interface{}{"ok": false, "error": "Hub URL not configured"}
+	}
+	tasks, err := c.BrowseHubTasks(cfg.RemoteHubURL)
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": err.Error()}
+	}
+	if tasks == nil {
+		tasks = []ClawNetTask{}
+	}
+	return map[string]interface{}{"ok": true, "tasks": tasks}
+}
+
+// ClawNetPublishTasksToHub pushes local open tasks to the Hub bulletin board
+// so other peers can discover them.
+func (a *App) ClawNetPublishTasksToHub() map[string]interface{} {
+	c := a.initClawNet()
+	cfg, err := a.LoadConfig()
+	if err != nil || cfg.RemoteHubURL == "" {
+		return map[string]interface{}{"ok": false, "error": "Hub URL not configured"}
+	}
+	if err := c.PublishTasksToHub(cfg.RemoteHubURL); err != nil {
+		return map[string]interface{}{"ok": false, "error": err.Error()}
+	}
+	return map[string]interface{}{"ok": true}
+}

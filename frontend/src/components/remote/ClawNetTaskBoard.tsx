@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
     ClawNetListTasks, ClawNetGetCredits,
     ClawNetBidOnTask, ClawNetSubmitTaskResult, ClawNetApproveTask,
     ClawNetRejectTask, ClawNetCancelTask, ClawNetMatchTasks,
-    ClawNetCreateTask,
+    ClawNetCreateTask, ClawNetBrowseNetworkTasks, ClawNetPublishTasksToHub,
 } from "../../../wailsjs/go/main/App";
 
 type Props = {
@@ -31,7 +31,7 @@ const STATUS_COLORS: Record<string, { bg: string; text: string; label_zh: string
     cancelled: { bg: "#f8fafc", text: "#94a3b8", label_zh: "已取消", label_en: "Cancelled" },
 };
 
-type ViewMode = "all" | "matched";
+type ViewMode = "all" | "matched" | "network";
 
 export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
     const [tasks, setTasks] = useState<ClawNetTask[]>([]);
@@ -40,12 +40,13 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
     const [credits, setCredits] = useState<{ balance: number; tier: string } | null>(null);
     const [viewMode, setViewMode] = useState<ViewMode>("all");
     const [actionBusy, setActionBusy] = useState<string | null>(null);
-    const [actionMsg, setActionMsg] = useState("");
+    const [actionMsg, setActionMsg] = useState<{ text: string; type: "success" | "info" | "error" } | null>(null);
+    const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     // Create task form
     const [showCreate, setShowCreate] = useState(false);
     const [newTitle, setNewTitle] = useState("");
     const [newDesc, setNewDesc] = useState("");
-    const [newReward, setNewReward] = useState(10);
+    const [newReward, setNewReward] = useState(100);
 
     const zh = lang?.startsWith("zh");
 
@@ -57,16 +58,47 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
             let res: any;
             if (viewMode === "matched") {
                 res = await ClawNetMatchTasks();
+            } else if (viewMode === "network") {
+                res = await ClawNetBrowseNetworkTasks();
+                if (res.ok) {
+                    setTasks((res.tasks || []).slice(0, 24));
+                } else {
+                    setTasks([]);
+                    setError(res.error || "Failed to load network tasks");
+                }
+                const c = await ClawNetGetCredits();
+                if (c.ok) setCredits({ balance: c.balance, tier: c.tier });
+                setLoading(false);
+                return;
             } else {
                 res = await ClawNetListTasks("");
             }
             if (res.ok) {
-                setTasks((res.tasks || []).slice(0, 12));
+                const localTasks = (res.tasks || []).slice(0, 12);
+                // In "all" mode, also fetch network tasks and merge
+                if (viewMode === "all") {
+                    try {
+                        const netRes = await ClawNetBrowseNetworkTasks();
+                        if (netRes.ok && netRes.tasks?.length) {
+                            const localIds = new Set(localTasks.map((t: ClawNetTask) => t.id));
+                            const netTasks = (netRes.tasks as ClawNetTask[]).filter(t => !localIds.has(t.id));
+                            setTasks([...localTasks, ...netTasks].slice(0, 24));
+                        } else {
+                            setTasks(localTasks);
+                        }
+                    } catch {
+                        setTasks(localTasks);
+                    }
+                } else {
+                    setTasks(localTasks);
+                }
             } else {
                 setError(res.error || "Failed to load tasks");
             }
             const c = await ClawNetGetCredits();
             if (c.ok) setCredits({ balance: c.balance, tier: c.tier });
+            // Publish local tasks to Hub in background
+            ClawNetPublishTasksToHub().catch(() => {});
         } catch (e) {
             setError(String(e));
         } finally {
@@ -81,31 +113,45 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
         return () => clearInterval(timer);
     }, [refresh, clawNetRunning]);
 
+    const showMsg = (text: string, type: "success" | "info" | "error", ms = 3000) => {
+        if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+        setActionMsg({ text, type });
+        msgTimerRef.current = setTimeout(() => setActionMsg(null), ms);
+    };
+
     const doAction = async (label: string, fn: () => Promise<any>) => {
         setActionBusy(label);
-        setActionMsg("");
+        setActionMsg(null);
         try {
             const res = await fn();
             if (res.ok) {
-                setActionMsg(zh ? "操作成功" : "Success");
+                showMsg(zh ? "操作成功" : "Success", "success");
                 refresh();
             } else {
-                setActionMsg(res.error || "Failed");
+                showMsg(res.error || "Failed", "error");
             }
         } catch (e) {
-            setActionMsg(String(e));
+            showMsg(String(e), "error");
         } finally {
             setActionBusy(null);
-            setTimeout(() => setActionMsg(""), 3000);
         }
     };
 
     const handleCreate = async () => {
         if (!newTitle.trim()) return;
-        // Uses ClawNetCreateTask for now; switch to ClawNetCreateTaskFull after wails generate
-        await doAction("create", () => ClawNetCreateTask(newTitle.trim(), newReward));
+        const reward = Math.max(0, Math.floor(newReward));
+        if (reward !== 0 && reward < 100) {
+            showMsg(zh ? "赏金最低 100 🐚（或 0 表示免费协作）" : "Minimum reward is 100 🐚 (or 0 for free collaboration)", "info", 4000);
+            return;
+        }
+        if (reward > 0 && credits && credits.balance < reward) {
+            showMsg(zh ? `余额不足（当前 ${credits.balance} 🐚，需要 ${reward} 🐚）` : `Insufficient balance (have ${credits.balance} 🐚, need ${reward} 🐚)`, "info", 4000);
+            return;
+        }
+        await doAction("create", () => ClawNetCreateTask(newTitle.trim(), reward));
         setNewTitle("");
         setNewDesc("");
+        setNewReward(100);
         setShowCreate(false);
     };
 
@@ -167,6 +213,9 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
                     <button style={btnStyle(viewMode === "all")} onClick={() => setViewMode("all")}>
                         {zh ? "全部" : "All"}
                     </button>
+                    <button style={btnStyle(viewMode === "network")} onClick={() => setViewMode("network")}>
+                        {zh ? "网络" : "Network"}
+                    </button>
                     <button style={btnStyle(viewMode === "matched")} onClick={() => setViewMode("matched")}>
                         {zh ? "匹配" : "Matched"}
                     </button>
@@ -181,8 +230,15 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
 
             {/* Action feedback */}
             {actionMsg && (
-                <div style={{ fontSize: "0.75rem", color: actionMsg === (zh ? "操作成功" : "Success") ? "#16a34a" : "#ef4444", marginBottom: "8px" }}>
-                    {actionMsg}
+                <div style={{
+                    fontSize: "0.75rem",
+                    color: actionMsg.type === "success" ? "#16a34a" : actionMsg.type === "info" ? "#2563eb" : "#ef4444",
+                    background: actionMsg.type === "success" ? "#f0fdf4" : actionMsg.type === "info" ? "#eff6ff" : "#fef2f2",
+                    padding: "5px 10px",
+                    borderRadius: "6px",
+                    marginBottom: "8px",
+                }}>
+                    {actionMsg.type === "info" && "💡 "}{actionMsg.text}
                 </div>
             )}
 
@@ -204,7 +260,7 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
                     <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                         <span style={{ fontSize: "0.75rem" }}>🐚</span>
                         <input
-                            type="number" value={newReward} min={1}
+                            type="number" value={newReward} min={0}
                             onChange={(e) => setNewReward(Number(e.target.value))}
                             style={{ width: "50px", border: "1px solid #e2e8f0", borderRadius: "6px", padding: "4px 6px", fontSize: "0.78rem" }}
                         />
@@ -223,7 +279,7 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
 
             {tasks.length === 0 && !loading && !error && (
                 <div style={{ textAlign: "center", color: "#94a3b8", padding: "30px 0", fontSize: "0.85rem" }}>
-                    {viewMode === "matched" ? (zh ? "暂无匹配任务" : "No matched tasks") : (zh ? "暂无任务" : "No tasks available")}
+                    {viewMode === "matched" ? (zh ? "暂无匹配任务" : "No matched tasks") : viewMode === "network" ? (zh ? "暂无网络任务（其他节点尚未发布任务到 Hub）" : "No network tasks (peers haven't published to Hub yet)") : (zh ? "暂无任务" : "No tasks available")}
                 </div>
             )}
 
