@@ -147,7 +147,7 @@ Section "uninstall"
     DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "${AUTOSTART_REG_NAME}"
 
     # Ask user if they want to delete user data
-    MessageBox MB_YESNO|MB_ICONQUESTION "Do you want to delete all user data (.cceasy and .maclaw folders)?$\n$\nThis will remove all AI tools, configurations and cache." IDYES deleteUserData IDNO skipUserData
+    MessageBox MB_YESNO|MB_ICONQUESTION "Do you want to delete user data (.cceasy and .maclaw folders)?$\n$\nThis will remove AI tools, configurations and cache.$\nNote: Your memory file (memories.json) will be preserved." IDYES deleteUserData IDNO skipUserData
     
     deleteUserData:
     # Delete user data directories using cmd /c rd for faster deletion
@@ -155,7 +155,19 @@ Section "uninstall"
     # Using rd /s /q is much faster on Windows
     DetailPrint "Deleting user data directories..."
     nsExec::ExecToLog 'cmd /c rd /s /q "$PROFILE\.cceasy"'
+
+    # Preserve memory file (memories.json) before deleting .maclaw
+    IfFileExists "$PROFILE\.maclaw\memories.json" 0 +3
+        DetailPrint "Preserving memory file..."
+        CopyFiles /SILENT "$PROFILE\.maclaw\memories.json" "$TEMP\maclaw_memories_backup.json"
+
     nsExec::ExecToLog 'cmd /c rd /s /q "$PROFILE\.maclaw"'
+
+    # Restore memory file after cleanup
+    IfFileExists "$TEMP\maclaw_memories_backup.json" 0 +4
+        CreateDirectory "$PROFILE\.maclaw"
+        CopyFiles /SILENT "$TEMP\maclaw_memories_backup.json" "$PROFILE\.maclaw\memories.json"
+        Delete "$TEMP\maclaw_memories_backup.json"
     
     skipUserData:
 SectionEnd

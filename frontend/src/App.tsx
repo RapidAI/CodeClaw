@@ -12,6 +12,9 @@ import kiloIcon from './assets/images/KiloCode.png';
 import cursorIcon from './assets/images/qodercli.png';
 import lobsterOnline from './assets/images/lobster_online.svg';
 import lobsterOffline from './assets/images/lobster_offline.svg';
+import lobsterHalf from './assets/images/lobster_half.svg';
+import globeOnline from './assets/images/globe_online.svg';
+import globeOffline from './assets/images/globe_offline.svg';
 import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, PingSkillHub, ValidateSkillHub } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
@@ -3057,28 +3060,51 @@ ${instruction}`;
 
                 {/* Right Tool List */}
                 <div style={{ flex: 1, padding: '10px', overflowY: 'auto', backgroundColor: '#fafbff', display: 'flex', flexDirection: 'column' }}>
-                    {/* Lobster indicator + Message/Tutorial row */}
+                    {/* Lobster indicator + ClawNet globe + Message/Tutorial row */}
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
-                        <div
-                            title={maclawLLMOnline
-                                ? (lang?.startsWith('zh') ? 'MaClaw Agent 在线' : 'MaClaw Agent Online')
-                                : maclawLLMConfigured
-                                    ? (lang?.startsWith('zh') ? 'MaClaw Agent 离线' : 'MaClaw Agent Offline')
-                                    : (lang?.startsWith('zh') ? 'LLM 未配置' : 'LLM Not Configured')}
-                            style={{
-                                textAlign: 'center',
-                                marginBottom: '6px',
-                                cursor: 'pointer',
-                                opacity: maclawLLMOnline ? 1 : 0.6,
-                                transition: 'opacity 0.3s ease',
-                            }}
-                            onClick={() => { setNavTab('settings'); setSettingsTab('llm'); }}
-                        >
-                            <img
-                                src={maclawLLMOnline ? lobsterOnline : lobsterOffline}
-                                alt={maclawLLMOnline ? 'Online' : 'Offline'}
-                                style={{ width: '20px', height: '20px' }}
-                            />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                            <div
+                                title={(() => {
+                                    const llmOk = maclawLLMOnline;
+                                    const mobileOk = !!remoteActivationStatus?.activated;
+                                    if (llmOk && mobileOk) return lang?.startsWith('zh') ? 'MaClaw Agent 在线' : 'MaClaw Agent Online';
+                                    if (!llmOk && !mobileOk) return lang?.startsWith('zh') ? 'LLM 和移动端均未就绪' : 'LLM & Mobile not ready';
+                                    if (llmOk) return lang?.startsWith('zh') ? '移动端未注册' : 'Mobile not registered';
+                                    return lang?.startsWith('zh') ? 'LLM 未就绪' : 'LLM not ready';
+                                })()}
+                                style={{
+                                    cursor: 'pointer',
+                                    opacity: (maclawLLMOnline && remoteActivationStatus?.activated) ? 1 : 0.6,
+                                    transition: 'opacity 0.3s ease',
+                                }}
+                                onClick={() => { setNavTab('settings'); setSettingsTab('llm'); }}
+                            >
+                                <img
+                                    src={(() => {
+                                        const llmOk = maclawLLMOnline;
+                                        const mobileOk = !!remoteActivationStatus?.activated;
+                                        if (llmOk && mobileOk) return lobsterOnline;
+                                        if (!llmOk && !mobileOk) return lobsterOffline;
+                                        return lobsterHalf;
+                                    })()}
+                                    alt={maclawLLMOnline && remoteActivationStatus?.activated ? 'Online' : 'Partial'}
+                                    style={{ width: '20px', height: '20px' }}
+                                />
+                            </div>
+                            <div
+                                title={lang?.startsWith('zh') ? 'ClawNet 未接入' : 'ClawNet not connected'}
+                                style={{
+                                    cursor: 'default',
+                                    opacity: 0.6,
+                                    transition: 'opacity 0.3s ease',
+                                }}
+                            >
+                                <img
+                                    src={globeOffline}
+                                    alt="ClawNet Offline"
+                                    style={{ width: '18px', height: '18px' }}
+                                />
+                            </div>
                         </div>
                         <div style={{ display: 'flex', gap: '2px', width: '100%' }}>
                             <div
@@ -4757,16 +4783,21 @@ ${instruction}`;
                         {status}
                     </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        {!maclawLLMOnline && !(navTab === 'settings' && settingsTab === 'llm') && (
+                        {(!maclawLLMOnline || !remoteActivationStatus?.activated) && !(navTab === 'settings' && settingsTab === 'llm') && (
                             <span
                                 style={{ fontSize: '0.72rem', color: '#f59e0b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}
                                 onClick={() => { setNavTab('settings'); setSettingsTab('llm'); }}
-                                title={lang?.startsWith('zh') ? '点击配置 LLM' : 'Click to configure LLM'}
+                                title={lang?.startsWith('zh') ? '点击配置' : 'Click to configure'}
                             >
-                                <img src={lobsterOffline} alt="" style={{ width: '14px', height: '14px' }} />
-                                {maclawLLMConfigured
-                                    ? (lang?.startsWith('zh') ? 'LLM 无法连接，无法响应远程命令' : 'LLM unreachable, remote commands unavailable')
-                                    : (lang?.startsWith('zh') ? 'MaClaw 未配置 LLM，无法响应远程命令' : 'LLM not configured, remote commands unavailable')}
+                                <img src={(() => {
+                                    if (!maclawLLMOnline && !remoteActivationStatus?.activated) return lobsterOffline;
+                                    return lobsterHalf;
+                                })()} alt="" style={{ width: '14px', height: '14px' }} />
+                                {!maclawLLMOnline
+                                    ? (maclawLLMConfigured
+                                        ? (lang?.startsWith('zh') ? 'LLM 无法连接，无法响应远程命令' : 'LLM unreachable, remote commands unavailable')
+                                        : (lang?.startsWith('zh') ? 'MaClaw 未配置 LLM，无法响应远程命令' : 'LLM not configured, remote commands unavailable'))
+                                    : (lang?.startsWith('zh') ? '移动端未注册' : 'Mobile not registered')}
                             </span>
                         )}
                         {backgroundInstallStatus && (
