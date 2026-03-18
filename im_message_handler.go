@@ -60,7 +60,7 @@ type IMResponseAction struct {
 
 const (
 	maxConversationTurns   = 40
-	maxMemoryTokenEstimate = 80_000
+	maxMemoryTokenEstimate = 60_000 // lowered: tools+system prompt consume ~15-20K
 	memoryTTL              = 2 * time.Hour  // 对话记忆过期时间
 	memoryCleanupInterval  = 10 * time.Minute
 )
@@ -173,9 +173,9 @@ func estimateTokens(entries []conversationEntry) int {
 	total := 0
 	for _, e := range entries {
 		data, _ := json.Marshal(e)
-		total += len(data)
+		total += estimateBytesToTokens(data)
 	}
-	return total / 3 // conservative: CJK chars are multi-byte but ~1-2 tokens
+	return total
 }
 
 // estimateConversationTokens estimates the token count for a raw conversation
@@ -187,9 +187,26 @@ func estimateConversationTokens(msgs []interface{}) int {
 	total := 0
 	for _, m := range msgs {
 		data, _ := json.Marshal(m)
-		total += len(data)
+		total += estimateBytesToTokens(data)
 	}
-	return total / 3
+	return total
+}
+
+// estimateToolsTokens estimates the token count consumed by tool definitions.
+func estimateToolsTokens(tools []map[string]interface{}) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	data, _ := json.Marshal(tools)
+	return estimateBytesToTokens(data)
+}
+
+// estimateBytesToTokens converts JSON bytes to an approximate token count.
+// CJK characters are 3 bytes in UTF-8 but typically 1-2 tokens; ASCII is
+// roughly 4 bytes per token. We use a blended ratio of ~2.5 bytes/token
+// which is more accurate for mixed CJK/ASCII content than the old /3.
+func estimateBytesToTokens(data []byte) int {
+	return (len(data)*10 + 24) / 25 // equivalent to len/2.5, rounded up
 }
 
 // defaultContextTokens is the fallback context limit when no explicit
@@ -232,11 +249,19 @@ func msgHasToolCalls(m interface{}) bool {
 // middle messages so the total estimated tokens stay under the limit.
 // It preserves tool-call integrity: assistant messages with tool_calls and
 // their corresponding tool-result messages are always kept or dropped together.
-func trimConversation(msgs []interface{}, tokenLimit int) []interface{} {
+// trimConversation trims conversation messages to fit within tokenLimit.
+// toolsTokens is the estimated token count consumed by tool definitions,
+// which must be subtracted from the available budget for messages.
+func trimConversation(msgs []interface{}, tokenLimit int, toolsTokens int) []interface{} {
 	if tokenLimit <= 0 {
 		tokenLimit = defaultContextTokens * 80 / 100
 	}
-	if estimateConversationTokens(msgs) <= tokenLimit {
+	// Reserve space for tool definitions.
+	msgBudget := tokenLimit - toolsTokens
+	if msgBudget < 4000 {
+		msgBudget = 4000 // absolute minimum to avoid degenerate cases
+	}
+	if estimateConversationTokens(msgs) <= msgBudget {
 		return msgs
 	}
 	if len(msgs) <= 3 {
@@ -293,17 +318,36 @@ func trimConversation(msgs []interface{}, tokenLimit int) []interface{} {
 		for _, g := range kept {
 			result = append(result, msgs[g.start:g.end]...)
 		}
-		if estimateConversationTokens(result) <= tokenLimit {
+		if estimateConversationTokens(result) <= msgBudget {
 			return result
 		}
 	}
 
-	// Even keeping only the last group doesn't fit — return system + placeholder + last group.
+	// Even keeping only the last group doesn't fit — try secondary truncation
+	// of tool results within the last group to squeeze it in.
 	lastG := groups[len(groups)-1]
 	var result []interface{}
 	result = append(result, systemMsg...)
 	result = append(result, placeholder...)
-	result = append(result, msgs[lastG.start:lastG.end]...)
+	for idx := lastG.start; idx < lastG.end; idx++ {
+		m := msgs[idx]
+		if mm, ok := m.(map[string]interface{}); ok {
+			if role, _ := mm["role"].(string); role == "tool" {
+				if content, _ := mm["content"].(string); len(content) > 1024 {
+					// Aggressively truncate tool results in the last group
+					truncated := content[:680] + "\n…(截断)…\n" + content[len(content)-300:]
+					cp := make(map[string]interface{}, len(mm))
+					for k, v := range mm {
+						cp[k] = v
+					}
+					cp["content"] = truncated
+					result = append(result, cp)
+					continue
+				}
+			}
+		}
+		result = append(result, m)
+	}
 	return result
 }
 
@@ -329,6 +373,31 @@ func truncateToolResult(s string) string {
 	headLen := maxToolResultLen * 2 / 3
 	tailLen := maxToolResultLen - headLen - 40 // 40 bytes for the separator
 	return s[:headLen] + "\n\n... (已截断，共 " + fmt.Sprintf("%d", len(s)) + " 字节) ...\n\n" + s[len(s)-tailLen:]
+}
+
+// truncateToolResultForTool applies tool-specific truncation strategies.
+// Terminal output (get_session_output, bash) keeps more tail (recent output
+// is more relevant). Structured data keeps more head (headers/schema).
+func truncateToolResultForTool(toolName, s string) string {
+	if len(s) <= maxToolResultLen {
+		return s
+	}
+	sep := "\n\n... (已截断，共 " + fmt.Sprintf("%d", len(s)) + " 字节) ...\n\n"
+	sepLen := len(sep)
+	budget := maxToolResultLen - sepLen
+
+	switch toolName {
+	case "get_session_output", "send_and_observe", "bash":
+		// Terminal output: tail is more important (recent lines)
+		headLen := budget / 4
+		tailLen := budget - headLen
+		return s[:headLen] + sep + s[len(s)-tailLen:]
+	default:
+		// Default: head-heavy (status/headers at top)
+		headLen := budget * 2 / 3
+		tailLen := budget - headLen
+		return s[:headLen] + sep + s[len(s)-tailLen:]
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -484,6 +553,10 @@ func (h *IMMessageHandler) SetScheduledTaskManager(stm *ScheduledTaskManager) {
 // a 5-second cache when configured, falling back to buildToolDefinitions().
 func (h *IMMessageHandler) getTools() []map[string]interface{} {
 	// --- Phase 1 upgrade: prefer DynamicToolBuilder from ToolRegistry ---
+	// Note: We use BuildAll() here intentionally — context-aware filtering
+	// is handled downstream by routeTools() / ToolRouter which uses TF-IDF.
+	// DynamicToolBuilder.Build(msg) is an alternative path for simpler setups
+	// without ToolRouter.
 	if h.toolBuilder != nil && h.registry != nil {
 		h.toolsMu.RLock()
 		cached := h.cachedTools
@@ -494,7 +567,7 @@ func (h *IMMessageHandler) getTools() []map[string]interface{} {
 			return cached
 		}
 
-		// Ensure ClawNet tools are dynamically registered/unregistered.
+		// Sync dynamic tools (ClawNet) only on cache rebuild, not every call.
 		h.syncClawNetTools()
 
 		tools := h.toolBuilder.BuildAll()
@@ -1075,6 +1148,7 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 	h.loopMaxOverride = 0 // reset dynamic override for this loop
 	allTools := h.getTools()
 	tools := h.routeTools(userText, allTools)
+	toolsTokenBudget := estimateToolsTokens(tools)
 
 	var conversation []interface{}
 	conversation = append(conversation, map[string]string{"role": "system", "content": systemPrompt})
@@ -1107,7 +1181,7 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 				sendProgress(fmt.Sprintf("🔄 Agent 推理中（第 %d 轮）…", iteration+1))
 			}
 		}
-		conversation = trimConversation(conversation, cfg.EffectiveContextTokens())
+		conversation = trimConversation(conversation, cfg.EffectiveContextTokens(), toolsTokenBudget)
 		resp, err := h.doLLMRequest(cfg, conversation, tools)
 		if err != nil {
 			return &IMAgentResponse{Error: fmt.Sprintf("LLM 调用失败: %s", err.Error())}
@@ -1187,7 +1261,7 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 				}
 			}
 
-			truncated := truncateToolResult(toolContent)
+			truncated := truncateToolResultForTool(tc.Function.Name, toolContent)
 			conversation = append(conversation, map[string]interface{}{
 				"role":         "tool",
 				"tool_call_id": tc.ID,
@@ -1256,11 +1330,14 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 
 ## ⚠️ 执行验证原则（极其重要）
 每次执行操作后，必须验证是否真正成功，绝不能仅凭工具返回"已发送"就告诉用户执行成功。
-- send_input 后 → 必须 get_session_output 确认
+- 优先使用 send_and_observe（发送并等待输出），它会自动等待结果返回
 - create_session 后 → 必须 get_session_output 确认启动
 - 验证失败如实告知用户并尝试修复
 
 ## 工具使用要点
+- 向会话发送指令优先用 send_and_observe（自动等待输出），避免分别调用 send_input + get_session_output
+- 中断或终止会话用 control_session（action: interrupt/kill）
+- 配置管理用 manage_config（action: get/update/batch_update/list_schema/export/import）
 - 简单文件/命令操作直接用 bash/read_file/write_file/list_directory，不要绕道创建会话
 - 截屏直接调用 screenshot，无需活跃会话也能截取本机桌面
 - 用 send_file 通过 IM 通道直接发送文件给用户
@@ -1322,6 +1399,37 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 			}
 		}
 	}
+
+	// Dynamic tool discovery info
+	if h.registry != nil {
+		allTools := h.registry.ListAvailable()
+		mcpTools := h.registry.ListByCategory(ToolCategoryMCP)
+		nonCodeTools := h.registry.ListByCategory(ToolCategoryNonCode)
+		if len(mcpTools) > 0 || len(nonCodeTools) > 0 {
+			b.WriteString(fmt.Sprintf("\n## 动态工具（共 %d 个可用）\n", len(allTools)))
+			if len(mcpTools) > 0 {
+				b.WriteString(fmt.Sprintf("- MCP 工具: %d 个（来自已注册的 MCP Server）\n", len(mcpTools)))
+			}
+			if len(nonCodeTools) > 0 {
+				b.WriteString(fmt.Sprintf("- 非编程工具: %d 个（git_status, git_diff, git_commit, search_files 等）\n", len(nonCodeTools)))
+			}
+			b.WriteString("- 工具列表根据消息内容动态筛选，可用「使用XX工具」激活特定分组\n")
+		}
+	}
+
+	// Security firewall info
+	if h.firewall != nil {
+		b.WriteString("\n## 安全防火墙\n")
+		b.WriteString("- 所有工具调用经过安全风险评估和策略检查\n")
+		b.WriteString("- 高风险操作（删除文件、修改权限、数据库 DROP 等）会被拦截或要求确认\n")
+		b.WriteString("- 可用 query_audit_log 工具查看安全审计日志\n")
+	}
+
+	// Task orchestration info
+	b.WriteString("\n## 高级能力\n")
+	b.WriteString("- tool=auto: 创建会话时自动选择最适合的编程工具\n")
+	b.WriteString("- orchestrate_task: 将复杂任务拆分为多个子任务并行执行\n")
+	b.WriteString("- add_context_note: 记录项目上下文备注，跨会话共享\n")
 
 	b.WriteString("\n## 对话管理\n")
 	b.WriteString("- /new 或 /reset 重置对话 | /exit 或 /quit 终止所有会话 | /sessions 查看状态 | /help 帮助\n")
@@ -1693,7 +1801,7 @@ func (h *IMMessageHandler) executeTool(name, argsJSON string, onProgress Progres
 		}
 	}
 
-	// --- Registry-based dispatch (Phase 1 upgrade) ---
+	// --- Registry-based dispatch (unified path) ---
 	if h.registry != nil {
 		if tool, ok := h.registry.Get(name); ok {
 			if tool.HandlerProg != nil {
@@ -1705,97 +1813,7 @@ func (h *IMMessageHandler) executeTool(name, argsJSON string, onProgress Progres
 		}
 	}
 
-	// --- Legacy switch-case fallback (for dynamically added ClawNet tools etc.) ---
-	switch name {
-	case "list_sessions":
-		return h.toolListSessions()
-	case "create_session":
-		return h.toolCreateSession(args)
-	case "list_providers":
-		return h.toolListProviders(args)
-	case "send_input":
-		return h.toolSendInput(args)
-	case "get_session_output":
-		return h.toolGetSessionOutput(args)
-	case "get_session_events":
-		return h.toolGetSessionEvents(args)
-	case "interrupt_session":
-		return h.toolInterruptSession(args)
-	case "kill_session":
-		return h.toolKillSession(args)
-	case "screenshot":
-		return h.toolScreenshot(args)
-	case "list_mcp_tools":
-		return h.toolListMCPTools()
-	case "call_mcp_tool":
-		return h.toolCallMCPTool(args)
-	case "list_skills":
-		return h.toolListSkills()
-	case "search_skill_hub":
-		return h.toolSearchSkillHub(args)
-	case "install_skill_hub":
-		return h.toolInstallSkillHub(args)
-	case "run_skill":
-		return h.toolRunSkill(args)
-	case "parallel_execute":
-		return h.toolParallelExecute(args)
-	case "recommend_tool":
-		return h.toolRecommendTool(args)
-	case "craft_tool":
-		return h.toolCraftTool(args, onProgress)
-	case "bash":
-		return h.toolBash(args, onProgress)
-	case "read_file":
-		return h.toolReadFile(args)
-	case "write_file":
-		return h.toolWriteFile(args)
-	case "list_directory":
-		return h.toolListDirectory(args)
-	case "send_file":
-		return h.toolSendFile(args)
-	case "open":
-		return h.toolOpen(args)
-	case "save_memory":
-		return h.toolSaveMemory(args)
-	case "list_memories":
-		return h.toolListMemories(args)
-	case "delete_memory":
-		return h.toolDeleteMemory(args)
-	case "create_template":
-		return h.toolCreateTemplate(args)
-	case "list_templates":
-		return h.toolListTemplates()
-	case "launch_template":
-		return h.toolLaunchTemplate(args)
-	case "get_config":
-		return h.toolGetConfig(args)
-	case "update_config":
-		return h.toolUpdateConfig(args)
-	case "batch_update_config":
-		return h.toolBatchUpdateConfig(args)
-	case "list_config_schema":
-		return h.toolListConfigSchema()
-	case "export_config":
-		return h.toolExportConfig()
-	case "import_config":
-		return h.toolImportConfig(args)
-	case "set_max_iterations":
-		return h.toolSetMaxIterations(args)
-	case "create_scheduled_task":
-		return h.toolCreateScheduledTask(args)
-	case "list_scheduled_tasks":
-		return h.toolListScheduledTasks()
-	case "delete_scheduled_task":
-		return h.toolDeleteScheduledTask(args)
-	case "update_scheduled_task":
-		return h.toolUpdateScheduledTask(args)
-	case "clawnet_search":
-		return h.toolClawNetSearch(args)
-	case "clawnet_publish":
-		return h.toolClawNetPublish(args)
-	default:
-		return fmt.Sprintf("未知工具: %s", name)
-	}
+	return fmt.Sprintf("未知工具: %s", name)
 }
 
 func (h *IMMessageHandler) toolListSessions() string {
@@ -2083,6 +2101,103 @@ func (h *IMMessageHandler) toolKillSession(args map[string]interface{}) string {
 		return fmt.Sprintf("终止失败: %s", err.Error())
 	}
 	return fmt.Sprintf("已终止会话 %s", sessionID)
+}
+
+// toolSendAndObserve combines send_input + get_session_output into a single
+// tool call. It sends text to a session, waits briefly for output to
+// accumulate, then returns the session output — saving one LLM round-trip.
+func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) string {
+	sessionID, _ := args["session_id"].(string)
+	text, _ := args["text"].(string)
+	if sessionID == "" || text == "" {
+		return "缺少 session_id 或 text 参数"
+	}
+	if h.manager == nil {
+		return "会话管理器未初始化"
+	}
+
+	// Snapshot line count BEFORE sending so we can detect any new output.
+	session, ok := h.manager.Get(sessionID)
+	if !ok {
+		return fmt.Sprintf("会话 %s 不存在", sessionID)
+	}
+	session.mu.RLock()
+	baseLineCount := len(session.RawOutputLines)
+	session.mu.RUnlock()
+
+	if err := h.manager.WriteInput(sessionID, text); err != nil {
+		return fmt.Sprintf("发送失败: %s", err.Error())
+	}
+
+	// Poll up to ~8s with increasing intervals, waiting for meaningful output.
+	// We use newLines > 1 (not > 0) because the PTY echo of the sent text
+	// typically produces 1 line immediately; real output starts after that.
+	waitMs := []int{500, 500, 1000, 1000, 1500, 1500, 2000}
+	for _, ms := range waitMs {
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		session.mu.RLock()
+		newLines := len(session.RawOutputLines) - baseLineCount
+		waiting := session.Summary.WaitingForUser
+		status := session.Status
+		session.mu.RUnlock()
+		// Stop early if: meaningful new output, session waiting for input, or session ended.
+		if newLines > 1 || waiting || status == SessionExited || status == SessionError {
+			break
+		}
+	}
+
+	// Return the output using the same logic as get_session_output.
+	return h.toolGetSessionOutput(map[string]interface{}{
+		"session_id": sessionID,
+		"lines":      float64(40),
+	})
+}
+
+// toolControlSession merges interrupt_session and kill_session into one tool.
+func (h *IMMessageHandler) toolControlSession(args map[string]interface{}) string {
+	sessionID, _ := args["session_id"].(string)
+	action, _ := args["action"].(string)
+	if sessionID == "" {
+		return "缺少 session_id 参数"
+	}
+	if h.manager == nil {
+		return "会话管理器未初始化"
+	}
+	switch action {
+	case "interrupt":
+		if err := h.manager.Interrupt(sessionID); err != nil {
+			return fmt.Sprintf("中断失败: %s", err.Error())
+		}
+		return fmt.Sprintf("已向会话 %s 发送中断信号", sessionID)
+	case "kill":
+		if err := h.manager.Kill(sessionID); err != nil {
+			return fmt.Sprintf("终止失败: %s", err.Error())
+		}
+		return fmt.Sprintf("已终止会话 %s", sessionID)
+	default:
+		return "action 参数无效，可选值: interrupt, kill"
+	}
+}
+
+// toolManageConfig merges all config operations into a single tool.
+func (h *IMMessageHandler) toolManageConfig(args map[string]interface{}) string {
+	action, _ := args["action"].(string)
+	switch action {
+	case "get":
+		return h.toolGetConfig(args)
+	case "update":
+		return h.toolUpdateConfig(args)
+	case "batch_update":
+		return h.toolBatchUpdateConfig(args)
+	case "list_schema":
+		return h.toolListConfigSchema()
+	case "export":
+		return h.toolExportConfig()
+	case "import":
+		return h.toolImportConfig(args)
+	default:
+		return "action 参数无效，可选值: get, update, batch_update, list_schema, export, import"
+	}
 }
 
 func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {

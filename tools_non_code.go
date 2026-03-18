@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // registerNonCodeTools registers non-programming tools (Git, file ops, env)
@@ -82,7 +84,7 @@ func registerNonCodeTools(registry *ToolRegistry, app *App) {
 
 	registry.Register(RegisteredTool{
 		Name:        "git_commit",
-		Description: "提交所有变更到 Git（git add -A && git commit）",
+		Description: "提交已跟踪文件的变更到 Git（git add -u && git commit）。如需包含新文件，请先手动 git add。",
 		Category:    ToolCategoryNonCode,
 		Tags:        []string{"git", "vcs", "commit", "write"},
 		Status:      RegToolAvailable,
@@ -101,7 +103,8 @@ func registerNonCodeTools(registry *ToolRegistry, app *App) {
 			if msg == "" {
 				return "缺少 message 参数"
 			}
-			if _, err := runGitCmd(path, "add", "-A"); err != nil {
+			// Use -u to only stage tracked files; avoids accidentally committing untracked files.
+			if _, err := runGitCmd(path, "add", "-u"); err != nil {
 				return fmt.Sprintf("git add 失败: %v", err)
 			}
 			out, err := runGitCmd(path, "commit", "-m", msg)
@@ -221,8 +224,11 @@ func searchFilesInProject(projectPath, pattern, filePattern string) string {
 	var results []string
 	count := 0
 	_ = filepath.Walk(projectPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || count >= 50 {
+		if err != nil || info.IsDir() {
 			return nil
+		}
+		if count >= 50 {
+			return filepath.SkipAll
 		}
 		if filePattern != "" {
 			matched, _ := filepath.Match(filePattern, info.Name())
@@ -252,6 +258,7 @@ func searchFilesInProject(projectPath, pattern, filePattern string) string {
 }
 
 // checkProjectHealth checks if a project can build/compile.
+// Build commands have a 30-second timeout to avoid blocking the agent.
 func checkProjectHealth(projectPath string) string {
 	if projectPath == "" {
 		return "未指定项目路径"
@@ -261,12 +268,18 @@ func checkProjectHealth(projectPath string) string {
 
 	// Check for Go project.
 	if _, err := os.Stat(filepath.Join(projectPath, "go.mod")); err == nil {
-		cmd := exec.Command("go", "build", "./...")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "go", "vet", "./...")
 		cmd.Dir = projectPath
 		if out, err := cmd.CombinedOutput(); err != nil {
-			results = append(results, fmt.Sprintf("❌ Go 编译失败:\n%s", string(out)))
+			if ctx.Err() == context.DeadlineExceeded {
+				results = append(results, "⚠️ Go vet 超时（30s），项目可能较大")
+			} else {
+				results = append(results, fmt.Sprintf("❌ Go vet 发现问题:\n%s", string(out)))
+			}
 		} else {
-			results = append(results, "✅ Go 编译通过")
+			results = append(results, "✅ Go vet 通过")
 		}
 	}
 

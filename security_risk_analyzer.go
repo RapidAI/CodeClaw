@@ -74,7 +74,10 @@ func (a *SecurityRiskAnalyzer) Assess(toolName string, args map[string]interface
 	result := RiskAssessment{Level: RiskLow}
 	var matchedPatterns []string
 
-	allPatterns := append(a.builtinPatterns, a.customPatterns...)
+	// Build a combined slice without mutating the originals.
+	allPatterns := make([]RiskPattern, 0, len(a.builtinPatterns)+len(a.customPatterns))
+	allPatterns = append(allPatterns, a.builtinPatterns...)
+	allPatterns = append(allPatterns, a.customPatterns...)
 	for _, p := range allPatterns {
 		if a.matchPattern(p, toolName, args) {
 			matchedPatterns = append(matchedPatterns, p.Name)
@@ -141,7 +144,7 @@ func (a *SecurityRiskAnalyzer) matchPattern(p RiskPattern, toolName string, args
 
 func securityUserExplicitlyRequested(msg string) bool {
 	msg = strings.ToLower(msg)
-	for _, kw := range []string{"删除", "delete", "remove", "rm ", "push", "发布", "publish", "执行", "run"} {
+	for _, kw := range []string{"删除", "delete", "remove", "rm ", "push", "发布", "publish", "执行"} {
 		if strings.Contains(msg, kw) {
 			return true
 		}
@@ -231,7 +234,7 @@ var defaultSecurityRiskPatterns = []RiskPattern{
 		Description: "修改敏感环境变量"},
 	// Package management
 	{Name: "pip_install_global", Category: "package", ToolMatch: "(?i)bash|shell",
-		ParamKey: "command", ParamMatch: `pip\s+install\s+(?!-r\s)`, Level: RiskMedium,
+		ParamKey: "command", ParamMatch: `pip\s+install\s+\w`, Level: RiskMedium,
 		Description: "全局 pip install（非 requirements.txt）"},
 	{Name: "npm_install_global", Category: "package", ToolMatch: "(?i)bash|shell",
 		ParamKey: "command", ParamMatch: `npm\s+install\s+-g`, Level: RiskMedium,

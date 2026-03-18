@@ -644,6 +644,10 @@ export function ClawNetGetDiagnostics() {
   return window['go']['main']['App']['ClawNetGetDiagnostics']();
 }
 
+export function ClawNetGetCreditsAudit() {
+  return window['go']['main']['App']['ClawNetGetCreditsAudit']();
+}
+
 export function ClawNetSelfUpdate() {
   return window['go']['main']['App']['ClawNetSelfUpdate']();
 }

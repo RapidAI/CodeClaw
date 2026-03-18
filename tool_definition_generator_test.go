@@ -34,6 +34,9 @@ func makeBuiltinDefs() []map[string]interface{} {
 		toolDef("save_memory", "保存记忆", nil, nil),
 		toolDef("list_memories", "列出记忆", nil, nil),
 		toolDef("delete_memory", "删除记忆", nil, nil),
+		toolDef("send_and_observe", "发送并观察输出", nil, nil),
+		toolDef("control_session", "控制会话", nil, nil),
+		toolDef("manage_config", "管理配置", nil, nil),
 	}
 }
 

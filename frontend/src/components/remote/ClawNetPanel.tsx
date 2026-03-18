@@ -13,6 +13,9 @@ import {
     ClawNetImportIdentity,
     ClawNetOnlineBackupKey,
     ClawNetOnlineRestoreKey,
+    ClawNetGetTransactions,
+    ClawNetGetCreditsAudit,
+    ClawNetGetLeaderboard,
 } from "../../../wailsjs/go/main/App";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
 
@@ -36,6 +39,13 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
     const [identityPath, setIdentityPath] = useState("");
     const [keyBusy, setKeyBusy] = useState(false);
     const [keyMsg, setKeyMsg] = useState("");
+    // Finance
+    const [financeTab, setFinanceTab] = useState<"transactions" | "audit" | "leaderboard">("transactions");
+    const [transactions, setTransactions] = useState<any[]>([]);
+    const [auditLog, setAuditLog] = useState<any[]>([]);
+    const [leaderboard, setLeaderboard] = useState<any[]>([]);
+    const [financeLoading, setFinanceLoading] = useState(false);
+    const [financeOpen, setFinanceOpen] = useState(false);
     // Online backup/restore
     const [onlinePwd, setOnlinePwd] = useState("");
     const [onlinePwd2, setOnlinePwd2] = useState("");
@@ -78,6 +88,23 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                 setIdentityPath(res.path || "");
             }
         } catch {}
+    }, []);
+
+    const refreshFinance = useCallback(async (tab: "transactions" | "audit" | "leaderboard") => {
+        setFinanceLoading(true);
+        try {
+            if (tab === "transactions") {
+                const res = await ClawNetGetTransactions();
+                if (res.ok) setTransactions((res.transactions || []).slice(0, 20));
+            } else if (tab === "audit") {
+                const res = await ClawNetGetCreditsAudit();
+                if (res.ok) setAuditLog((res.audit || []).slice(0, 20));
+            } else if (tab === "leaderboard") {
+                const res = await ClawNetGetLeaderboard();
+                if (res.ok) setLeaderboard((res.leaderboard || []).slice(0, 20));
+            }
+        } catch {}
+        setFinanceLoading(false);
     }, []);
 
     useEffect(() => {
@@ -136,6 +163,10 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
             setStatus(null);
             setPeers([]);
             setCredits(null);
+            setFinanceOpen(false);
+            setTransactions([]);
+            setAuditLog([]);
+            setLeaderboard([]);
         } catch (e) {
             setError(String(e));
         } finally {
@@ -329,6 +360,99 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                     <span style={{ fontWeight: 600 }}>{credits.balance ?? 0}</span>
                     {credits.local_value && <span style={{ marginLeft: "6px", color: "#a16207", fontSize: "0.72rem" }}>({credits.local_value})</span>}
                     {credits.tier && <span style={{ marginLeft: "10px", color: "#888" }}>{zh ? "等级" : "Tier"}: {credits.tier}</span>}
+                </div>
+            )}
+
+            {/* Finance Details */}
+            {running && credits && (
+                <div style={{ marginBottom: "10px", border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden" }}>
+                    <div
+                        onClick={() => { if (!financeOpen) { setFinanceOpen(true); refreshFinance(financeTab); } else { setFinanceOpen(false); } }}
+                        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", background: "#fefce8", cursor: "pointer", fontSize: "0.78rem", fontWeight: 600, color: "#92400e" }}
+                    >
+                        <span>💰 {zh ? "财务详情" : "Finance Details"}</span>
+                        <span style={{ fontSize: "0.72rem", color: "#a16207" }}>{financeOpen ? "▲" : "▼"}</span>
+                    </div>
+                    {financeOpen && (
+                        <div style={{ padding: "10px 14px", background: "#fffef5" }}>
+                            {/* Tabs */}
+                            <div style={{ display: "flex", gap: "4px", marginBottom: "10px" }}>
+                                {([
+                                    { key: "transactions" as const, label: zh ? "交易记录" : "Transactions" },
+                                    { key: "audit" as const, label: zh ? "审计日志" : "Audit" },
+                                    { key: "leaderboard" as const, label: zh ? "排行榜" : "Leaderboard" },
+                                ]).map(t => (
+                                    <button
+                                        key={t.key}
+                                        onClick={() => { setFinanceTab(t.key); refreshFinance(t.key); }}
+                                        style={{
+                                            border: "none", borderRadius: "6px", padding: "4px 12px", fontSize: "0.72rem", cursor: "pointer",
+                                            background: financeTab === t.key ? "#f59e0b" : "#fef3c7",
+                                            color: financeTab === t.key ? "#fff" : "#92400e",
+                                            fontWeight: financeTab === t.key ? 600 : 400,
+                                        }}
+                                    >{t.label}</button>
+                                ))}
+                            </div>
+
+                            {financeLoading && <div style={{ fontSize: "0.72rem", color: "#a16207", padding: "8px 0" }}>{zh ? "加载中..." : "Loading..."}</div>}
+
+                            {/* Transactions */}
+                            {!financeLoading && financeTab === "transactions" && (
+                                <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
+                                    {transactions.length === 0 && <div style={{ color: "#a16207", padding: "6px 0" }}>{zh ? "暂无交易记录" : "No transactions yet"}</div>}
+                                    {transactions.map((tx: any, i: number) => (
+                                        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: "1px solid #fde68a" }}>
+                                            <div>
+                                                <span style={{ color: "#78716c" }}>{tx.type || tx.description || "—"}</span>
+                                                {tx.created_at && <span style={{ marginLeft: "6px", color: "#d4d4d8", fontSize: "0.65rem" }}>{tx.created_at}</span>}
+                                            </div>
+                                            <span style={{ fontWeight: 600, color: (tx.amount ?? 0) >= 0 ? "#16a34a" : "#dc2626", fontFamily: "monospace" }}>
+                                                {(tx.amount ?? 0) >= 0 ? "+" : ""}{tx.amount ?? 0}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Audit */}
+                            {!financeLoading && financeTab === "audit" && (
+                                <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
+                                    {auditLog.length === 0 && <div style={{ color: "#a16207", padding: "6px 0" }}>{zh ? "暂无审计记录" : "No audit entries"}</div>}
+                                    {auditLog.map((entry: any, i: number) => (
+                                        <div key={i} style={{ padding: "4px 0", borderBottom: "1px solid #fde68a" }}>
+                                            <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                                <span style={{ color: "#78716c" }}>{entry.action || entry.event || "—"}</span>
+                                                <span style={{ fontFamily: "monospace", color: "#92400e" }}>{entry.amount ?? ""}</span>
+                                            </div>
+                                            {(entry.created_at || entry.timestamp) && (
+                                                <div style={{ fontSize: "0.65rem", color: "#d4d4d8" }}>{entry.created_at || entry.timestamp}</div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Leaderboard */}
+                            {!financeLoading && financeTab === "leaderboard" && (
+                                <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
+                                    {leaderboard.length === 0 && <div style={{ color: "#a16207", padding: "6px 0" }}>{zh ? "暂无排行数据" : "No leaderboard data"}</div>}
+                                    {leaderboard.map((entry: any, i: number) => (
+                                        <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0", borderBottom: "1px solid #fde68a" }}>
+                                            <span style={{ width: "20px", textAlign: "center", fontWeight: 600, color: i < 3 ? "#f59e0b" : "#a1a1aa" }}>
+                                                {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`}
+                                            </span>
+                                            <span style={{ flex: 1, fontFamily: "monospace", color: "#78716c" }}>
+                                                {(entry.peer_id || entry.name || "").slice(0, 16)}{(entry.peer_id || "").length > 16 ? "…" : ""}
+                                            </span>
+                                            <span style={{ fontWeight: 600, color: "#92400e", fontFamily: "monospace" }}>{entry.balance ?? entry.score ?? 0}</span>
+                                            {entry.tier && <span style={{ fontSize: "0.65rem", color: "#a16207" }}>{entry.tier}</span>}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
 

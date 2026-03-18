@@ -80,21 +80,21 @@ func (b *DynamicToolBuilder) Build(userMessage string) []map[string]interface{} 
 		tool  RegisteredTool
 		score float64
 	}
-	scored_list := make([]scored, 0, len(dynamic))
+	scoredList := make([]scored, 0, len(dynamic))
 	for _, t := range dynamic {
 		s := scoreTool(t, msgTokens)
-		scored_list = append(scored_list, scored{tool: t, score: s})
+		scoredList = append(scoredList, scored{tool: t, score: s})
 	}
-	sort.Slice(scored_list, func(i, j int) bool {
-		return scored_list[i].score > scored_list[j].score
+	sort.Slice(scoredList, func(i, j int) bool {
+		return scoredList[i].score > scoredList[j].score
 	})
 
 	limit := b.maxDynamic - len(groupActivated)
 	if limit < 0 {
 		limit = 0
 	}
-	if limit > len(scored_list) {
-		limit = len(scored_list)
+	if limit > len(scoredList) {
+		limit = len(scoredList)
 	}
 
 	out := make([]map[string]interface{}, 0, len(builtins)+len(groupActivated)+limit)
@@ -105,7 +105,7 @@ func (b *DynamicToolBuilder) Build(userMessage string) []map[string]interface{} 
 		out = append(out, registeredToolToDef(t))
 	}
 	for i := 0; i < limit; i++ {
-		out = append(out, registeredToolToDef(scored_list[i].tool))
+		out = append(out, registeredToolToDef(scoredList[i].tool))
 	}
 	return out
 }

@@ -342,6 +342,9 @@ func TestExecuteTool_TemplateToolsRouting(t *testing.T) {
 		app:             &App{},
 		templateManager: mgr,
 	}
+	// Initialize registry so executeTool can dispatch via registry.
+	handler.registry = NewToolRegistry()
+	registerBuiltinTools(handler.registry, handler)
 
 	// create_template via executeTool
 	result := handler.executeTool("create_template", `{"name":"t1","tool":"claude"}`, nil)
@@ -588,6 +591,9 @@ func TestBuildToolDefinitions_IncludesListProviders(t *testing.T) {
 // list_providers to the correct handler.
 func TestExecuteTool_ListProvidersRouting(t *testing.T) {
 	handler := &IMMessageHandler{app: &App{}}
+	// Initialize registry so executeTool can dispatch via registry.
+	handler.registry = NewToolRegistry()
+	registerBuiltinTools(handler.registry, handler)
 	result := handler.executeTool("list_providers", `{"tool":"claude"}`, nil)
 	// With a minimal App (no config file), it should attempt to load config
 	// and either return a config error or tool-related result, not "未知工具".

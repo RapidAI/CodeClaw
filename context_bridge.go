@@ -181,9 +181,19 @@ func (b *ContextBridge) AddNote(projectPath, note string) {
 	ctx.LastUpdated = time.Now()
 }
 
-// GetContext returns the project context (read-only snapshot).
+// GetContext returns a snapshot of the project context.
+// The returned value is a copy; callers may read it without holding locks.
 func (b *ContextBridge) GetContext(projectPath string) *ProjectContext {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.contexts[projectPath]
+	ctx, ok := b.contexts[projectPath]
+	if !ok || ctx == nil {
+		return nil
+	}
+	// Return a shallow copy so callers don't race with writers.
+	cp := *ctx
+	cp.FileChanges = append([]FileChangeRecord(nil), ctx.FileChanges...)
+	cp.Decisions = append([]DecisionRecord(nil), ctx.Decisions...)
+	cp.Notes = append([]string(nil), ctx.Notes...)
+	return &cp
 }

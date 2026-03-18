@@ -50,7 +50,7 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 		nil, nil,
 		func(args map[string]interface{}) string { return h.toolListSessions() })
 
-	reg("create_session", "创建新的远程会话。可指定 provider 选择服务商。创建后建议用 get_session_output 观察启动状态。",
+	reg("create_session", "创建新的远程会话。可指定 provider 选择服务商。创建后用 get_session_output 或 send_and_observe 观察启动状态。",
 		ToolCategoryBuiltin, []string{"session", "create", "launch"},
 		map[string]interface{}{
 			"tool":         map[string]string{"type": "string", "description": "工具名称，如 claude, codex, cursor, gemini, opencode"},
@@ -102,6 +102,36 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 			"session_id": map[string]string{"type": "string", "description": "会话 ID"},
 		}, []string{"session_id"},
 		func(args map[string]interface{}) string { return h.toolKillSession(args) })
+
+	// --- Merged tools (optimized for fewer LLM round-trips) ---
+
+	reg("send_and_observe", "向会话发送文本并等待返回输出结果（合并了 send_input + get_session_output，推荐优先使用此工具代替分别调用 send_input 和 get_session_output）",
+		ToolCategoryBuiltin, []string{"session", "input", "send", "output", "observe"},
+		map[string]interface{}{
+			"session_id": map[string]string{"type": "string", "description": "会话 ID"},
+			"text":       map[string]string{"type": "string", "description": "要发送的文本"},
+		}, []string{"session_id", "text"},
+		func(args map[string]interface{}) string { return h.toolSendAndObserve(args) })
+
+	reg("control_session", "控制会话：中断（interrupt）或终止（kill）",
+		ToolCategoryBuiltin, []string{"session", "interrupt", "kill", "stop", "cancel", "control"},
+		map[string]interface{}{
+			"session_id": map[string]string{"type": "string", "description": "会话 ID"},
+			"action":     map[string]string{"type": "string", "description": "操作类型: interrupt（发送 Ctrl+C）或 kill（终止会话）"},
+		}, []string{"session_id", "action"},
+		func(args map[string]interface{}) string { return h.toolControlSession(args) })
+
+	reg("manage_config", "管理 MaClaw 配置。action 可选: get（读取配置）、update（修改单项）、batch_update（批量修改）、list_schema（查看所有可配置项）、export（导出）、import（导入）",
+		ToolCategoryBuiltin, []string{"config", "settings", "get", "update", "export", "import"},
+		map[string]interface{}{
+			"action":  map[string]string{"type": "string", "description": "操作类型: get/update/batch_update/list_schema/export/import"},
+			"section": map[string]string{"type": "string", "description": "配置区域（get/update 时使用，如 claude/gemini/remote/maclaw_llm）"},
+			"key":     map[string]string{"type": "string", "description": "配置项名称（update 时必填）"},
+			"value":   map[string]string{"type": "string", "description": "新值（update 时必填）"},
+			"changes": map[string]string{"type": "string", "description": "JSON 数组（batch_update 时必填）"},
+			"json_data": map[string]string{"type": "string", "description": "配置 JSON（import 时必填）"},
+		}, []string{"action"},
+		func(args map[string]interface{}) string { return h.toolManageConfig(args) })
 
 	reg("screenshot", "截取屏幕截图并发送给用户。如果有活跃会话可指定 session_id，没有活跃会话时会直接截取本机桌面屏幕（不需要创建会话）。",
 		ToolCategoryBuiltin, []string{"session", "screenshot", "capture"},

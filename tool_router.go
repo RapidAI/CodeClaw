@@ -11,10 +11,10 @@ const (
 	// maxToolBudget is the maximum number of tools to send to the LLM.
 	// Core tools are always included; remaining budget goes to the highest-
 	// scoring candidates ranked by TF-IDF similarity to the user message.
-	maxToolBudget = 30
+	maxToolBudget = 28
 
-	// maxDynamicRouted caps how many MCP dynamic tools can be included.
-	maxDynamicRouted = 15
+	// maxDynamicRouted caps how many MCP/non-code dynamic tools can be included.
+	maxDynamicRouted = 18
 )
 
 // ---------------------------------------------------------------------------
@@ -23,20 +23,16 @@ const (
 // ---------------------------------------------------------------------------
 
 var coreToolNames = map[string]bool{
-	// Session lifecycle
-	"list_sessions": true, "create_session": true, "send_input": true,
-	"get_session_output": true, "get_session_events": true,
-	"interrupt_session": true, "kill_session": true,
-	// Local operations
+	// Session lifecycle — essential for the primary interaction loop
+	"list_sessions": true, "create_session": true,
+	"send_and_observe": true, "get_session_output": true, "get_session_events": true,
+	"control_session": true,
+	// Local operations — high frequency
 	"bash": true, "read_file": true, "write_file": true, "list_directory": true,
-	"send_file": true, "open": true,
 	// MCP & Skill essentials
-	"list_mcp_tools": true, "call_mcp_tool": true,
-	"list_skills": true, "run_skill": true,
+	"call_mcp_tool": true, "run_skill": true,
 	// Screenshot (high frequency)
 	"screenshot": true,
-	// Long-term memory (agent needs these to proactively save/recall)
-	"save_memory": true, "list_memories": true, "delete_memory": true,
 }
 
 // builtinToolNames is the complete set of all builtin tool names (core + non-core).
@@ -58,6 +54,9 @@ var builtinToolNames = map[string]bool{
 	"create_scheduled_task": true, "list_scheduled_tasks": true,
 	"delete_scheduled_task": true, "update_scheduled_task": true,
 	"search_and_install_skill": true,
+	// Merged tools (optimized)
+	"send_and_observe": true, "control_session": true, "manage_config": true,
+	"query_audit_log": true,
 }
 
 // isBuiltinToolName returns true if the tool name is a known builtin tool.
@@ -69,7 +68,7 @@ func isBuiltinToolName(name string) bool {
 //
 // Strategy:
 //  1. Core tools (whitelist) are always included — they cover the basic
-//     interaction loop and cost ~20 tool slots.
+//     interaction loop and cost ~13 tool slots.
 //  2. All remaining tools (non-core builtins + MCP dynamic tools) compete
 //     for the remaining budget via TF-IDF cosine similarity against the
 //     user message.

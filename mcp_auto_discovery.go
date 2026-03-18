@@ -130,7 +130,9 @@ func (d *MCPAutoDiscovery) syncServerTools(srv MCPDeclServer) {
 	tools := d.mcpRegistry.GetServerTools(srv.ID)
 	for _, t := range tools {
 		toolName := fmt.Sprintf("mcp_%s_%s", srv.ID, t.Name)
-		tags := append([]string{"mcp", srv.ID}, srv.Tags...)
+		tags := make([]string, 0, 2+len(srv.Tags))
+		tags = append(tags, "mcp", srv.ID)
+		tags = append(tags, srv.Tags...)
 
 		// Build input schema from MCPToolView.
 		schema := t.InputSchema

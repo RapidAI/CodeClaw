@@ -127,9 +127,9 @@ func (f *SecurityFirewall) isSessionApproved(sessionID, toolName string) bool {
 	if approvals[toolName] || approvals["*"] {
 		return true
 	}
-	// Check prefix match (e.g., "bash" matches "bash").
+	// Check prefix match — skip empty patterns to avoid matching everything.
 	for pattern := range approvals {
-		if strings.Contains(toolName, pattern) {
+		if pattern != "" && pattern != toolName && strings.Contains(toolName, pattern) {
 			return true
 		}
 	}
@@ -148,6 +148,14 @@ func (f *SecurityFirewall) approveForSession(sessionID, toolName string) {
 // ApproveForSession explicitly approves a tool pattern for a session.
 func (f *SecurityFirewall) ApproveForSession(sessionID, toolPattern string) {
 	f.approveForSession(sessionID, toolPattern)
+}
+
+// ClearSession removes all session-level approvals for a session.
+// Call this when a session ends to prevent unbounded memory growth.
+func (f *SecurityFirewall) ClearSession(sessionID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.sessionApprovals, sessionID)
 }
 
 // LoadProjectPolicy loads project-level security policy from a file.

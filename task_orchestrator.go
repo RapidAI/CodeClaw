@@ -167,7 +167,8 @@ func (o *TaskOrchestrator2) executeSubTask(st *PlanSubTask) (string, error) {
 	return fmt.Sprintf("子任务 %s (%s) 已提交", st.ID, st.Description), nil
 }
 
-// GetStatus returns the current state of a plan.
+// GetStatus returns a snapshot of the current state of a plan.
+// The returned value is a copy; callers may read it without holding locks.
 func (o *TaskOrchestrator2) GetStatus(planID string) (*TaskPlan, error) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -175,7 +176,9 @@ func (o *TaskOrchestrator2) GetStatus(planID string) (*TaskPlan, error) {
 	if !ok {
 		return nil, fmt.Errorf("计划 %s 不存在", planID)
 	}
-	return plan, nil
+	cp := *plan
+	cp.SubTasks = append([]PlanSubTask(nil), plan.SubTasks...)
+	return &cp, nil
 }
 
 // Cancel cancels a running plan.
