@@ -118,6 +118,7 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
     const [leaderboard, setLeaderboard] = useState<any[]>([]);
     const [financeLoading, setFinanceLoading] = useState(false);
     const [financeOpen, setFinanceOpen] = useState(false);
+    const [financeError, setFinanceError] = useState("");
     // Online backup/restore
     const [onlinePwd, setOnlinePwd] = useState("");
     const [onlinePwd2, setOnlinePwd2] = useState("");
@@ -183,18 +184,24 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
 
     const refreshFinance = useCallback(async (tab: "transactions" | "audit" | "leaderboard") => {
         setFinanceLoading(true);
+        setFinanceError("");
         try {
             if (tab === "transactions") {
                 const res = await ClawNetGetTransactions();
                 if (res.ok) setTransactions((res.transactions || []).slice(0, 20));
+                else setFinanceError(res.error || "Failed to load transactions");
             } else if (tab === "audit") {
                 const res = await ClawNetGetCreditsAudit();
                 if (res.ok) setAuditLog((res.audit || []).slice(0, 20));
+                else setFinanceError(res.error || "Failed to load audit");
             } else if (tab === "leaderboard") {
                 const res = await ClawNetGetLeaderboard();
                 if (res.ok) setLeaderboard((res.leaderboard || []).slice(0, 20));
+                else setFinanceError(res.error || "Failed to load leaderboard");
             }
-        } catch {}
+        } catch (e) {
+            setFinanceError(String(e));
+        }
         setFinanceLoading(false);
     }, []);
 
@@ -271,6 +278,7 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
             setPeers([]);
             setCredits(null);
             setFinanceOpen(false);
+            setFinanceError("");
             setTransactions([]);
             setAuditLog([]);
             setLeaderboard([]);
@@ -486,7 +494,7 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
             {running && status && (
                 <div style={{ ...card, background: colors.successBg }}>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 16px", fontSize: "0.78rem" }}>
-                        <div><span style={label}>Peer ID:</span> <span style={{ ...mono, fontSize: "0.68rem" }}>{(status.peer_id || "").slice(0, 16)}…</span></div>
+                        <div><span style={label}>Peer ID:</span> <span style={{ ...mono, fontSize: "0.68rem" }}>{String(status.peer_id || "").slice(0, 16)}…</span></div>
                         <div><span style={label}>{zh ? "节点数" : "Peers"}:</span> <span style={mono}>{status.peers}</span></div>
                         <div><span style={label}>{zh ? "未读私信" : "Unread DM"}:</span> <span style={mono}>{status.unread_dm || 0}</span></div>
                         <div><span style={label}>{zh ? "版本" : "Version"}:</span> <span style={mono}>{status.version}</span></div>
@@ -551,7 +559,12 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                             ))}
                         </div>
                         {financeLoading && <div style={{ ...label, padding: "8px 0" }}>{zh ? "加载中..." : "Loading..."}</div>}
-                        {!financeLoading && financeTab === "transactions" && (
+                        {!financeLoading && financeError && (
+                            <div style={{ padding: "6px 0", fontSize: "0.72rem", color: colors.danger }}>
+                                {financeError}
+                            </div>
+                        )}
+                        {!financeLoading && !financeError && financeTab === "transactions" && (
                             <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
                                 {transactions.length === 0 && <div style={{ ...label, padding: "6px 0" }}>{zh ? "暂无交易记录" : "No transactions yet"}</div>}
                                 {transactions.map((tx: any, i: number) => (
@@ -567,7 +580,7 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                                 ))}
                             </div>
                         )}
-                        {!financeLoading && financeTab === "audit" && (
+                        {!financeLoading && !financeError && financeTab === "audit" && (
                             <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
                                 {auditLog.length === 0 && <div style={{ ...label, padding: "6px 0" }}>{zh ? "暂无审计记录" : "No audit entries"}</div>}
                                 {auditLog.map((entry: any, i: number) => (
@@ -583,21 +596,28 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                                 ))}
                             </div>
                         )}
-                        {!financeLoading && financeTab === "leaderboard" && (
+                        {!financeLoading && !financeError && financeTab === "leaderboard" && (
                             <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
                                 {leaderboard.length === 0 && <div style={{ ...label, padding: "6px 0" }}>{zh ? "暂无排行数据" : "No leaderboard data"}</div>}
-                                {leaderboard.map((entry: any, i: number) => (
-                                    <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0", borderBottom: `1px solid ${colors.border}` }}>
-                                        <span style={{ width: "20px", textAlign: "center", fontWeight: 600, color: i < 3 ? colors.warning : colors.textMuted }}>
-                                            {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`}
-                                        </span>
-                                        <span style={{ flex: 1, ...mono }}>
-                                            {(entry.peer_id || entry.name || "").slice(0, 16)}{(entry.peer_id || "").length > 16 ? "…" : ""}
-                                        </span>
-                                        <span style={{ fontWeight: 600, color: colors.warning, fontFamily: "monospace" }}>{entry.balance ?? entry.score ?? 0}</span>
-                                        {entry.tier && <span style={{ fontSize: "0.65rem", color: colors.textMuted }}>{entry.tier}</span>}
-                                    </div>
-                                ))}
+                                {leaderboard.map((entry: any, i: number) => {
+                                    if (!entry || typeof entry !== "object") return null;
+                                    const peerId = String(entry.peer_id || entry.name || "");
+                                    const displayName = peerId.slice(0, 16) + (peerId.length > 16 ? "…" : "");
+                                    const score = entry.balance ?? entry.score ?? 0;
+                                    const tier = entry.tier ? String(entry.tier) : "";
+                                    return (
+                                        <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0", borderBottom: `1px solid ${colors.border}` }}>
+                                            <span style={{ width: "20px", textAlign: "center", fontWeight: 600, color: i < 3 ? colors.warning : colors.textMuted }}>
+                                                {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`}
+                                            </span>
+                                            <span style={{ flex: 1, ...mono }}>
+                                                {displayName}
+                                            </span>
+                                            <span style={{ fontWeight: 600, color: colors.warning, fontFamily: "monospace" }}>{score}</span>
+                                            {tier && <span style={{ fontSize: "0.65rem", color: colors.textMuted }}>{tier}</span>}
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -678,7 +698,7 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                     <div style={{ maxHeight: "120px", overflowY: "auto", fontSize: "0.72rem", fontFamily: "monospace", background: colors.bg, borderRadius: radius.md, padding: "6px 10px", border: `1px solid ${colors.border}` }}>
                         {peers.slice(0, 20).map((p: any, i: number) => (
                             <div key={i} style={{ display: "flex", gap: "8px", padding: "2px 0" }}>
-                                <span style={{ color: colors.textSecondary }}>{(p.peer_id || "").slice(0, 12)}…</span>
+                                <span style={{ color: colors.textSecondary }}>{String(p.peer_id || "").slice(0, 12)}…</span>
                                 {p.country && <span style={{ color: colors.textMuted }}>{p.country}</span>}
                                 {p.latency && <span style={{ color: colors.textMuted }}>{p.latency}</span>}
                             </div>

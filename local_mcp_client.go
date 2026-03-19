@@ -57,8 +57,46 @@ func NewLocalMCPClient(entry LocalMCPServerEntry) *LocalMCPClient {
 	return &LocalMCPClient{entry: entry}
 }
 
+// startMaxRetries is the number of attempts to launch and initialize an MCP
+// server before giving up. Some servers need a moment to become ready, so
+// retrying a few times avoids the "works manually but not on auto-start" issue.
+const startMaxRetries = 3
+
+// startRetryBaseDelay is the initial backoff between retry attempts.
+const startRetryBaseDelay = 2 * time.Second
+
 // Start launches the child process and performs the MCP initialize handshake.
+// It retries up to startMaxRetries times with exponential backoff when the
+// process starts but the initialize handshake fails (e.g. server not ready).
 func (c *LocalMCPClient) Start(ctx context.Context) error {
+	var lastErr error
+	for attempt := 1; attempt <= startMaxRetries; attempt++ {
+		lastErr = c.tryStart(ctx)
+		if lastErr == nil {
+			if attempt > 1 {
+				log.Printf("[LocalMCP] %s started successfully on attempt %d", c.entry.Name, attempt)
+			}
+			return nil
+		}
+
+		log.Printf("[LocalMCP] %s start attempt %d/%d failed: %v", c.entry.Name, attempt, startMaxRetries, lastErr)
+
+		if attempt < startMaxRetries {
+			delay := startRetryBaseDelay * time.Duration(attempt)
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled during retry: %w", ctx.Err())
+			case <-time.After(delay):
+			}
+		}
+	}
+	return fmt.Errorf("failed after %d attempts: %w", startMaxRetries, lastErr)
+}
+
+// tryStart performs a single attempt to launch the process and complete the
+// MCP initialize handshake. On failure it cleans up so the next attempt
+// starts fresh.
+func (c *LocalMCPClient) tryStart(ctx context.Context) error {
 	c.stateMu.Lock()
 	if c.running {
 		c.stateMu.Unlock()

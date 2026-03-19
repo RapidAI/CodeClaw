@@ -14,8 +14,9 @@ void setInternalLoop(bool);
 // showNotification displays a macOS user notification.
 // Uses runtime class lookup to avoid compile-time dependency on removed APIs.
 // NSUserNotification was removed in macOS 11+; we try it at runtime and
-// silently fall back to a no-op if the class doesn't exist.
-static void showNotification(const char* title, const char* message) {
+// silently fall back.  Returns true if the notification was delivered via
+// NSUserNotification, false otherwise (caller should use osascript fallback).
+static bool showNotification(const char* title, const char* message) {
     @autoreleasepool {
         @try {
             // Try NSUserNotification (available on macOS 10.8–10.15 runtime)
@@ -29,17 +30,14 @@ static void showNotification(const char* title, const char* message) {
                 id center = [centerClass performSelector:@selector(defaultUserNotificationCenter)];
                 if (center) {
                     [center performSelector:@selector(deliverNotification:) withObject:notification];
+                    return true;
                 }
-                return;
             }
-            // On macOS 11+ where NSUserNotification is gone, this is a silent no-op.
-            // A future improvement could use UNUserNotificationCenter (requires
-            // UserNotifications.framework and async authorization).
-            NSLog(@"systray: notification skipped (NSUserNotification unavailable on this macOS version)");
         } @catch (NSException *exception) {
             NSLog(@"systray: notification failed: %@", exception);
         }
     }
+    return false;
 }
 
 // requestAttention bounces the dock icon to draw user attention.
@@ -52,6 +50,8 @@ static void requestAttention() {
 import "C"
 
 import (
+	"os/exec"
+	"strings"
 	"time"
 	"unsafe"
 )
@@ -295,19 +295,29 @@ func systray_on_rclick() {
 
 // ShowBalloonNotification displays a macOS notification with sound.
 // iconFlag is ignored on macOS (always uses default notification style).
+// On macOS 11+ where NSUserNotification is removed, falls back to osascript.
 func ShowBalloonNotification(title, message string, iconFlag uint32) error {
 	cTitle := C.CString(title)
 	defer C.free(unsafe.Pointer(cTitle))
 	cMessage := C.CString(message)
 	defer C.free(unsafe.Pointer(cMessage))
-	C.showNotification(cTitle, cMessage)
+
+	if bool(C.showNotification(cTitle, cMessage)) {
+		return nil
+	}
+
+	// Fallback: use osascript to display a notification on macOS 11+.
+	// This works without any framework dependencies and respects the
+	// system notification settings.
+	safeTitle := strings.ReplaceAll(title, `"`, `\"`)
+	safeMsg := strings.ReplaceAll(message, `"`, `\"`)
+	script := `display notification "` + safeMsg + `" with title "` + safeTitle + `" sound name "default"`
+	_ = exec.Command("osascript", "-e", script).Start()
 	return nil
 }
 
-// FlashAndBeep bounces the dock icon and plays the default notification sound
-// on macOS to draw the user's attention for scheduled task alerts.
-// The notification sound is already played by ShowBalloonNotification via
-// NSUserNotificationDefaultSoundName, so this is a supplementary dock bounce.
+// FlashAndBeep bounces the dock icon to draw the user's attention for
+// scheduled task alerts.
 func FlashAndBeep() {
 	// NSApplication requestUserAttention bounces the dock icon.
 	// NSCriticalRequest bounces until the app is activated.

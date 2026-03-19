@@ -176,8 +176,11 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 	defer timer.Stop()
 
 	// progressTexts collects progress messages; lastDelivered throttles IM sends.
+	// lastProgressText tracks the most recent progress text for deduplication:
+	// consecutive identical messages are suppressed even across throttle windows.
 	var progressTexts []string
 	var lastDelivered time.Time
+	var lastProgressText string
 	const progressMinInterval = 10 * time.Second
 
 	for {
@@ -206,7 +209,13 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 
 			// Throttle IM delivery: at most once per progressMinInterval
 			// to avoid flooding the user with status messages.
-			if time.Since(lastDelivered) >= progressMinInterval {
+			// Also deduplicate: skip if the text is identical to the previous
+			// progress received (not just the last delivered), so that
+			// A→B→A sequences still deliver the second A after throttle passes.
+			isDup := progressText == lastProgressText
+			lastProgressText = progressText
+
+			if time.Since(lastDelivered) >= progressMinInterval && !isDup {
 				lastDelivered = time.Now()
 				go r.deliverProgress(ctx, userID, platformName, platformUID, progressText)
 			}

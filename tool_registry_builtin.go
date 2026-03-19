@@ -280,34 +280,22 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 		}, []string{"target"},
 		func(args map[string]interface{}) string { return h.toolOpen(args) })
 
-	// --- Long-term memory tools ---
-	reg("save_memory", "保存一条记忆到长期记忆存储",
-		ToolCategoryBuiltin, []string{"memory", "save", "remember"},
+	// --- Long-term memory (unified) ---
+	reg("memory", "管理长期记忆（action: save/list/delete）",
+		ToolCategoryBuiltin, []string{"memory", "save", "remember", "list", "search", "delete"},
 		map[string]interface{}{
-			"content":  map[string]string{"type": "string", "description": "记忆内容"},
-			"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction"},
+			"action":   map[string]string{"type": "string", "description": "操作: save(保存)/list(列出或搜索)/delete(删除)"},
+			"content":  map[string]string{"type": "string", "description": "记忆内容（save 时必填）"},
+			"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction（save 时必填，list 时可选过滤）"},
 			"tags": map[string]interface{}{
 				"type":        "array",
-				"description": "关联标签",
+				"description": "关联标签（save 时可选）",
 				"items":       map[string]string{"type": "string"},
 			},
-		}, []string{"content", "category"},
-		func(args map[string]interface{}) string { return h.toolSaveMemory(args) })
-
-	reg("list_memories", "列出或搜索长期记忆",
-		ToolCategoryBuiltin, []string{"memory", "list", "search"},
-		map[string]interface{}{
-			"category": map[string]string{"type": "string", "description": "按类别过滤"},
-			"keyword":  map[string]string{"type": "string", "description": "按关键词搜索"},
-		}, nil,
-		func(args map[string]interface{}) string { return h.toolListMemories(args) })
-
-	reg("delete_memory", "删除一条长期记忆",
-		ToolCategoryBuiltin, []string{"memory", "delete"},
-		map[string]interface{}{
-			"id": map[string]string{"type": "string", "description": "记忆条目 ID"},
-		}, []string{"id"},
-		func(args map[string]interface{}) string { return h.toolDeleteMemory(args) })
+			"keyword": map[string]string{"type": "string", "description": "按关键词搜索（list 时可选）"},
+			"id":      map[string]string{"type": "string", "description": "记忆条目 ID（delete 时必填）"},
+		}, []string{"action"},
+		func(args map[string]interface{}) string { return h.toolMemory(args) })
 
 	// --- Session template tools ---
 	reg("create_template", "创建会话模板（快捷启动配置）",

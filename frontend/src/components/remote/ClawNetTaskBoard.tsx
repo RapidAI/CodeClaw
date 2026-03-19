@@ -87,8 +87,12 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
                         const netRes = await ClawNetBrowseNetworkTasks();
                         if (seq !== refreshRef.current) return;
                         if (netRes.ok && netRes.tasks?.length) {
-                            const localIds = new Set(finalTasks.map((t) => t.id));
-                            const netTasks = (netRes.tasks as ClawNetTask[]).filter(t => !localIds.has(t.id));
+                            // Normalize IDs to handle Wails uppercase key serialization
+                            const localIds = new Set(finalTasks.map((t) => t.id || (t as any).ID || ""));
+                            const netTasks = (netRes.tasks as ClawNetTask[]).filter(t => {
+                                const tid = t.id || (t as any).ID || "";
+                                return tid && !localIds.has(tid);
+                            });
                             finalTasks = [...finalTasks, ...netTasks].slice(0, MAX_TASKS_TOTAL);
                         }
                     } catch { /* keep local tasks */ }
@@ -201,25 +205,27 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
     }
 
     const btnStyle = useMemo(() => (active?: boolean): React.CSSProperties => ({
-        background: active ? "#6366f1" : "none",
-        color: active ? "#fff" : "#64748b",
-        border: active ? "1px solid #6366f1" : "1px solid #e2e8f0",
-        borderRadius: "6px",
+        background: active ? "var(--primary-dark, #2d3748)" : "none",
+        color: active ? "#fff" : "var(--text-secondary, #5a6577)",
+        border: active ? "1px solid var(--primary-dark, #2d3748)" : "1px solid var(--border-color, #e1e4e8)",
+        borderRadius: "var(--radius-sm, 4px)",
         padding: "3px 10px",
         fontSize: "0.72rem",
         cursor: "pointer",
         fontWeight: active ? 600 : 400,
+        transition: "all 0.15s",
     }), []);
 
     const smallBtn = useMemo(() => (disabled?: boolean): React.CSSProperties => ({
         background: "none",
-        border: "1px solid #e2e8f0",
-        borderRadius: "4px",
+        border: "1px solid var(--border-color, #e1e4e8)",
+        borderRadius: "var(--radius-sm, 4px)",
         padding: "2px 8px",
         fontSize: "0.65rem",
         cursor: disabled ? "not-allowed" : "pointer",
-        color: disabled ? "#cbd5e1" : "#6366f1",
+        color: disabled ? "#cbd5e1" : "var(--primary-dark, #2d3748)",
         opacity: disabled ? 0.5 : 1,
+        transition: "all 0.15s",
     }), []);
 
     return (
@@ -286,7 +292,7 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
                             style={{ width: "50px", border: "1px solid #e2e8f0", borderRadius: "6px", padding: "4px 6px", fontSize: "0.78rem" }}
                         />
                     </div>
-                    <button onClick={handleCreate} disabled={!newTitle.trim() || actionBusy === "create"} style={{ ...smallBtn(!newTitle.trim()), color: "#fff", background: "#6366f1", border: "none", padding: "4px 12px" }}>
+                    <button onClick={handleCreate} disabled={!newTitle.trim() || actionBusy === "create"} className="btn-primary" style={{ padding: "4px 12px", fontSize: "0.72rem" }}>
                         {zh ? "发布" : "Post"}
                     </button>
                 </div>
@@ -320,17 +326,17 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
                         created_at: rawTask.created_at || (rawTask as any).CreatedAt || (rawTask as any).created_at,
                     };
                     const normalizedStatus = (task.status || "").toLowerCase();
-                    const isTerminal = normalizedStatus === "approved" || normalizedStatus === "rejected" || normalizedStatus === "cancelled";
+                    const isOpen = normalizedStatus === "open" || normalizedStatus === "" || !normalizedStatus;
                     const sc = STATUS_COLORS[normalizedStatus] || STATUS_COLORS.open;
                     return (
                         <div key={task.id} style={{
-                            background: "#fff", border: "1px solid #e2e8f0", borderRadius: "7px",
+                            background: "var(--surface-color, #fff)", border: "1px solid var(--border-color, #e1e4e8)", borderRadius: "var(--radius-lg, 8px)",
                             padding: "7px 10px", display: "flex", flexDirection: "column", gap: "3px",
                             transition: "box-shadow 0.15s, border-color 0.15s",
                             minWidth: 0, overflow: "hidden",
                         }}
-                        onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 1px 8px rgba(99,102,241,0.10)"; e.currentTarget.style.borderColor = "#c7d2fe"; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.borderColor = "#e2e8f0"; }}
+                        onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 1px 6px rgba(45,55,72,0.10)"; e.currentTarget.style.borderColor = "var(--primary-light, #a0aec0)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.borderColor = "var(--border-color, #e1e4e8)"; }}
                         >
                             {/* Row 1: title + status */}
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "4px" }}>
@@ -372,19 +378,22 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
                                         </button>
                                     </>
                                 )}
-                                {/* 接单按钮 – 始终显示在右下角（终态任务除外） */}
-                                {!isTerminal && (
+                                {/* 接单按钮 – 仅开放任务显示 */}
+                                {isOpen && (
                                     <button
+                                        className="btn-primary"
                                         style={{
-                                            background: manualPickId === task.id ? "#fefce8" : "#6366f1",
-                                            color: manualPickId === task.id ? "#ca8a04" : "#fff",
-                                            border: manualPickId === task.id ? "1px solid #ca8a04" : "1px solid #6366f1",
-                                            borderRadius: "5px",
-                                            padding: "3px 10px",
+                                            padding: "2px 10px",
                                             fontSize: "0.68rem",
                                             fontWeight: 600,
                                             cursor: (!!actionBusy || !!manualPickId) ? "not-allowed" : "pointer",
                                             opacity: (!!actionBusy || !!manualPickId) && manualPickId !== task.id ? 0.5 : 1,
+                                            ...(manualPickId === task.id ? {
+                                                background: "var(--warning-bg, #fffbeb)",
+                                                color: "var(--warning-color, #b7791f)",
+                                                border: "1px solid var(--warning-color, #b7791f)",
+                                                boxShadow: "none",
+                                            } : {}),
                                         }}
                                         disabled={!!actionBusy || !!manualPickId}
                                         onClick={() => handleManualPick(task.id)}

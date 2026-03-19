@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 )
 
 // LocalMCPManager manages the lifecycle of all local (stdio) MCP server
@@ -80,10 +81,26 @@ func (m *LocalMCPManager) SyncFromConfig() {
 			log.Printf("[LocalMCP] failed to start %s (%s): %v", entry.Name, entry.Command, err)
 			continue
 		}
-		// Discover tools
-		tools, err := client.DiscoverTools()
-		if err != nil {
-			log.Printf("[LocalMCP] failed to discover tools for %s: %v", entry.Name, err)
+		// Discover tools with retry — some servers need a moment after
+		// the handshake before tools/list is ready.
+		var tools []MCPToolView
+		var discoverErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			tools, discoverErr = client.DiscoverTools()
+			if discoverErr == nil {
+				break
+			}
+			log.Printf("[LocalMCP] discover tools for %s attempt %d/3 failed: %v", entry.Name, attempt, discoverErr)
+			if attempt < 3 {
+				select {
+				case <-m.ctx.Done():
+					discoverErr = m.ctx.Err()
+				case <-time.After(time.Duration(attempt) * time.Second):
+				}
+			}
+		}
+		if discoverErr != nil {
+			log.Printf("[LocalMCP] giving up tool discovery for %s: %v", entry.Name, discoverErr)
 			client.Stop()
 			continue
 		}

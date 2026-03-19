@@ -1418,7 +1418,8 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 - 配置管理用 manage_config（action: get/update/batch_update/list_schema/export/import）
 - 简单文件/命令操作直接用 bash/read_file/write_file/list_directory，不要绕道创建会话
 - 截屏直接调用 screenshot，无需活跃会话也能截取本机桌面
-- 用 send_file 通过 IM 通道直接发送文件给用户
+- 用 send_file 通过 IM 通道直接发送文件给用户（支持图片、文档等任意文件类型）
+- ⚠️ 发送本地磁盘上的文件/图片给用户时，必须用 send_file 工具——会话内的工具无法直接投递文件到 IM。SDK 会话中产生的截图会自动推送给用户，无需额外操作。
 - 用 open 打开文件或网址（PDF、Excel、URL 等）
 - 创建会话时可用 project_id 参数指定预设项目，或用 list_projects 查看可用项目列表
 
@@ -1593,7 +1594,7 @@ func (h *IMMessageHandler) appendMemorySection(b *strings.Builder, userMessage s
 	h.memoryStore.TouchAccess(ids)
 
 	b.WriteString("\n## 记忆管理指引\n")
-	b.WriteString("当你在对话中识别到以下信息时，请主动调用 save_memory 工具保存：\n")
+	b.WriteString("当你在对话中识别到以下信息时，请主动调用 memory 工具（action: save）保存：\n")
 	b.WriteString("- 用户的个人信息（姓名、称呼、角色等）→ category: user_fact\n")
 	b.WriteString("- 用户的偏好（喜欢的工具、编码风格、语言偏好等）→ category: preference\n")
 	b.WriteString("- 项目相关知识（架构决策、技术栈、约定等）→ category: project_knowledge\n")
@@ -1725,26 +1726,20 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 			map[string]interface{}{
 				"target": map[string]string{"type": "string", "description": "要打开的文件路径、目录路径或 URL（如 C:\\Users\\test\\doc.pdf、https://example.com、mailto:test@example.com）"},
 			}, []string{"target"}),
-		// --- 长期记忆工具 ---
-		toolDef("save_memory", "保存一条记忆到长期记忆存储",
+		// --- 长期记忆工具（合并） ---
+		toolDef("memory", "管理长期记忆（action: save/list/delete）",
 			map[string]interface{}{
-				"content":  map[string]string{"type": "string", "description": "记忆内容"},
-				"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction"},
+				"action":   map[string]string{"type": "string", "description": "操作: save(保存)/list(列出或搜索)/delete(删除)"},
+				"content":  map[string]string{"type": "string", "description": "记忆内容（save 时必填）"},
+				"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction（save 时必填，list 时可选过滤）"},
 				"tags": map[string]interface{}{
 					"type":        "array",
-					"description": "关联标签",
+					"description": "关联标签（save 时可选）",
 					"items":       map[string]string{"type": "string"},
 				},
-			}, []string{"content", "category"}),
-		toolDef("list_memories", "列出或搜索长期记忆",
-			map[string]interface{}{
-				"category": map[string]string{"type": "string", "description": "按类别过滤"},
-				"keyword":  map[string]string{"type": "string", "description": "按关键词搜索"},
-			}, nil),
-		toolDef("delete_memory", "删除一条长期记忆",
-			map[string]interface{}{
-				"id": map[string]string{"type": "string", "description": "记忆条目 ID"},
-			}, []string{"id"}),
+				"keyword": map[string]string{"type": "string", "description": "按关键词搜索（list 时可选）"},
+				"id":      map[string]string{"type": "string", "description": "记忆条目 ID（delete 时必填）"},
+			}, []string{"action"}),
 		// --- 会话模板工具 ---
 		toolDef("create_template", "创建会话模板（快捷启动配置）",
 			map[string]interface{}{
@@ -2259,13 +2254,14 @@ func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) strin
 		return "会话管理器未初始化"
 	}
 
-	// Snapshot line count BEFORE sending so we can detect any new output.
+	// Snapshot line count and image count BEFORE sending so we can detect new output/images.
 	session, ok := h.manager.Get(sessionID)
 	if !ok {
 		return fmt.Sprintf("会话 %s 不存在", sessionID)
 	}
 	session.mu.RLock()
 	baseLineCount := len(session.RawOutputLines)
+	baseImageCount := len(session.OutputImages)
 	session.mu.RUnlock()
 
 	if err := h.manager.WriteInput(sessionID, text); err != nil {
@@ -2289,11 +2285,26 @@ func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) strin
 		}
 	}
 
-	// Return the output using the same logic as get_session_output.
-	return h.toolGetSessionOutput(map[string]interface{}{
+	// Check if new images were produced during the command execution.
+	// Images from SDK sessions are already delivered to the user via the
+	// session.image WebSocket channel (Hub → Feishu notifier), so we do NOT
+	// return [screenshot_base64] here (that would cause duplicate delivery).
+	// Instead, append a note to the text output so the AI knows an image
+	// was sent and can reference it in its response.
+	session.mu.RLock()
+	newImageCount := len(session.OutputImages) - baseImageCount
+	session.mu.RUnlock()
+
+	output := h.toolGetSessionOutput(map[string]interface{}{
 		"session_id": sessionID,
 		"lines":      float64(40),
 	})
+
+	if newImageCount > 0 {
+		output += fmt.Sprintf("\n\n📷 会话产生了 %d 张图片，已自动通过 IM 发送给用户。", newImageCount)
+	}
+
+	return output
 }
 
 // toolControlSession merges interrupt_session and kill_session into one tool.
@@ -3035,86 +3046,78 @@ func (h *IMMessageHandler) toolOpen(args map[string]interface{}) string {
 // Memory Tools
 // ---------------------------------------------------------------------------
 
-func (h *IMMessageHandler) toolSaveMemory(args map[string]interface{}) string {
+// toolMemory merges save/list/delete memory operations into a single tool.
+func (h *IMMessageHandler) toolMemory(args map[string]interface{}) string {
 	if h.memoryStore == nil {
 		return "长期记忆未初始化"
 	}
 
-	content := stringVal(args, "content")
-	if content == "" {
-		return "缺少 content 参数"
-	}
-	category := stringVal(args, "category")
-	if category == "" {
-		category = "user_fact"
-	}
-
-	var tags []string
-	if rawTags, ok := args["tags"]; ok {
-		if tagSlice, ok := rawTags.([]interface{}); ok {
-			for _, t := range tagSlice {
-				if s, ok := t.(string); ok && s != "" {
-					tags = append(tags, s)
+	action := stringVal(args, "action")
+	switch action {
+	case "save":
+		content := stringVal(args, "content")
+		if content == "" {
+			return "缺少 content 参数"
+		}
+		category := stringVal(args, "category")
+		if category == "" {
+			category = "user_fact"
+		}
+		var tags []string
+		if rawTags, ok := args["tags"]; ok {
+			if tagSlice, ok := rawTags.([]interface{}); ok {
+				for _, t := range tagSlice {
+					if s, ok := t.(string); ok && s != "" {
+						tags = append(tags, s)
+					}
 				}
 			}
 		}
-	}
-
-	entry := MemoryEntry{
-		Content:  content,
-		Category: MemoryCategory(category),
-		Tags:     tags,
-	}
-	if err := h.memoryStore.Save(entry); err != nil {
-		return fmt.Sprintf("保存记忆失败: %s", err.Error())
-	}
-
-	summary := content
-	if len(summary) > 50 {
-		summary = summary[:50] + "..."
-	}
-	return fmt.Sprintf("已保存记忆: %s", summary)
-}
-
-func (h *IMMessageHandler) toolListMemories(args map[string]interface{}) string {
-	if h.memoryStore == nil {
-		return "长期记忆未初始化"
-	}
-
-	category := MemoryCategory(stringVal(args, "category"))
-	keyword := stringVal(args, "keyword")
-
-	entries := h.memoryStore.List(category, keyword)
-	if len(entries) == 0 {
-		return "没有找到匹配的记忆条目。"
-	}
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("找到 %d 条记忆:\n", len(entries)))
-	for _, e := range entries {
-		b.WriteString(fmt.Sprintf("- [%s] (%s) %s", e.ID, e.Category, e.Content))
-		if len(e.Tags) > 0 {
-			b.WriteString(fmt.Sprintf(" 标签=%v", e.Tags))
+		entry := MemoryEntry{
+			Content:  content,
+			Category: MemoryCategory(category),
+			Tags:     tags,
 		}
-		b.WriteString("\n")
-	}
-	return b.String()
-}
+		if err := h.memoryStore.Save(entry); err != nil {
+			return fmt.Sprintf("保存记忆失败: %s", err.Error())
+		}
+		summary := content
+		if len(summary) > 50 {
+			summary = summary[:50] + "..."
+		}
+		return fmt.Sprintf("已保存记忆: %s", summary)
 
-func (h *IMMessageHandler) toolDeleteMemory(args map[string]interface{}) string {
-	if h.memoryStore == nil {
-		return "长期记忆未初始化"
-	}
+	case "list":
+		category := MemoryCategory(stringVal(args, "category"))
+		keyword := stringVal(args, "keyword")
+		entries := h.memoryStore.List(category, keyword)
+		if len(entries) == 0 {
+			return "没有找到匹配的记忆条目。"
+		}
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("找到 %d 条记忆:\n", len(entries)))
+		for _, e := range entries {
+			b.WriteString(fmt.Sprintf("- [%s] (%s) %s", e.ID, e.Category, e.Content))
+			if len(e.Tags) > 0 {
+				b.WriteString(fmt.Sprintf(" 标签=%v", e.Tags))
+			}
+			b.WriteString("\n")
+		}
+		return b.String()
 
-	id := stringVal(args, "id")
-	if id == "" {
-		return "缺少 id 参数"
-	}
+	case "delete":
+		id := stringVal(args, "id")
+		if id == "" {
+			return "缺少 id 参数"
+		}
+		if err := h.memoryStore.Delete(id); err != nil {
+			return fmt.Sprintf("删除记忆失败: %s", err.Error())
+		}
+		return fmt.Sprintf("已删除记忆: %s", id)
 
-	if err := h.memoryStore.Delete(id); err != nil {
-		return fmt.Sprintf("删除记忆失败: %s", err.Error())
+	default:
+		return "action 参数无效，可选值: save, list, delete"
 	}
-	return fmt.Sprintf("已删除记忆: %s", id)
 }
 
 // ---------------------------------------------------------------------------

@@ -493,7 +493,10 @@ func (p *ClawNetAutoTaskPicker) PickAndExecuteTask(taskID string) (result map[st
 	if err != nil {
 		return map[string]interface{}{"ok": false, "error": fmt.Sprintf("failed to get task: %v", err)}
 	}
-	if task.Status != "open" {
+	// Allow picking tasks that are "open" or have been settled locally but are
+	// still open on the network (the Hub is the source of truth for network tasks).
+	normalizedStatus := strings.ToLower(task.Status)
+	if normalizedStatus != "open" && normalizedStatus != "settled" && normalizedStatus != "" {
 		return map[string]interface{}{"ok": false, "error": fmt.Sprintf("task status is '%s', only 'open' tasks can be picked", task.Status)}
 	}
 

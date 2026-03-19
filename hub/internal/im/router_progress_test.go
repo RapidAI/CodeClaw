@@ -202,3 +202,75 @@ func TestRouteToAgent_ProgressThrottling(t *testing.T) {
 		t.Fatalf("expected 1 delivered progress (throttled), got %d", deliveredCount)
 	}
 }
+
+// TestRouteToAgent_ProgressDedup verifies that consecutive identical progress
+// messages are deduplicated even when the throttle interval has elapsed.
+func TestRouteToAgent_ProgressDedup(t *testing.T) {
+	df := &mockDeviceFinder{machineID: "m1", llmConfigured: true, found: true}
+	router := NewMessageRouter(df)
+	defer router.Stop()
+
+	var mu sync.Mutex
+	var deliveredTexts []string
+
+	router.SetProgressDelivery(func(ctx context.Context, userID, platformName, platformUID, text string) {
+		mu.Lock()
+		deliveredTexts = append(deliveredTexts, text)
+		mu.Unlock()
+	})
+
+	resultCh := make(chan *GenericResponse, 1)
+	go func() {
+		resp, _ := router.RouteToAgent(context.Background(), "user1", "test", "uid1", "搜索文件")
+		resultCh <- resp
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	router.mu.Lock()
+	var reqID string
+	var pending *PendingIMRequest
+	for id, p := range router.pendingReqs {
+		reqID = id
+		pending = p
+		break
+	}
+	router.mu.Unlock()
+
+	if reqID == "" {
+		t.Fatal("expected a pending request")
+	}
+
+	pending.Timeout = 5 * time.Second
+
+	// All messages arrive within the 10s throttle window.
+	// bash (delivered) → read_file (throttled) → read_file (throttled + dup)
+	router.HandleAgentProgress(reqID, "⚙️ 正在执行工具: bash")
+	time.Sleep(50 * time.Millisecond)
+	router.HandleAgentProgress(reqID, "⚙️ 正在执行工具: read_file")
+	time.Sleep(50 * time.Millisecond)
+	router.HandleAgentProgress(reqID, "⚙️ 正在执行工具: read_file") // dup
+
+	time.Sleep(50 * time.Millisecond)
+	router.HandleAgentResponse(reqID, &AgentResponse{Text: "done"})
+
+	select {
+	case resp := <-resultCh:
+		if resp.StatusCode != 200 {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Only the first progress ("bash") is delivered; the rest are throttled.
+	if len(deliveredTexts) != 1 {
+		t.Fatalf("expected 1 delivered progress, got %d: %v", len(deliveredTexts), deliveredTexts)
+	}
+	if deliveredTexts[0] != "⚙️ 正在执行工具: bash" {
+		t.Fatalf("unexpected delivered text: %s", deliveredTexts[0])
+	}
+}

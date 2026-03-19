@@ -31,8 +31,10 @@ var coreToolNames = map[string]bool{
 	"bash": true, "read_file": true, "write_file": true, "list_directory": true,
 	// MCP & Skill essentials
 	"call_mcp_tool": true, "run_skill": true,
-	// Screenshot (high frequency)
-	"screenshot": true,
+	// Screenshot & file delivery (high frequency)
+	"screenshot": true, "send_file": true,
+	// Long-term memory — essential for evolving intelligence
+	"memory": true,
 }
 
 // builtinToolNames is the complete set of all builtin tool names (core + non-core).
@@ -49,7 +51,7 @@ var builtinToolNames = map[string]bool{
 	"parallel_execute": true, "recommend_tool": true, "craft_tool": true,
 	"bash": true, "read_file": true, "write_file": true, "list_directory": true,
 	"send_file": true, "open": true,
-	"save_memory": true, "list_memories": true, "delete_memory": true,
+	"memory": true,
 	"create_template": true, "list_templates": true, "launch_template": true,
 	"get_config": true, "update_config": true, "batch_update_config": true,
 	"list_config_schema": true, "export_config": true, "import_config": true,
