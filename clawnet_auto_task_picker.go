@@ -458,3 +458,102 @@ func (p *ClawNetAutoTaskPicker) notifyChange() {
 		fn()
 	}
 }
+
+// PickAndExecuteTask manually picks a specific task by ID: claim → execute → submit.
+// Runs synchronously (Wails dispatches each binding call in its own goroutine).
+// Returns a result map with "ok", "error", and progress info suitable for the frontend.
+func (p *ClawNetAutoTaskPicker) PickAndExecuteTask(taskID string) (result map[string]interface{}) {
+	// Recover from panics in the executor so the Wails call always returns.
+	defer func() {
+		if r := recover(); r != nil {
+			result = map[string]interface{}{"ok": false, "error": fmt.Sprintf("panic: %v", r)}
+		}
+	}()
+
+	p.mu.Lock()
+	client := p.client
+	executor := p.executor
+
+	// Check if already working on this task.
+	if _, exists := p.activeTasks[taskID]; exists {
+		p.mu.Unlock()
+		return map[string]interface{}{"ok": false, "error": "task is already being processed"}
+	}
+	p.mu.Unlock()
+
+	if executor == nil {
+		return map[string]interface{}{"ok": false, "error": "executor not configured"}
+	}
+	if !client.IsRunning() {
+		return map[string]interface{}{"ok": false, "error": "ClawNet is not running"}
+	}
+
+	// Fetch the task details.
+	task, err := client.GetTask(taskID)
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": fmt.Sprintf("failed to get task: %v", err)}
+	}
+	if task.Status != "open" {
+		return map[string]interface{}{"ok": false, "error": fmt.Sprintf("task status is '%s', only 'open' tasks can be picked", task.Status)}
+	}
+
+	run := &autoTaskRun{
+		TaskID:    task.ID,
+		Title:     task.Title,
+		Reward:    task.Reward,
+		Status:    "claiming",
+		StartedAt: time.Now(),
+	}
+
+	p.mu.Lock()
+	p.activeTasks[task.ID] = run
+	p.mu.Unlock()
+	p.notifyChange()
+
+	// Step 1: Claim the task.
+	if claimErr := client.ClaimTask(task.ID); claimErr != nil {
+		if bidErr := client.BidOnTask(task.ID, 0, "manual pickup"); bidErr != nil {
+			p.failTask(run, fmt.Sprintf("claim failed: %v, bid failed: %v", claimErr, bidErr))
+			return map[string]interface{}{"ok": false, "error": fmt.Sprintf("claim failed: %v", claimErr)}
+		}
+	}
+
+	// Step 2: Execute via agent.
+	p.setRunStatus(run, "executing")
+	description := task.Title
+	if task.Description != "" {
+		description = task.Title + "\n\n" + task.Description
+	}
+	execResult, execErr := executor(task.Title, description)
+	if execErr != nil {
+		p.failTask(run, fmt.Sprintf("execution failed: %v", execErr))
+		return map[string]interface{}{"ok": false, "error": fmt.Sprintf("execution failed: %v", execErr)}
+	}
+	if execResult == "" {
+		execResult = "Task completed successfully."
+	}
+
+	p.mu.Lock()
+	run.Result = execResult
+	p.mu.Unlock()
+
+	// Step 3: Submit the result.
+	p.setRunStatus(run, "submitting")
+	if submitErr := client.SubmitTaskResult(task.ID, execResult); submitErr != nil {
+		p.failTask(run, fmt.Sprintf("submit failed: %v", submitErr))
+		return map[string]interface{}{"ok": false, "error": fmt.Sprintf("submit failed: %v", submitErr), "result": execResult}
+	}
+
+	// Success!
+	p.mu.Lock()
+	run.Status = "done"
+	p.completedCount++
+	p.totalEarned += task.Reward
+	delete(p.activeTasks, task.ID)
+	p.mu.Unlock()
+	p.notifyChange()
+
+	fmt.Printf("[manual-task-picker] ✅ completed task %q (reward: %.0f🐚)\n", task.Title, task.Reward)
+	return map[string]interface{}{"ok": true, "result": execResult}
+}
+

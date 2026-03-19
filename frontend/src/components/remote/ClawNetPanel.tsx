@@ -223,7 +223,7 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
             if (data && typeof data === "object") {
                 setDownloadProgress({ stage: data.stage, percent: data.percent, message: data.message });
                 if (data.stage === "done") {
-                    setTimeout(() => setDownloadProgress(null), 3000);
+                    setTimeout(() => { if (mountedRef.current) setDownloadProgress(null); }, 3000);
                     ClawNetGetBinaryPath().then(setBinPath).catch(() => {});
                 }
             }
@@ -494,6 +494,105 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                 </div>
             )}
 
+            {/* Finance entry — always visible, right after credits for discoverability */}
+            <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+                <div
+                    onClick={() => {
+                        if (!financeOpen) {
+                            setFinanceOpen(true);
+                            if (running) refreshFinance(financeTab);
+                        } else {
+                            setFinanceOpen(false);
+                        }
+                    }}
+                    style={{
+                        display: "flex", alignItems: "center", gap: "8px", padding: "9px 14px",
+                        cursor: "pointer", userSelect: "none",
+                    }}
+                >
+                    <FinanceIcon />
+                    <span style={{ fontSize: "0.78rem", fontWeight: 500, color: colors.text, flex: 1 }}>
+                        {zh ? "财务信息" : "Finance Details"}
+                    </span>
+                    {credits && (
+                        <span style={{ fontSize: "0.68rem", color: colors.textSecondary, marginRight: "6px" }}>
+                            🐚 {credits.balance ?? 0}
+                        </span>
+                    )}
+                    <span style={{ fontSize: "0.68rem", color: colors.textMuted }}>{financeOpen ? "▲" : "▼"}</span>
+                </div>
+                {financeOpen && !running && (
+                    <div style={{ padding: "8px 14px", borderTop: `1px solid ${colors.border}`, fontSize: "0.72rem", color: colors.textMuted }}>
+                        {zh ? "虾网未连接，连接后可查看财务数据" : "ClawNet not connected. Connect to view finance data."}
+                    </div>
+                )}
+                {financeOpen && running && (
+                    <div style={{ padding: "0 14px 10px 14px", borderTop: `1px solid ${colors.border}` }}>
+                        <div style={{ display: "flex", gap: "4px", margin: "10px 0" }}>
+                            {([
+                                { key: "transactions" as const, lbl: zh ? "交易记录" : "Transactions" },
+                                { key: "audit" as const, lbl: zh ? "审计日志" : "Audit" },
+                                { key: "leaderboard" as const, lbl: zh ? "排行榜" : "Leaderboard" },
+                            ]).map(t => (
+                                <button key={t.key} onClick={() => { setFinanceTab(t.key); refreshFinance(t.key); }} style={tabStyle(financeTab === t.key)}>
+                                    {t.lbl}
+                                </button>
+                            ))}
+                        </div>
+                        {financeLoading && <div style={{ ...label, padding: "8px 0" }}>{zh ? "加载中..." : "Loading..."}</div>}
+                        {!financeLoading && financeTab === "transactions" && (
+                            <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
+                                {transactions.length === 0 && <div style={{ ...label, padding: "6px 0" }}>{zh ? "暂无交易记录" : "No transactions yet"}</div>}
+                                {transactions.map((tx: any, i: number) => (
+                                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: `1px solid ${colors.border}` }}>
+                                        <div>
+                                            <span style={{ color: colors.textSecondary }}>{tx.type || tx.description || "—"}</span>
+                                            {tx.created_at && <span style={{ marginLeft: "6px", color: colors.textMuted, fontSize: "0.65rem" }}>{tx.created_at}</span>}
+                                        </div>
+                                        <span style={{ fontWeight: 600, color: (tx.amount ?? 0) >= 0 ? colors.success : colors.danger, fontFamily: "monospace" }}>
+                                            {(tx.amount ?? 0) >= 0 ? "+" : ""}{tx.amount ?? 0}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        {!financeLoading && financeTab === "audit" && (
+                            <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
+                                {auditLog.length === 0 && <div style={{ ...label, padding: "6px 0" }}>{zh ? "暂无审计记录" : "No audit entries"}</div>}
+                                {auditLog.map((entry: any, i: number) => (
+                                    <div key={i} style={{ padding: "4px 0", borderBottom: `1px solid ${colors.border}` }}>
+                                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                            <span style={{ color: colors.textSecondary }}>{entry.action || entry.event || "—"}</span>
+                                            <span style={{ ...mono, color: colors.warning }}>{entry.amount ?? ""}</span>
+                                        </div>
+                                        {(entry.created_at || entry.timestamp) && (
+                                            <div style={{ fontSize: "0.65rem", color: colors.textMuted }}>{entry.created_at || entry.timestamp}</div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        {!financeLoading && financeTab === "leaderboard" && (
+                            <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
+                                {leaderboard.length === 0 && <div style={{ ...label, padding: "6px 0" }}>{zh ? "暂无排行数据" : "No leaderboard data"}</div>}
+                                {leaderboard.map((entry: any, i: number) => (
+                                    <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0", borderBottom: `1px solid ${colors.border}` }}>
+                                        <span style={{ width: "20px", textAlign: "center", fontWeight: 600, color: i < 3 ? colors.warning : colors.textMuted }}>
+                                            {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`}
+                                        </span>
+                                        <span style={{ flex: 1, ...mono }}>
+                                            {(entry.peer_id || entry.name || "").slice(0, 16)}{(entry.peer_id || "").length > 16 ? "…" : ""}
+                                        </span>
+                                        <span style={{ fontWeight: 600, color: colors.warning, fontFamily: "monospace" }}>{entry.balance ?? entry.score ?? 0}</span>
+                                        {entry.tier && <span style={{ fontSize: "0.65rem", color: colors.textMuted }}>{entry.tier}</span>}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+
             {/* Auto Task Picker */}
             {running && (
                 <div style={card}>
@@ -510,9 +609,9 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                                     setPickerBusy(true);
                                     try {
                                         await ClawNetAutoPickerConfigure(e.target.checked, 5, 0, []);
-                                        await refreshPickerStatus();
+                                        if (mountedRef.current) await refreshPickerStatus();
                                     } catch {}
-                                    setPickerBusy(false);
+                                    if (mountedRef.current) setPickerBusy(false);
                                 }}
                             />
                             <span style={{ color: pickerStatus?.enabled ? colors.primary : colors.textMuted }}>
@@ -554,98 +653,6 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                             {triggerMsg && (
                                 <div style={{ fontSize: "0.72rem", marginTop: "4px", color: triggerMsg.startsWith("✅") ? colors.success : triggerMsg.startsWith("⏳") ? colors.primary : colors.danger }}>
                                     {triggerMsg}
-                                </div>
-                            )}
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* Finance entry — icon + label, click to expand */}
-            {running && credits && (
-                <div style={{ ...card, padding: 0, overflow: "hidden" }}>
-                    <div
-                        onClick={() => { if (!financeOpen) { setFinanceOpen(true); refreshFinance(financeTab); } else { setFinanceOpen(false); } }}
-                        style={{
-                            display: "flex", alignItems: "center", gap: "8px", padding: "9px 14px",
-                            cursor: "pointer", userSelect: "none",
-                        }}
-                    >
-                        <FinanceIcon />
-                        <span style={{ fontSize: "0.78rem", fontWeight: 500, color: colors.text, flex: 1 }}>
-                            {zh ? "财务信息" : "Finance Details"}
-                        </span>
-                        <span style={{ fontSize: "0.68rem", color: colors.textMuted }}>{financeOpen ? "▲" : "▼"}</span>
-                    </div>
-                    {financeOpen && (
-                        <div style={{ padding: "0 14px 10px 14px", borderTop: `1px solid ${colors.border}` }}>
-                            {/* Tabs */}
-                            <div style={{ display: "flex", gap: "4px", margin: "10px 0" }}>
-                                {([
-                                    { key: "transactions" as const, lbl: zh ? "交易记录" : "Transactions" },
-                                    { key: "audit" as const, lbl: zh ? "审计日志" : "Audit" },
-                                    { key: "leaderboard" as const, lbl: zh ? "排行榜" : "Leaderboard" },
-                                ]).map(t => (
-                                    <button key={t.key} onClick={() => { setFinanceTab(t.key); refreshFinance(t.key); }} style={tabStyle(financeTab === t.key)}>
-                                        {t.lbl}
-                                    </button>
-                                ))}
-                            </div>
-
-                            {financeLoading && <div style={{ ...label, padding: "8px 0" }}>{zh ? "加载中..." : "Loading..."}</div>}
-
-                            {/* Transactions */}
-                            {!financeLoading && financeTab === "transactions" && (
-                                <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
-                                    {transactions.length === 0 && <div style={{ ...label, padding: "6px 0" }}>{zh ? "暂无交易记录" : "No transactions yet"}</div>}
-                                    {transactions.map((tx: any, i: number) => (
-                                        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: `1px solid ${colors.border}` }}>
-                                            <div>
-                                                <span style={{ color: colors.textSecondary }}>{tx.type || tx.description || "—"}</span>
-                                                {tx.created_at && <span style={{ marginLeft: "6px", color: colors.textMuted, fontSize: "0.65rem" }}>{tx.created_at}</span>}
-                                            </div>
-                                            <span style={{ fontWeight: 600, color: (tx.amount ?? 0) >= 0 ? colors.success : colors.danger, fontFamily: "monospace" }}>
-                                                {(tx.amount ?? 0) >= 0 ? "+" : ""}{tx.amount ?? 0}
-                                            </span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-
-                            {/* Audit */}
-                            {!financeLoading && financeTab === "audit" && (
-                                <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
-                                    {auditLog.length === 0 && <div style={{ ...label, padding: "6px 0" }}>{zh ? "暂无审计记录" : "No audit entries"}</div>}
-                                    {auditLog.map((entry: any, i: number) => (
-                                        <div key={i} style={{ padding: "4px 0", borderBottom: `1px solid ${colors.border}` }}>
-                                            <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                                <span style={{ color: colors.textSecondary }}>{entry.action || entry.event || "—"}</span>
-                                                <span style={{ ...mono, color: colors.warning }}>{entry.amount ?? ""}</span>
-                                            </div>
-                                            {(entry.created_at || entry.timestamp) && (
-                                                <div style={{ fontSize: "0.65rem", color: colors.textMuted }}>{entry.created_at || entry.timestamp}</div>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-
-                            {/* Leaderboard */}
-                            {!financeLoading && financeTab === "leaderboard" && (
-                                <div style={{ maxHeight: "180px", overflowY: "auto", fontSize: "0.72rem" }}>
-                                    {leaderboard.length === 0 && <div style={{ ...label, padding: "6px 0" }}>{zh ? "暂无排行数据" : "No leaderboard data"}</div>}
-                                    {leaderboard.map((entry: any, i: number) => (
-                                        <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0", borderBottom: `1px solid ${colors.border}` }}>
-                                            <span style={{ width: "20px", textAlign: "center", fontWeight: 600, color: i < 3 ? colors.warning : colors.textMuted }}>
-                                                {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`}
-                                            </span>
-                                            <span style={{ flex: 1, ...mono }}>
-                                                {(entry.peer_id || entry.name || "").slice(0, 16)}{(entry.peer_id || "").length > 16 ? "…" : ""}
-                                            </span>
-                                            <span style={{ fontWeight: 600, color: colors.warning, fontFamily: "monospace" }}>{entry.balance ?? entry.score ?? 0}</span>
-                                            {entry.tier && <span style={{ fontSize: "0.65rem", color: colors.textMuted }}>{entry.tier}</span>}
-                                        </div>
-                                    ))}
                                 </div>
                             )}
                         </div>

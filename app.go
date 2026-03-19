@@ -80,6 +80,7 @@ type App struct {
 	contextBridge        *ContextBridge
 	taskOrchestrator2    *TaskOrchestrator2
 	autoTaskPicker       *ClawNetAutoTaskPicker
+	autoPickerOnce       sync.Once
 }
 
 var OnConfigChanged func(AppConfig)
@@ -216,7 +217,10 @@ type AppConfig struct {
 	// Memory auto-compression service (runs periodically in background)
 	MemoryAutoCompress bool `json:"memory_auto_compress,omitempty"`
 	// ClawNet P2P network — disabled by default for new installs
-	ClawNetEnabled bool `json:"clawnet_enabled"`
+	ClawNetEnabled            bool    `json:"clawnet_enabled"`
+	ClawNetAutoPickerEnabled  bool    `json:"clawnet_auto_picker_enabled,omitempty"`
+	ClawNetAutoPickerPollMin  int     `json:"clawnet_auto_picker_poll_min,omitempty"`
+	ClawNetAutoPickerMinReward float64 `json:"clawnet_auto_picker_min_reward,omitempty"`
 	// Security policy mode: "relaxed", "standard" (default), "strict"
 	SecurityPolicyMode string `json:"security_policy_mode,omitempty"`
 }
@@ -502,18 +506,11 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 				)
 			}
 
-			// Progress callback: relay intermediate status to IM so Hub
-			// doesn't 504 on long-running tasks, and user sees live updates.
-			// Rate-limited to at most once per 30s to avoid spamming IM.
-			var lastProgressAt time.Time
+			// Progress callback: only log locally, do NOT push intermediate
+			// progress to IM — users find frequent mid-execution notifications
+			// annoying. We only notify on start and final result/error.
 			onProgress := func(text string) {
-				now := time.Now()
-				if now.Sub(lastProgressAt) < 30*time.Second {
-					return
-				}
-				lastProgressAt = now
-				progressMsg := fmt.Sprintf("⏰ 定时任务「%s」进度:\n%s", task.Name, text)
-				_ = hubClient.SendIMProactiveMessage(progressMsg)
+				fmt.Printf("[ScheduledTask] %s progress: %s\n", task.Name, text)
 			}
 
 			// Prepend a hint so the agent knows this is an autonomous task
@@ -533,22 +530,43 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 			// Push the result to the user's IM channels (Feishu/QQ) via Hub.
 			// Silently ignore send errors — Hub may be temporarily disconnected.
 			resultText := resp.Text
-			if resultText != "" {
-				proactiveMsg := fmt.Sprintf("⏰ 定时任务「%s」执行结果:\n\n%s", task.Name, resultText)
+			hasError := resp.Error != ""
+
+			// Build the proactive message: include error info when present.
+			var proactiveMsg string
+			if hasError {
+				if resultText != "" {
+					proactiveMsg = fmt.Sprintf("⏰ 定时任务「%s」执行出错:\n\n%s\n\n错误: %s", task.Name, resultText, resp.Error)
+				} else {
+					proactiveMsg = fmt.Sprintf("⏰ 定时任务「%s」执行出错:\n\n%s", task.Name, resp.Error)
+				}
+			} else if resultText != "" {
+				proactiveMsg = fmt.Sprintf("⏰ 定时任务「%s」执行结果:\n\n%s", task.Name, resultText)
+			}
+
+			if proactiveMsg != "" {
 				if err := hubClient.SendIMProactiveMessage(proactiveMsg); err != nil {
 					a.log(fmt.Sprintf("[scheduled-task] proactive message send failed (will retry on next run): %v", err))
 				}
 			}
 
 			// Play sound + flash + notification on completion to draw attention.
-			if resultText != "" {
+			notifSummary := resultText
+			if hasError && notifSummary == "" {
+				notifSummary = resp.Error
+			}
+			if notifSummary != "" {
 				if FlashAndBeep != nil {
 					FlashAndBeep()
 				}
+				notifTitle := "⏰ 定时任务完成"
+				if hasError {
+					notifTitle = "⏰ 定时任务出错"
+				}
 				if ShowNotification != nil {
 					ShowNotification(
-						"⏰ 定时任务完成",
-						fmt.Sprintf("%s: %s", task.Name, truncateStr(resultText, 200)),
+						notifTitle,
+						fmt.Sprintf("%s: %s", task.Name, truncateStr(notifSummary, 200)),
 						1,
 					)
 				}

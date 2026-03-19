@@ -59,19 +59,20 @@ func NewScheduledTaskManager(path string) (*ScheduledTaskManager, error) {
 	if err := m.load(); err != nil {
 		return nil, err
 	}
-	// Recalculate next run times and expire stale tasks.
+	// Remove expired tasks and recalculate next run times.
 	now := time.Now()
+	var active []ScheduledTask
 	for i := range m.tasks {
-		if m.tasks[i].Status == "active" {
-			if m.isExpired(&m.tasks[i], now) {
-				m.tasks[i].Status = "expired"
-				m.tasks[i].NextRunAt = nil
-			} else {
-				next := m.calcNext(&m.tasks[i], now)
-				m.tasks[i].NextRunAt = next
-			}
+		if m.tasks[i].Status == "expired" || m.isExpired(&m.tasks[i], now) {
+			continue // drop expired tasks
 		}
+		if m.tasks[i].Status == "active" {
+			next := m.calcNext(&m.tasks[i], now)
+			m.tasks[i].NextRunAt = next
+		}
+		active = append(active, m.tasks[i])
 	}
+	m.tasks = active
 	_ = m.save()
 	return m, nil
 }
@@ -143,6 +144,40 @@ func (m *ScheduledTaskManager) tick() {
 	for _, id := range dueIDs {
 		go m.fireByID(id, executor)
 	}
+
+	// Auto-delete expired tasks so they don't clutter the list.
+	m.purgeExpired(now)
+}
+
+// purgeExpired removes tasks whose status is "expired" or whose EndDate has
+// passed while they were active/paused. Returns true if any tasks were removed.
+func (m *ScheduledTaskManager) purgeExpired(now time.Time) bool {
+	m.mu.Lock()
+	n := 0
+	for i := range m.tasks {
+		expired := m.tasks[i].Status == "expired"
+		if !expired && m.isExpired(&m.tasks[i], now) {
+			expired = true
+		}
+		if !expired {
+			m.tasks[n] = m.tasks[i]
+			n++
+		}
+	}
+	removed := len(m.tasks) - n
+	if removed == 0 {
+		m.mu.Unlock()
+		return false
+	}
+	m.tasks = m.tasks[:n]
+	_ = m.save()
+	cb := m.onChange
+	m.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
+	fmt.Printf("[ScheduledTaskManager] purged %d expired task(s)\n", removed)
+	return true
 }
 
 func (m *ScheduledTaskManager) fireByID(id string, executor TaskExecutor) {
@@ -203,8 +238,9 @@ func (m *ScheduledTaskManager) fireByID(id string, executor TaskExecutor) {
 		m.tasks[i].LastError = errStr
 
 		if m.isExpired(&m.tasks[i], now) {
-			m.tasks[i].Status = "expired"
-			m.tasks[i].NextRunAt = nil
+			// Remove the expired task in-place instead of keeping it around.
+			m.tasks = append(m.tasks[:i], m.tasks[i+1:]...)
+			fmt.Printf("[ScheduledTaskManager] auto-deleted expired task %s\n", id)
 		} else {
 			m.tasks[i].NextRunAt = m.calcNext(&m.tasks[i], now)
 		}
@@ -328,10 +364,10 @@ func (m *ScheduledTaskManager) Resume(id string) error {
 	for i := range m.tasks {
 		if m.tasks[i].ID == id {
 			if m.isExpired(&m.tasks[i], now) {
-				m.tasks[i].Status = "expired"
-				m.tasks[i].NextRunAt = nil
+				// Task has expired while paused — remove it.
+				m.tasks = append(m.tasks[:i], m.tasks[i+1:]...)
 				_ = m.save()
-				return fmt.Errorf("scheduled_task: task %q has expired (end_date passed)", id)
+				return fmt.Errorf("scheduled_task: task %q has expired (end_date passed) and was removed", id)
 			}
 			m.tasks[i].Status = "active"
 			m.tasks[i].NextRunAt = m.calcNext(&m.tasks[i], now)
@@ -399,6 +435,93 @@ func (m *ScheduledTaskManager) Update(id string, args map[string]interface{}) er
 // ---------------------------------------------------------------------------
 // Schedule calculation
 // ---------------------------------------------------------------------------
+
+// TriggerNow immediately executes a task regardless of its schedule.
+// The task must be in "active" status. Execution happens asynchronously
+// in a goroutine (same as scheduled fires); the method returns immediately.
+func (m *ScheduledTaskManager) TriggerNow(id string) error {
+	m.mu.RLock()
+	var found bool
+	var status string
+	for _, t := range m.tasks {
+		if t.ID == id {
+			found = true
+			status = t.Status
+			break
+		}
+	}
+	executor := m.executor
+	m.mu.RUnlock()
+
+	if !found {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if status != "active" {
+		return fmt.Errorf("task %s is not active (status=%s)", id, status)
+	}
+
+	// Fire asynchronously so the UI gets an immediate response.
+	go m.fireManual(id, executor)
+	return nil
+}
+
+// fireManual executes a task triggered manually. Unlike fireByID it does not
+// check NextRunAt (the task may not be due yet).
+func (m *ScheduledTaskManager) fireManual(id string, executor TaskExecutor) {
+	m.mu.RLock()
+	var taskCopy *ScheduledTask
+	for _, t := range m.tasks {
+		if t.ID == id {
+			cp := t
+			taskCopy = &cp
+			break
+		}
+	}
+	m.mu.RUnlock()
+	if taskCopy == nil {
+		return
+	}
+
+	fmt.Printf("[ScheduledTaskManager] manual trigger task %s (%s)\n", taskCopy.ID, taskCopy.Name)
+
+	var result, errStr string
+	if executor != nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					errStr = fmt.Sprintf("panic: %v", r)
+				}
+			}()
+			res, err := executor(taskCopy)
+			result = res
+			if err != nil {
+				errStr = err.Error()
+			}
+		}()
+	} else {
+		result = "no executor configured"
+	}
+
+	now := time.Now()
+	m.mu.Lock()
+	for i := range m.tasks {
+		if m.tasks[i].ID != id {
+			continue
+		}
+		m.tasks[i].LastRunAt = &now
+		m.tasks[i].RunCount++
+		m.tasks[i].LastResult = truncateStr(result, 500)
+		m.tasks[i].LastError = errStr
+		break
+	}
+	_ = m.save()
+	cb := m.onChange
+	m.mu.Unlock()
+
+	if cb != nil {
+		cb()
+	}
+}
 
 // calcNext computes the next execution time after `after`.
 func (m *ScheduledTaskManager) calcNext(t *ScheduledTask, after time.Time) *time.Time {

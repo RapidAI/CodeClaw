@@ -6,6 +6,7 @@ import {
     DeleteScheduledTask,
     PauseScheduledTask,
     ResumeScheduledTask,
+    TriggerScheduledTask,
 } from "../../../wailsjs/go/main/App";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime";
 import { colors, radius } from "./styles";
@@ -99,12 +100,16 @@ export function ScheduledTasksPanel({ lang }: Props) {
     const [fStartDate, setFStartDate] = useState("");
     const [fEndDate, setFEndDate] = useState("");
     const [saving, setSaving] = useState(false);
+    const [triggering, setTriggering] = useState<string | null>(null);
 
     const loadTasks = useCallback(async () => {
         setLoading(true); setError("");
         try {
             const list = await ListScheduledTasks();
-            setTasks(Array.isArray(list) ? list : []);
+            const all = Array.isArray(list) ? list : [];
+            // Filter out expired tasks — they are auto-deleted on the backend,
+            // but hide them immediately on the frontend as well.
+            setTasks(all.filter((t: ScheduledTask) => t.status !== "expired"));
         } catch (e) { setError(String(e)); }
         setLoading(false);
     }, []);
@@ -165,6 +170,15 @@ export function ScheduledTasksPanel({ lang }: Props) {
         } catch (e) { setError(String(e)); }
     };
 
+    const handleTrigger = async (id: string) => {
+        setError(""); setTriggering(id);
+        try {
+            await TriggerScheduledTask(id);
+            // Brief visual feedback then refresh — execution continues in background.
+            setTimeout(() => { setTriggering(null); loadTasks(); }, 600);
+        } catch (e) { setError(String(e)); setTriggering(null); }
+    };
+
     return (
         <div style={{ padding: 0 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -213,6 +227,14 @@ export function ScheduledTasksPanel({ lang }: Props) {
                                 )}
                             </div>
                             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                                {task.status === "active" && (
+                                    <button onClick={() => handleTrigger(task.id)}
+                                        disabled={triggering === task.id}
+                                        title={t("立即运行", "Run Now")}
+                                        style={{ padding: "3px 8px", fontSize: "0.7rem", cursor: "pointer", background: "none", border: `1px solid ${colors.border}`, borderRadius: radius.sm, color: "#6366f1", opacity: triggering === task.id ? 0.5 : 1 }}>
+                                        {triggering === task.id ? "⏳" : "▶️"}
+                                    </button>
+                                )}
                                 {task.status !== "expired" && (
                                     <button onClick={() => handleTogglePause(task)}
                                         title={task.status === "active" ? t("暂停", "Pause") : t("恢复", "Resume")}

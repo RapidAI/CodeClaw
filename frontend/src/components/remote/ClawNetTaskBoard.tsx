@@ -4,6 +4,7 @@ import {
     ClawNetBidOnTask, ClawNetSubmitTaskResult, ClawNetApproveTask,
     ClawNetRejectTask, ClawNetCancelTask, ClawNetMatchTasks,
     ClawNetCreateTask, ClawNetBrowseNetworkTasks, ClawNetPublishTasksToHub,
+    ClawNetManualPickTask,
 } from "../../../wailsjs/go/main/App";
 
 type Props = {
@@ -45,6 +46,7 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
     const [viewMode, setViewMode] = useState<ViewMode>("all");
     const [actionBusy, setActionBusy] = useState<string | null>(null);
     const [actionMsg, setActionMsg] = useState<{ text: string; type: "success" | "info" | "error" } | null>(null);
+    const [manualPickId, setManualPickId] = useState<string | null>(null);
     const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const refreshRef = useRef(0); // guard stale responses
     // Create task form
@@ -165,6 +167,24 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
         setNewReward(100);
         setShowCreate(false);
     }, [newTitle, newReward, credits, zh, showMsg, doAction]);
+
+    const handleManualPick = useCallback(async (taskId: string) => {
+        setManualPickId(taskId);
+        showMsg(zh ? "⏳ 正在接单并执行任务..." : "⏳ Picking up and executing task...", "info", 60000);
+        try {
+            const res = await ClawNetManualPickTask(taskId);
+            if (res.ok) {
+                showMsg(zh ? "✅ 任务已完成并提交" : "✅ Task completed and submitted", "success", 5000);
+                refresh();
+            } else {
+                showMsg(res.error || (zh ? "接单失败" : "Failed to pick task"), "error", 6000);
+            }
+        } catch (e) {
+            showMsg(String(e), "error", 6000);
+        } finally {
+            setManualPickId(null);
+        }
+    }, [zh, showMsg, refresh]);
 
     if (!clawNetRunning) {
         return (
@@ -324,6 +344,20 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
                                     🐚 {task.reward}
                                 </span>
                                 <span style={{ flex: 1 }} />
+                                {task.status === "open" && (
+                                    <button
+                                        style={{
+                                            ...smallBtn(!!actionBusy || manualPickId === task.id),
+                                            color: manualPickId === task.id ? "#ca8a04" : "#fff",
+                                            background: manualPickId === task.id ? "#fefce8" : "#6366f1",
+                                            border: manualPickId === task.id ? "1px solid #ca8a04" : "1px solid #6366f1",
+                                        }}
+                                        disabled={!!actionBusy || !!manualPickId}
+                                        onClick={() => handleManualPick(task.id)}
+                                    >
+                                        {manualPickId === task.id ? (zh ? "执行中..." : "Running...") : (zh ? "🤖 接单" : "🤖 Pick")}
+                                    </button>
+                                )}
                                 {task.status === "open" && (
                                     <button style={smallBtn(!!actionBusy)} disabled={!!actionBusy}
                                         onClick={() => doAction("bid-" + task.id, () => ClawNetBidOnTask(task.id, 0, zh ? "我可以做" : "I can do this"))}>

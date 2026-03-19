@@ -254,6 +254,8 @@ export function PauseScheduledTask(arg1:string):Promise<void>;
 
 export function ResumeScheduledTask(arg1:string):Promise<void>;
 
+export function TriggerScheduledTask(arg1:string):Promise<void>;
+
 // ClawNet P2P network bindings
 export function ClawNetEnsureDaemon():Promise<any>;
 
@@ -323,3 +325,4 @@ export function ClawNetPublishTasksToHub():Promise<any>;
 export function ClawNetAutoPickerGetStatus():Promise<any>;
 export function ClawNetAutoPickerConfigure(arg1:boolean, arg2:number, arg3:number, arg4:Array<string>):Promise<any>;
 export function ClawNetAutoPickerTriggerNow():Promise<any>;
+export function ClawNetManualPickTask(arg1:string):Promise<any>;

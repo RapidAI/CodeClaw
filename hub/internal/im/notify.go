@@ -145,17 +145,14 @@ func (b *NotifyBroadcaster) BroadcastLoginLink(ctx context.Context, email, confi
 	return channels
 }
 
-// BroadcastText sends a plain text message to all channels where the user
-// (identified by email) is reachable. Useful for login confirmations, alerts, etc.
+// BroadcastText sends a plain text message to the user's reachable channels.
+// It tries IM platforms first; if at least one IM delivery succeeds, email is
+// skipped to avoid duplicate / spammy notifications. Email is only used as a
+// fallback when no IM channel is configured or all IM sends fail.
 func (b *NotifyBroadcaster) BroadcastText(ctx context.Context, email, subject, text string) {
-	// Email
-	if b.mailer != nil {
-		if err := b.mailer.Send(ctx, []string{email}, subject, text); err != nil {
-			log.Printf("[im/notify] broadcast email to %s failed: %v", email, err)
-		}
-	}
+	imSent := false
 
-	// All bound IM platforms
+	// 1. Try all bound IM platforms first.
 	if b.adapter != nil {
 		b.adapter.mu.RLock()
 		plugins := make(map[string]IMPlugin, len(b.adapter.plugins))
@@ -176,7 +173,16 @@ func (b *NotifyBroadcaster) BroadcastText(ctx context.Context, email, subject, t
 			target := UserTarget{PlatformUID: uid}
 			if err := plugin.SendText(ctx, target, text); err != nil {
 				log.Printf("[im/notify] broadcast to %s (uid=%s) failed: %v", name, uid, err)
+			} else {
+				imSent = true
 			}
+		}
+	}
+
+	// 2. Fall back to email only when no IM channel delivered successfully.
+	if !imSent && b.mailer != nil {
+		if err := b.mailer.Send(ctx, []string{email}, subject, text); err != nil {
+			log.Printf("[im/notify] broadcast email to %s failed: %v", email, err)
 		}
 	}
 }

@@ -498,6 +498,10 @@ export function ResumeScheduledTask(arg1) {
   return window['go']['main']['App']['ResumeScheduledTask'](arg1);
 }
 
+export function TriggerScheduledTask(arg1) {
+  return window['go']['main']['App']['TriggerScheduledTask'](arg1);
+}
+
 // ClawNet P2P network bindings
 export function ClawNetEnsureDaemon() {
   return window['go']['main']['App']['ClawNetEnsureDaemon']();
@@ -703,4 +707,8 @@ export function ClawNetAutoPickerConfigure(arg1, arg2, arg3, arg4) {
 
 export function ClawNetAutoPickerTriggerNow() {
   return window['go']['main']['App']['ClawNetAutoPickerTriggerNow']();
+}
+
+export function ClawNetManualPickTask(arg1) {
+  return window['go']['main']['App']['ClawNetManualPickTask'](arg1);
 }

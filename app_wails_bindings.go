@@ -378,3 +378,12 @@ func (a *App) ResumeScheduledTask(id string) error {
 	}
 	return a.scheduledTaskManager.Resume(id)
 }
+
+// TriggerScheduledTask immediately runs a scheduled task (Wails binding).
+func (a *App) TriggerScheduledTask(id string) error {
+	a.ensureRemoteInfra()
+	if a.scheduledTaskManager == nil {
+		return fmt.Errorf("scheduled task manager not initialized")
+	}
+	return a.scheduledTaskManager.TriggerNow(id)
+}
