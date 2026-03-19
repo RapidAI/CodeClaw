@@ -11,20 +11,32 @@ package systray
 
 void setInternalLoop(bool);
 
-// showNotification displays a macOS user notification with title and message.
-// Uses NSUserNotification for compatibility; on macOS 11+ this is a no-op
-// because NSUserNotification was removed.  A future improvement could use
-// UNUserNotificationCenter for newer systems.
+// showNotification displays a macOS user notification.
+// Uses runtime class lookup to avoid compile-time dependency on removed APIs.
+// NSUserNotification was removed in macOS 11+; we try it at runtime and
+// silently fall back to a no-op if the class doesn't exist.
 static void showNotification(const char* title, const char* message) {
     @autoreleasepool {
         @try {
-            NSUserNotification *notification = [[NSUserNotification alloc] init];
-            notification.title = [NSString stringWithUTF8String:title];
-            notification.informativeText = [NSString stringWithUTF8String:message];
-            notification.soundName = NSUserNotificationDefaultSoundName;
-            [[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
+            // Try NSUserNotification (available on macOS 10.8–10.15 runtime)
+            Class notifClass = NSClassFromString(@"NSUserNotification");
+            Class centerClass = NSClassFromString(@"NSUserNotificationCenter");
+            if (notifClass && centerClass) {
+                id notification = [[notifClass alloc] init];
+                [notification setValue:[NSString stringWithUTF8String:title] forKey:@"title"];
+                [notification setValue:[NSString stringWithUTF8String:message] forKey:@"informativeText"];
+                [notification setValue:@"DefaultSoundName" forKey:@"soundName"];
+                id center = [centerClass performSelector:@selector(defaultUserNotificationCenter)];
+                if (center) {
+                    [center performSelector:@selector(deliverNotification:) withObject:notification];
+                }
+                return;
+            }
+            // On macOS 11+ where NSUserNotification is gone, this is a silent no-op.
+            // A future improvement could use UNUserNotificationCenter (requires
+            // UserNotifications.framework and async authorization).
+            NSLog(@"systray: notification skipped (NSUserNotification unavailable on this macOS version)");
         } @catch (NSException *exception) {
-            // NSUserNotification removed in macOS 11+; silently ignore.
             NSLog(@"systray: notification failed: %@", exception);
         }
     }
