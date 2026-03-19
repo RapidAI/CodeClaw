@@ -1559,6 +1559,52 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 		}
 	}
 
+	// When rounds are exhausted but coding sessions are still active,
+	// auto-continue one extra round so the agent can check session status,
+	// then ask the user whether to keep watching.
+	if h.manager != nil && h.manager.HasActiveSessions() {
+		sendProgress("⏳ 推理轮次已用完，但编程会话仍在运行，正在检查状态…")
+
+		// Run one bonus iteration to let the agent observe current session state.
+		conversation = trimConversation(conversation, cfg.EffectiveContextTokens(), toolsTokenBudget)
+		bonusResp, err := h.doLLMRequest(cfg, conversation, tools, httpClient)
+		if err == nil && len(bonusResp.Choices) > 0 {
+			bc := bonusResp.Choices[0]
+			assistantMsg := map[string]interface{}{
+				"role":    "assistant",
+				"content": bc.Message.Content,
+			}
+			if len(bc.Message.ToolCalls) > 0 {
+				assistantMsg["tool_calls"] = bc.Message.ToolCalls
+			}
+			conversation = append(conversation, assistantMsg)
+			history = append(history, conversationEntry{
+				Role: "assistant", Content: bc.Message.Content, ToolCalls: bc.Message.ToolCalls,
+			})
+
+			// Execute any tool calls from the bonus round.
+			for _, tc := range bc.Message.ToolCalls {
+				toolOnProgress := onProgress
+				if !isDebug() {
+					toolOnProgress = nil
+				}
+				toolResult := h.executeTool(tc.Function.Name, tc.Function.Arguments, toolOnProgress)
+				truncated := truncateToolResultForTool(tc.Function.Name, toolResult)
+				conversation = append(conversation, map[string]interface{}{
+					"role":         "tool",
+					"tool_call_id": tc.ID,
+					"content":      truncated,
+				})
+				history = append(history, conversationEntry{
+					Role: "tool", Content: truncated, ToolCallID: tc.ID,
+				})
+			}
+		}
+
+		h.memory.save(userID, trimHistory(history))
+		return &IMAgentResponse{Text: "🔔 编程会话还在运行中。回复「继续」可以继续看护，回复其它内容正常对话。"}
+	}
+
 	h.memory.save(userID, trimHistory(history))
 	return &IMAgentResponse{Text: "(已达到最大推理轮次，请继续发送消息以完成任务)"}
 }

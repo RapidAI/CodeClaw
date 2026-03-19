@@ -57,7 +57,7 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
     const [providers, setProviders] = useState<LLMProvider[]>([]);
     const [currentName, setCurrentName] = useState(NONE_PROVIDER);
     const [loading, setLoading] = useState(false);
-    const [maxIter, setMaxIter] = useState(12);
+    const [maxIter, setMaxIter] = useState(0);
 
     // Dialog state — track selected provider by index (stable across renames)
     const [dlgOpen, setDlgOpen] = useState(false);
@@ -75,7 +75,7 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
             const data = await GetMaclawLLMProviders();
             if (data?.providers) { setProviders(data.providers); setCurrentName(data.current || NONE_PROVIDER); }
             const iter = await GetMaclawAgentMaxIterations();
-            setMaxIter(typeof iter === "number" ? iter : 12);
+            setMaxIter(typeof iter === "number" ? iter : 0);
         } catch { /* ignore */ }
         setLoading(false);
     }, []);

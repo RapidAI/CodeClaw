@@ -188,6 +188,7 @@ func (c *ClawNetClient) EnsureDaemon() error {
 // The optional emitProgress callback reports download progress to the caller.
 func (c *ClawNetClient) EnsureDaemonWithProgress(emitProgress func(stage string, pct int, msg string)) error {
 	// Check reachability without holding the lock (ping does a network call).
+	// If an existing daemon is already healthy, just reuse it — no new process.
 	if c.ping() {
 		c.mu.Lock()
 		c.running = true
@@ -217,6 +218,36 @@ func (c *ClawNetClient) EnsureDaemonWithProgress(emitProgress func(stage string,
 		bin = downloaded
 	}
 	c.binPath = bin
+
+	// --- Cleanup stale/zombie daemon processes before starting a new one ---
+	// If we reach here, ping failed — there may be orphaned clawnet processes
+	// holding the port (e.g. maclaw was force-killed without clean shutdown).
+	// Release the lock during cleanup to avoid blocking other goroutines.
+	c.mu.Unlock()
+	stopCmd := exec.Command(bin, "stop")
+	hideCommandWindow(stopCmd)
+	// Run with a timeout so a hung zombie can't block us forever.
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- stopCmd.Run() }()
+	select {
+	case <-stopDone:
+	case <-time.After(5 * time.Second):
+		if stopCmd.Process != nil {
+			_ = stopCmd.Process.Kill()
+		}
+	}
+	// Give the OS a moment to release the port.
+	time.Sleep(1 * time.Second)
+
+	// One more ping — the stop may have cleaned up a half-alive daemon that
+	// is now restarting itself, or another maclaw instance may have started one.
+	if c.ping() {
+		c.mu.Lock()
+		c.running = true
+		c.mu.Unlock()
+		return nil
+	}
+	c.mu.Lock()
 
 	cmd := exec.Command(bin, "start")
 	cmd.Stdout = nil
@@ -250,23 +281,34 @@ func (c *ClawNetClient) EnsureDaemonWithProgress(emitProgress func(stage string,
 func (c *ClawNetClient) StopDaemon() {
 	c.StopAutoUpdate()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Prefer using the CLI to stop the daemon gracefully.
 	bin := c.binPath
 	if bin == "" {
 		bin = c.findBinary()
 	}
+	daemon := c.daemon
+	c.daemon = nil
+	c.running = false
+	c.mu.Unlock()
+
+	// Run stop command outside the lock to avoid blocking other goroutines.
 	if bin != "" {
 		cmd := exec.Command(bin, "stop")
 		hideCommandWindow(cmd)
-		_ = cmd.Run()
-	} else if c.daemon != nil && c.daemon.Process != nil {
+		done := make(chan error, 1)
+		go func() { done <- cmd.Run() }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		}
+	} else if daemon != nil && daemon.Process != nil {
 		// Fallback: kill the launcher process directly.
-		_ = c.daemon.Process.Kill()
+		_ = daemon.Process.Kill()
 	}
-	c.daemon = nil
-	c.running = false
 }
 
 // IsRunning returns true if the daemon is reachable.

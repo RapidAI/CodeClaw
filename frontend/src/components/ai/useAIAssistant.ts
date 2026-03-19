@@ -73,6 +73,9 @@ export function useAIAssistant() {
         } catch (_) {
             // ignore clear errors
         }
+        // Reset sending state in case it was stuck (e.g. after max iterations).
+        sendingRef.current = false;
+        setSending(false);
         setMessages([]);
     }, []);
 

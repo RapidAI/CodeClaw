@@ -315,23 +315,16 @@ func (a *App) testAnthropicLLM(url, key, model string) (string, error) {
 	return "", fmt.Errorf("no text response from model")
 }
 
-// defaultAgentMaxIterations is the fallback when the user has not configured a custom value.
-const defaultAgentMaxIterations = 12
-
 // maxAgentIterationsCap is the hard safety ceiling for agent loops.
 const maxAgentIterationsCap = 300
 
 // GetMaclawAgentMaxIterations returns the configured max agent iterations.
 //   - positive value: use that as the limit
-//   - -1: unlimited (agent self-manages via set_max_iterations tool)
-//   - 0 or missing: not configured → return default (12)
+//   - -1 or 0 (not configured): unlimited → return 0
 func (a *App) GetMaclawAgentMaxIterations() int {
 	cfg, err := a.LoadConfig()
-	if err != nil || cfg.MaclawAgentMaxIterations == 0 {
-		return defaultAgentMaxIterations
-	}
-	if cfg.MaclawAgentMaxIterations < 0 {
-		return 0 // -1 stored → 0 returned → means "unlimited"
+	if err != nil || cfg.MaclawAgentMaxIterations <= 0 {
+		return 0 // not configured or explicitly unlimited → 0 means "unlimited"
 	}
 	return cfg.MaclawAgentMaxIterations
 }
@@ -339,7 +332,7 @@ func (a *App) GetMaclawAgentMaxIterations() int {
 // SetMaclawAgentMaxIterations persists the max agent iterations setting.
 //   - n > 0: fixed limit
 //   - n == 0: unlimited (stored as -1 internally)
-//   - n < 0: reset to default (stored as 0 internally, i.e. field absent)
+//   - n < 0: also unlimited (stored as 0 internally, treated same as not configured)
 func (a *App) SetMaclawAgentMaxIterations(n int) error {
 	cfg, err := a.LoadConfig()
 	if err != nil {

@@ -502,13 +502,22 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, sendMessage
                     </div>
                     <span style={titleTextStyle}>{title}</span>
                 </div>
-                <button
-                    onClick={clearHistory}
-                    style={{ ...actionBtnStyle, color: "#888" }}
-                    title={lang === "en" ? "Clear history" : "清空历史"}
-                >
-                    🗑️
-                </button>
+                <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
+                    <button
+                        onClick={clearHistory}
+                        style={{ ...actionBtnStyle, color: "#888" }}
+                        title={lang === "en" ? "Clear history" : "清空历史"}
+                    >
+                        🗑️
+                    </button>
+                    <button
+                        onClick={onClose}
+                        style={{ ...actionBtnStyle, color: "#ccc", fontSize: "14px", padding: "0 8px" }}
+                        title={lang === "en" ? "Close" : "关闭"}
+                    >
+                        ✕
+                    </button>
+                </div>
             </div>
 
             {/* ── Chat area ── */}
@@ -551,7 +560,6 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, sendMessage
                         }
                     }}
                     placeholder={placeholderText}
-                    disabled={sending}
                     autoCapitalize="off"
                     autoCorrect="off"
                     spellCheck={false}
