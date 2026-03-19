@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { ShowItemInFolder } from "../../../wailsjs/go/main/App";
 import type { ChatMessage } from "./useAIAssistant";
 
 interface AIAssistantPanelProps {
@@ -152,7 +153,8 @@ const responseBlockStyle: React.CSSProperties = {
 function renderInlineMarkdown(text: string): React.ReactNode[] {
     if (!text) return ["\u00A0"];
     const parts: React.ReactNode[] = [];
-    const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^\s*][^*]*?\*)|(\[[^\]]+\]\([^)]+\))/g;
+    // Match: inline code, bold, italic, markdown links, Windows paths (C:\...), Unix absolute paths (/home/... ~/...)
+    const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^\s*][^*]*?\*)|(\[[^\]]+\]\([^)]+\))|([A-Za-z]:\\[\w\\.\-]+(?:\.\w+)?)|((~|\/(?:Users|home|tmp|var|opt|etc|usr))[\w/.\-]+)/g;
     let lastIndex = 0;
     let match: RegExpExecArray | null;
     let idx = 0;
@@ -179,6 +181,17 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
             } else {
                 parts.push(m);
             }
+        } else if (match[5] || match[6]) {
+            // Local file path — render as clickable link
+            const filePath = m;
+            parts.push(
+                <a key={idx++}
+                   href="#"
+                   onClick={(e) => { e.preventDefault(); ShowItemInFolder(filePath); }}
+                   style={{ color: "#4ec9b0", textDecoration: "underline", cursor: "pointer" }}
+                   title={filePath}
+                >📂 {filePath}</a>
+            );
         }
         lastIndex = match.index + m.length;
     }
@@ -351,6 +364,23 @@ function renderMessage(msg: ChatMessage, executeAction: (cmd: string) => void): 
         case "assistant":
             return (
                 <div key={msg.id} style={responseBlockStyle}>
+                    {msg.thumbnailBase64 && msg.localFilePath && (
+                        <div style={{ margin: "4px 0 6px 0" }}>
+                            <a href="#" onClick={(e) => { e.preventDefault(); ShowItemInFolder(msg.localFilePath!); }}
+                               style={{ display: "inline-block", cursor: "pointer" }}
+                               title={msg.localFilePath}>
+                                <img
+                                    src={`data:image/png;base64,${msg.thumbnailBase64}`}
+                                    alt="screenshot"
+                                    style={{
+                                        maxWidth: "180px", maxHeight: "120px",
+                                        borderRadius: "4px", border: "1px solid #444",
+                                        objectFit: "contain",
+                                    }}
+                                />
+                            </a>
+                        </div>
+                    )}
                     {renderContentWithCodeBlocks(msg.content)}
                     {msg.fields && msg.fields.length > 0 && renderFields(msg.fields)}
                     {msg.actions && msg.actions.length > 0 && renderActions(msg.actions, executeAction)}

@@ -8,6 +8,8 @@ export interface ChatMessage {
     content: string;
     fields?: Array<{ label: string; value: string }>;
     actions?: Array<{ label: string; command: string; style: string }>;
+    localFilePath?: string;
+    thumbnailBase64?: string;
     timestamp: number;
 }
 
@@ -44,6 +46,8 @@ export function useAIAssistant() {
                 content: response.error || response.text || '',
                 fields: response.fields,
                 actions: response.actions,
+                localFilePath: response.local_file_path,
+                thumbnailBase64: response.thumbnail_base64,
                 timestamp: Date.now(),
             };
             setMessages(prev => [...prev, assistantMsg]);

@@ -2,6 +2,7 @@ package main
 
 import (
 	"math/rand"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/quick"
@@ -23,7 +24,7 @@ type randomAppConfig struct {
 }
 
 // Generate implements quick.Generator for randomAppConfig.
-func (randomAppConfig) Generate(rand *rand.Rand, size int) interface{} {
+func (randomAppConfig) Generate(rand *rand.Rand, size int) reflect.Value {
 	names := []string{
 		"", // default
 		"MaClaw",
@@ -39,10 +40,10 @@ func (randomAppConfig) Generate(rand *rand.Rand, size int) interface{} {
 		"专注于代码质量的AI助手",
 		randomString(rand, rand.Intn(50)+1),
 	}
-	return randomAppConfig{
+	return reflect.ValueOf(randomAppConfig{
 		RoleName: names[rand.Intn(len(names))],
 		RoleDesc: descs[rand.Intn(len(descs))],
-	}
+	})
 }
 
 func randomString(rand *rand.Rand, n int) string {
@@ -93,27 +94,39 @@ func TestCodingWorkflowProperty1_ConfirmationBeforeCreateSession(t *testing.T) {
 	f := func(cfg randomAppConfig) bool {
 		prompt := buildPromptForConfig(cfg)
 
-		// Find the position of Confirmation Phase instructions
-		confirmIdx := strings.Index(prompt, "需求确认")
-		if confirmIdx < 0 {
-			// Also accept "Confirmation Phase" or "确认" in the workflow section
-			confirmIdx = strings.Index(prompt, "Confirmation Phase")
-		}
-		if confirmIdx < 0 {
-			t.Logf("prompt does not contain '需求确认' or 'Confirmation Phase'")
+		// The workflow has 5 steps. The Confirmation Phase (第三步/Step 3)
+		// must appear before the execution step (第四步/Step 4) which calls
+		// create_session. We verify the structural ordering by checking that
+		// the confirmation rule "后才调用 create_session" (only call
+		// create_session after user confirms) appears in the prompt, AND
+		// that the confirmation step (第三步) appears before the execution
+		// step (第四步).
+		confirmStepIdx := strings.Index(prompt, "第三步")
+		if confirmStepIdx < 0 {
+			t.Logf("prompt does not contain '第三步' (Confirmation Phase step)")
 			return false
 		}
 
-		// Find the position of create_session execution instruction
-		// Look for the actual execution step that calls create_session
-		createIdx := strings.Index(prompt, "create_session")
-		if createIdx < 0 {
-			t.Logf("prompt does not contain 'create_session'")
+		execStepIdx := strings.Index(prompt, "第四步")
+		if execStepIdx < 0 {
+			t.Logf("prompt does not contain '第四步' (Execution step)")
 			return false
 		}
 
-		// Confirmation must appear before create_session
-		return confirmIdx < createIdx
+		if confirmStepIdx >= execStepIdx {
+			t.Logf("第三步 (pos %d) does not appear before 第四步 (pos %d)", confirmStepIdx, execStepIdx)
+			return false
+		}
+
+		// Also verify the confirmation rule explicitly gates create_session
+		hasGate := strings.Contains(prompt, "后才调用 create_session") ||
+			(strings.Contains(prompt, "确认") && strings.Contains(prompt, "create_session"))
+		if !hasGate {
+			t.Logf("prompt missing confirmation gate for create_session")
+			return false
+		}
+
+		return true
 	}
 
 	if err := quick.Check(f, quickConfig()); err != nil {

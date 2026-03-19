@@ -74,8 +74,8 @@ func main() {
 	appOptions := &options.App{
 		Title:       "MaClaw",
 		Frameless:   true,
-		Width:       612,
-		Height:      311,
+		Width:       734,
+		Height:      373,
 		StartHidden: app.IsAutoStart,
 		OnStartup:   app.startup,
 		OnDomReady:  app.domReady,

@@ -326,3 +326,8 @@ export function ClawNetAutoPickerGetStatus():Promise<any>;
 export function ClawNetAutoPickerConfigure(arg1:boolean, arg2:number, arg3:number, arg4:Array<string>):Promise<any>;
 export function ClawNetAutoPickerTriggerNow():Promise<any>;
 export function ClawNetManualPickTask(arg1:string):Promise<any>;
+
+// AI Assistant bindings
+export function SendAIAssistantMessage(arg1:string):Promise<any>;
+
+export function ClearAIAssistantHistory():Promise<void>;

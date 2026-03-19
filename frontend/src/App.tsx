@@ -1818,7 +1818,7 @@ function App() {
             }
         };
         const doneHandler = () => {
-            ResizeWindow(657, 440);
+            ResizeWindow(788, 528);
             setIsLoading(false);
             setIsManualCheck(false);
         };
@@ -3134,7 +3134,17 @@ ${instruction}`;
                         }}
                         title={lang === 'zh-Hans' ? 'AI 助手' : lang === 'zh-Hant' ? 'AI 助手' : 'AI Asst'}
                     >
-                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🦞</span>
+                        <span className="sidebar-icon" style={{
+                            margin: 0, fontSize: '1.2rem',
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            width: '2rem', height: '2rem',
+                            border: '2px solid #e74c3c',
+                            borderRadius: '50%',
+                            boxShadow: showAIPanel
+                                ? '0 0 10px rgba(231,76,60,0.6), 0 0 20px rgba(231,76,60,0.3)'
+                                : '0 0 6px rgba(231,76,60,0.4), 0 0 12px rgba(231,76,60,0.15)',
+                            transition: 'box-shadow 0.2s ease'
+                        }}>🦞</span>
                         <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>
                             {lang === 'zh-Hans' ? 'AI 助手' : lang === 'zh-Hant' ? 'AI 助手' : 'AI Asst'}
                         </span>
@@ -3265,58 +3275,58 @@ ${instruction}`;
                     </div>
                     <div style={{ width: '80%', height: '1px', background: 'linear-gradient(90deg, transparent, #d4d4f7, transparent)', margin: '0 auto 8px', flexShrink: 0 }}></div>
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                    <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '4px' }}>
+                    <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
                         <div className={`sidebar-item ${navTab === 'claude' ? 'active' : ''}`} onClick={() => switchTool('claude')}>
                             <span className="sidebar-icon">
-                                <img src={claudecodeIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="Claude" />
+                                <img src={claudecodeIcon} style={{ width: '1.4em', height: '1.4em', verticalAlign: 'middle' }} alt="Claude" />
                             </span> <span>Claude Code</span>
                         </div>
                         {config?.show_gemini !== false && (
                             <div className={`sidebar-item ${navTab === 'gemini' ? 'active' : ''}`} onClick={() => switchTool('gemini')}>
                                 <span className="sidebar-icon">
-                                    <img src={geminiIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="Gemini" />
+                                    <img src={geminiIcon} style={{ width: '1.4em', height: '1.4em', verticalAlign: 'middle' }} alt="Gemini" />
                                 </span> <span>Gemini CLI</span>
                             </div>
                         )}
                         {config?.show_codex !== false && (
                             <div className={`sidebar-item ${navTab === 'codex' ? 'active' : ''}`} onClick={() => switchTool('codex')}>
                                 <span className="sidebar-icon">
-                                    <img src={codexIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="Codex" />
+                                    <img src={codexIcon} style={{ width: '1.4em', height: '1.4em', verticalAlign: 'middle' }} alt="Codex" />
                                 </span> <span>CodeX</span>
                             </div>
                         )}
                         {config?.show_opencode !== false && (
                             <div className={`sidebar-item ${navTab === 'opencode' ? 'active' : ''}`} onClick={() => switchTool('opencode')}>
                                 <span className="sidebar-icon">
-                                    <img src={opencodeIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="OpenCode" />
+                                    <img src={opencodeIcon} style={{ width: '1.4em', height: '1.4em', verticalAlign: 'middle' }} alt="OpenCode" />
                                 </span> <span>OpenCode</span>
                             </div>
                         )}
                         {config?.show_codebuddy !== false && (
                             <div className={`sidebar-item ${navTab === 'codebuddy' ? 'active' : ''}`} onClick={() => switchTool('codebuddy')}>
                                 <span className="sidebar-icon">
-                                    <img src={codebuddyIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="CodeBuddy" />
+                                    <img src={codebuddyIcon} style={{ width: '1.4em', height: '1.4em', verticalAlign: 'middle' }} alt="CodeBuddy" />
                                 </span> <span>CodeBuddy</span>
                             </div>
                         )}
                         {!isWindows && config?.show_cursor !== false && (
                             <div className={`sidebar-item ${navTab === 'cursor' ? 'active' : ''}`} onClick={() => switchTool('cursor')}>
                                 <span className="sidebar-icon">
-                                    <img src={cursorIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="Cursor" />
+                                    <img src={cursorIcon} style={{ width: '1.4em', height: '1.4em', verticalAlign: 'middle' }} alt="Cursor" />
                                 </span> <span>Cursor Agent</span>
                             </div>
                         )}
                         {config?.show_iflow !== false && (
                             <div className={`sidebar-item ${navTab === 'iflow' ? 'active' : ''}`} onClick={() => switchTool('iflow')}>
                                 <span className="sidebar-icon">
-                                    <img src={iflowIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="iFlow" />
+                                    <img src={iflowIcon} style={{ width: '1.4em', height: '1.4em', verticalAlign: 'middle' }} alt="iFlow" />
                                 </span> <span>iFlow CLI</span>
                             </div>
                         )}
                         {config?.show_kilo !== false && (
                             <div className={`sidebar-item ${navTab === 'kilo' ? 'active' : ''}`} onClick={() => switchTool('kilo')}>
                                 <span className="sidebar-icon">
-                                    <img src={kiloIcon} style={{ width: '1.1em', height: '1.1em', verticalAlign: 'middle' }} alt="Kilo Code" />
+                                    <img src={kiloIcon} style={{ width: '1.4em', height: '1.4em', verticalAlign: 'middle' }} alt="Kilo Code" />
                                 </span> <span>Kilo Code</span>
                             </div>
                         )}

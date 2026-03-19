@@ -712,3 +712,12 @@ export function ClawNetAutoPickerTriggerNow() {
 export function ClawNetManualPickTask(arg1) {
   return window['go']['main']['App']['ClawNetManualPickTask'](arg1);
 }
+
+// AI Assistant bindings
+export function SendAIAssistantMessage(arg1) {
+  return window['go']['main']['App']['SendAIAssistantMessage'](arg1);
+}
+
+export function ClearAIAssistantHistory() {
+  return window['go']['main']['App']['ClearAIAssistantHistory']();
+}

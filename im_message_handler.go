@@ -34,14 +34,16 @@ type IMUserMessage struct {
 
 // IMAgentResponse is the structured reply sent back to Hub.
 type IMAgentResponse struct {
-	Text         string             `json:"text"`
-	Fields       []IMResponseField  `json:"fields,omitempty"`
-	Actions      []IMResponseAction `json:"actions,omitempty"`
-	ImageKey     string             `json:"image_key,omitempty"`
-	FileData     string             `json:"file_data,omitempty"`
-	FileName     string             `json:"file_name,omitempty"`
-	FileMimeType string             `json:"file_mime_type,omitempty"`
-	Error        string             `json:"error,omitempty"`
+	Text            string             `json:"text"`
+	Fields          []IMResponseField  `json:"fields,omitempty"`
+	Actions         []IMResponseAction `json:"actions,omitempty"`
+	ImageKey        string             `json:"image_key,omitempty"`
+	FileData        string             `json:"file_data,omitempty"`
+	FileName        string             `json:"file_name,omitempty"`
+	FileMimeType    string             `json:"file_mime_type,omitempty"`
+	LocalFilePath   string             `json:"local_file_path,omitempty"`
+	ThumbnailBase64 string             `json:"thumbnail_base64,omitempty"`
+	Error           string             `json:"error,omitempty"`
 }
 
 // IMResponseField is a key-value field in the agent response.
@@ -827,7 +829,7 @@ func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProg
 	} else {
 		systemPrompt = h.buildSystemPrompt()
 	}
-	return h.runAgentLoop(msg.UserID, systemPrompt, history, msg.Text, onProgress, msg.MinIterations, httpClient)
+	return h.runAgentLoop(msg.UserID, systemPrompt, history, msg.Text, onProgress, msg.MinIterations, httpClient, msg.Platform)
 }
 
 // handleExitCommand terminates all active sessions, resets conversation
@@ -1256,7 +1258,7 @@ type anthropicContentBlock struct {
 // Agentic Loop — multi-round tool calling
 // ---------------------------------------------------------------------------
 
-func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []conversationEntry, userText string, onProgress ProgressCallback, minIterations int, httpClient *http.Client) (result *IMAgentResponse) {
+func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []conversationEntry, userText string, onProgress ProgressCallback, minIterations int, httpClient *http.Client, platform string) (result *IMAgentResponse) {
 	// panic recovery — 防止工具执行异常导致 goroutine 崩溃
 	defer func() {
 		if r := recover(); r != nil {
@@ -1480,6 +1482,26 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 		// If a direct screenshot was captured, return it immediately as an image response.
 		if pendingImageKey != "" {
 			h.memory.save(userID, trimHistory(history))
+			// Desktop platform: save to local file and return path + thumbnail
+			if platform == "desktop" {
+				filePath, err := h.saveScreenshotToFile(pendingImageKey)
+				if err != nil {
+					return &IMAgentResponse{Text: fmt.Sprintf("📷 截图已捕获，但保存文件失败: %s", err.Error())}
+				}
+				// Generate a small thumbnail (reuse the base64 data, frontend will size it)
+				thumb := pendingImageKey
+				// Cap thumbnail data to keep the JSON response lean
+				if len(thumb) > 50000 {
+					if downsized, err := downsizeScreenshotBase64(thumb, 10000); err == nil {
+						thumb = downsized
+					}
+				}
+				return &IMAgentResponse{
+					Text:            "📷 截图已保存",
+					LocalFilePath:   filePath,
+					ThumbnailBase64: thumb,
+				}
+			}
 			return &IMAgentResponse{
 				Text:     "",
 				ImageKey: pendingImageKey,
@@ -1496,6 +1518,17 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 		// If a file was prepared, return it immediately for IM delivery.
 		if pendingFileData != "" {
 			h.memory.save(userID, trimHistory(history))
+			// Desktop platform: save file locally and return path
+			if platform == "desktop" {
+				filePath, err := h.saveFileDataToLocal(pendingFileName, pendingFileData)
+				if err != nil {
+					return &IMAgentResponse{Text: fmt.Sprintf("文件已准备，但保存失败: %s", err.Error())}
+				}
+				return &IMAgentResponse{
+					Text:          fmt.Sprintf("📄 文件已保存: %s", filePath),
+					LocalFilePath: filePath,
+				}
+			}
 			return &IMAgentResponse{
 				Text:         "",
 				FileData:     pendingFileData,
@@ -1507,6 +1540,59 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 
 	h.memory.save(userID, trimHistory(history))
 	return &IMAgentResponse{Text: "(已达到最大推理轮次，请继续发送消息以完成任务)"}
+}
+
+// saveScreenshotToFile saves base64-encoded PNG data to a local file under
+// ~/.cceasy/screenshots/ and returns the absolute file path.
+func (h *IMMessageHandler) saveScreenshotToFile(base64Data string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	dir := filepath.Join(home, ".cceasy", "screenshots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("cannot create screenshots directory: %w", err)
+	}
+	fileName := fmt.Sprintf("screenshot_%s_%d.png", time.Now().Format("20060102_150405"), time.Now().UnixMilli()%1000)
+	filePath := filepath.Join(dir, fileName)
+	decoded, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("base64 decode failed: %w", err)
+	}
+	if err := os.WriteFile(filePath, decoded, 0o644); err != nil {
+		return "", fmt.Errorf("write file failed: %w", err)
+	}
+	return filePath, nil
+}
+
+// saveFileDataToLocal saves base64-encoded file data to ~/.cceasy/files/
+// and returns the absolute file path.
+func (h *IMMessageHandler) saveFileDataToLocal(name, base64Data string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	dir := filepath.Join(home, ".cceasy", "files")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("cannot create files directory: %w", err)
+	}
+	if name == "" {
+		name = fmt.Sprintf("file_%s_%d", time.Now().Format("20060102_150405"), time.Now().UnixMilli()%1000)
+	}
+	// Sanitize: use only the base name to prevent path traversal (e.g. "../../etc/passwd")
+	name = filepath.Base(name)
+	if name == "." || name == ".." || name == string(filepath.Separator) {
+		name = fmt.Sprintf("file_%s_%d", time.Now().Format("20060102_150405"), time.Now().UnixMilli()%1000)
+	}
+	filePath := filepath.Join(dir, name)
+	decoded, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("base64 decode failed: %w", err)
+	}
+	if err := os.WriteFile(filePath, decoded, 0o644); err != nil {
+		return "", fmt.Errorf("write file failed: %w", err)
+	}
+	return filePath, nil
 }
 
 // ---------------------------------------------------------------------------
