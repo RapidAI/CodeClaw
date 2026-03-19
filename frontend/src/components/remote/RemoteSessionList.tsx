@@ -1,13 +1,27 @@
-import React, { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import React, { useMemo, useState, useEffect, useCallback, type Dispatch, type SetStateAction } from "react";
 import { colors, radius } from "./styles";
 import { TERMINAL_SESSION_STATUSES, type RemoteSessionView } from "./types";
 import { RemoteSessionConsole } from "./RemoteSessionConsole";
+import { ListBackgroundLoops, StopBackgroundLoop, ContinueBackgroundLoop } from "../../../wailsjs/go/main/App";
+import { EventsOn, EventsOff } from "../../../wailsjs/runtime";
 
 // Strip ANSI escape sequences and non-printable control characters from terminal output
 const ansiRe = /\x1b(?:\[[0-9;?]*[a-zA-Z~^$]|\].*?(?:\x07|\x1b\\)|[()#][A-Z0-9]?|[a-zA-Z])/g;
 const controlRe = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
 const multiSpaceRe = / {2,}/g;
 const stripAnsi = (s: string): string => s.replace(ansiRe, " ").replace(controlRe, "").replace(multiSpaceRe, " ");
+
+type BackgroundLoopView = {
+    id: string;
+    slot_kind: string;   // "coding", "scheduled", "auto"
+    description: string;
+    iteration: number;
+    max_iter: number;
+    status: string;      // "running", "paused", "completed", "failed"
+    session_id: string;
+    started_at: string;
+    queued_count: number;
+};
 
 type Props = {
     remoteSessions: RemoteSessionView[];
@@ -35,6 +49,7 @@ const getStatusBadge = (status?: string): { label: string; bg: string; color: st
     const s = String(status || "").toLowerCase();
     if (s === "error" || s === "failed") return { label: status || "error", bg: colors.dangerBg, color: "#9b2c2c" };
     if (s === "waiting_input") return { label: "等待输入", bg: colors.warningBg, color: colors.warning };
+    if (s === "paused") return { label: "已暂停", bg: colors.warningBg, color: colors.warning };
     if (terminalStatuses.has(s)) return { label: status || "stopped", bg: colors.bg, color: colors.textSecondary };
     return { label: status || "running", bg: "#eef2ff", color: "#4338ca" };
 };
@@ -44,6 +59,13 @@ const getLaunchSourceTag = (source?: string): { label: string; bg: string; color
     if (source === "mobile") return { label: "📱 手机", bg: colors.successBg, color: "#276749" };
     if (source === "handoff") return { label: "🔀 转远程", bg: "#f3f0ff", color: "#553c9a" };
     return { label: "☁️ 远程", bg: colors.bg, color: colors.textSecondary };
+};
+
+const getSlotKindTag = (kind: string): { icon: string; label: string } => {
+    if (kind === "coding") return { icon: "🤖", label: "编程" };
+    if (kind === "scheduled") return { icon: "⏰", label: "定时" };
+    if (kind === "auto") return { icon: "🌐", label: "自动" };
+    return { icon: "⚙️", label: kind };
 };
 
 const isAISession = (s: RemoteSessionView) => (s.launch_source || "") === "ai";
@@ -64,22 +86,45 @@ export function RemoteSessionList(props: Props) {
         formatText,
     } = props;
 
-    const [sessionTab, setSessionTab] = useState<"human" | "ai">("human");
+    const [sessionTab, setSessionTab] = useState<"remote" | "background">("remote");
     const [showHistory, setShowHistory] = useState(false);
     const [hiddenSessionIds, setHiddenSessionIds] = useState<string[]>([]);
     const [consoleSessionId, setConsoleSessionId] = useState<string | null>(null);
+    const [consoleReadOnly, setConsoleReadOnly] = useState(false);
     const [previewSessionIds, setPreviewSessionIds] = useState<Set<string>>(new Set());
+    const [bgLoops, setBgLoops] = useState<BackgroundLoopView[]>([]);
 
-    const humanSessions = useMemo(
+    // Fetch background loops
+    const refreshBgLoops = useCallback(async () => {
+        try {
+            const loops = await ListBackgroundLoops();
+            setBgLoops(loops || []);
+        } catch { setBgLoops([]); }
+    }, []);
+
+    // EventsOn listener + 5s polling fallback
+    useEffect(() => {
+        refreshBgLoops();
+        EventsOn("background-loops-changed", refreshBgLoops);
+        const timer = setInterval(refreshBgLoops, 5000);
+        return () => {
+            EventsOff("background-loops-changed");
+            clearInterval(timer);
+        };
+    }, [refreshBgLoops]);
+
+    // Remote sessions = non-AI sessions
+    const remoteSess = useMemo(
         () => remoteSessions.filter((s) => !isAISession(s) && !hiddenSessionIds.includes(s.id)),
         [remoteSessions, hiddenSessionIds],
     );
+    // AI sessions for the background tab
     const aiSessions = useMemo(
         () => remoteSessions.filter((s) => isAISession(s) && !hiddenSessionIds.includes(s.id)),
         [remoteSessions, hiddenSessionIds],
     );
 
-    const visibleSessions = sessionTab === "ai" ? aiSessions : humanSessions;
+    const visibleSessions = sessionTab === "background" ? aiSessions : remoteSess;
 
     const liveSessions = visibleSessions.filter((s) => {
         const st = String(s.status || s.summary?.status || "").toLowerCase();
@@ -120,6 +165,31 @@ export function RemoteSessionList(props: Props) {
         } catch (err) {
             showToastMessage(formatText("remoteInterruptFailed", { error: String(err) }), 4000);
         }
+    };
+
+    const handleStopLoop = async (loopID: string) => {
+        try {
+            await StopBackgroundLoop(loopID);
+            showToastMessage("后台任务已停止", 2500);
+            refreshBgLoops();
+        } catch (err) {
+            showToastMessage(`停止失败: ${String(err)}`, 4000);
+        }
+    };
+
+    const handleContinueLoop = async (loopID: string) => {
+        try {
+            await ContinueBackgroundLoop(loopID, 20);
+            showToastMessage("已续命 +20 轮", 2500);
+            refreshBgLoops();
+        } catch (err) {
+            showToastMessage(`续命失败: ${String(err)}`, 4000);
+        }
+    };
+
+    const openConsole = (sessionId: string, readOnly: boolean) => {
+        setConsoleSessionId(sessionId);
+        setConsoleReadOnly(readOnly);
     };
 
     const thStyle: React.CSSProperties = {
@@ -235,7 +305,7 @@ export function RemoteSessionList(props: Props) {
                                                 <button
                                                     style={{ ...iconBtnStyle, color: colors.primary }}
                                                     title={isAITab ? "查看终端" : "打开控制台"}
-                                                    onClick={() => setConsoleSessionId(session.id)}
+                                                    onClick={() => openConsole(session.id, isAITab)}
                                                 >
                                                     🖥
                                                 </button>
@@ -271,7 +341,7 @@ export function RemoteSessionList(props: Props) {
                                     </div>
                                 </td>
                             </tr>
-                            {/* Inline preview row — click to open fullscreen console */}
+                            {/* Inline preview row */}
                             {isPreviewOpen && (
                                 <tr>
                                     <td
@@ -287,12 +357,11 @@ export function RemoteSessionList(props: Props) {
                                                 background: "#1e1e1e",
                                                 transition: "background 0.15s",
                                             }}
-                                            onClick={() => setConsoleSessionId(session.id)}
+                                            onClick={() => openConsole(session.id, isAITab)}
                                             title="点击打开全屏终端"
                                             onMouseEnter={(e) => { e.currentTarget.style.background = "#252526"; }}
                                             onMouseLeave={(e) => { e.currentTarget.style.background = "#1e1e1e"; }}
                                         >
-                                            {/* Mini terminal title bar */}
                                             <div style={{
                                                 display: "flex", alignItems: "center", gap: "8px",
                                                 padding: "4px 12px", background: "#2d2d2d",
@@ -308,7 +377,6 @@ export function RemoteSessionList(props: Props) {
                                                     ⛶ 点击全屏
                                                 </span>
                                             </div>
-                                            {/* Preview body (max 12 lines) */}
                                             <div style={{
                                                 padding: "6px 12px",
                                                 maxHeight: "180px",
@@ -339,9 +407,103 @@ export function RemoteSessionList(props: Props) {
         </table>
     );
 
-    const isAITab = sessionTab === "ai";
-    const humanLiveCount = useMemo(() => humanSessions.filter(isLiveSession).length, [humanSessions]);
-    const aiLiveCount = useMemo(() => aiSessions.filter(isLiveSession).length, [aiSessions]);
+    const renderAgentLoops = () => {
+        if (bgLoops.length === 0) return null;
+        return (
+            <div style={{ marginBottom: "8px" }}>
+                <div style={{ padding: "8px 14px 4px", fontSize: "0.72rem", color: colors.textMuted, fontWeight: 600 }}>
+                    Agent Loop 任务
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                    <colgroup>
+                        <col style={{ width: "12%" }} />
+                        <col style={{ width: "30%" }} />
+                        <col style={{ width: "18%" }} />
+                        <col style={{ width: "14%" }} />
+                        <col style={{ width: "26%" }} />
+                    </colgroup>
+                    <thead>
+                        <tr style={{ background: colors.bg }}>
+                            <th style={thStyle}>类型</th>
+                            <th style={thStyle}>描述</th>
+                            <th style={thStyle}>轮次</th>
+                            <th style={thStyle}>状态</th>
+                            <th style={{ ...thStyle, textAlign: "right" }}>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {bgLoops.map((loop) => {
+                            const tag = getSlotKindTag(loop.slot_kind);
+                            const statusInfo = getStatusBadge(loop.status);
+                            const isPaused = loop.status === "paused";
+                            const hasSess = loop.session_id && loop.session_id.length > 0;
+                            return (
+                                <tr key={loop.id} style={{ background: colors.surface, transition: "background 0.15s" }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.background = colors.accentBg; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.background = colors.surface; }}
+                                >
+                                    <td style={tdStyle}>
+                                        <span style={badgeStyle("#f0e6ff", "#6b21a8")}>{tag.icon} {tag.label}</span>
+                                    </td>
+                                    <td style={tdStyle}>
+                                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={loop.description}>
+                                            {loop.description || loop.id}
+                                        </div>
+                                        {loop.queued_count > 0 && (
+                                            <div style={{ fontSize: "0.65rem", color: colors.textMuted }}>
+                                                排队: {loop.queued_count}
+                                            </div>
+                                        )}
+                                    </td>
+                                    <td style={tdStyle}>
+                                        <span style={{ fontSize: "0.75rem", fontFamily: "monospace" }}>
+                                            {loop.iteration}/{loop.max_iter}
+                                        </span>
+                                    </td>
+                                    <td style={tdStyle}>
+                                        <span style={badgeStyle(statusInfo.bg, statusInfo.color)}>{statusInfo.label}</span>
+                                    </td>
+                                    <td style={{ ...tdStyle, textAlign: "right" }}>
+                                        <div style={{ display: "inline-flex", gap: "4px", alignItems: "center", flexWrap: "nowrap" }}>
+                                            {hasSess && (
+                                                <button
+                                                    style={{ ...iconBtnStyle, color: colors.primary }}
+                                                    title="查看终端"
+                                                    onClick={() => openConsole(loop.session_id, true)}
+                                                >
+                                                    🖥
+                                                </button>
+                                            )}
+                                            {isPaused && (
+                                                <button
+                                                    style={{ ...iconBtnStyle, color: "#16a34a", fontWeight: 600, fontSize: "0.72rem" }}
+                                                    title="续命 +20 轮"
+                                                    onClick={() => handleContinueLoop(loop.id)}
+                                                >
+                                                    ▶ 续命
+                                                </button>
+                                            )}
+                                            <button
+                                                style={{ ...iconBtnStyle, color: colors.danger }}
+                                                title="停止"
+                                                onClick={() => handleStopLoop(loop.id)}
+                                            >
+                                                ⏹
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        );
+    };
+
+    const isBackgroundTab = sessionTab === "background";
+    const remoteLiveCount = useMemo(() => remoteSess.filter(isLiveSession).length, [remoteSess]);
+    const bgTotalCount = bgLoops.filter(l => l.status === "running" || l.status === "paused").length + aiSessions.filter(isLiveSession).length;
 
     return (
         <div style={{ border: `1px solid ${colors.border}`, borderRadius: radius.lg, background: colors.surface, overflow: "hidden" }}>
@@ -349,49 +511,49 @@ export function RemoteSessionList(props: Props) {
             <div style={{ padding: "12px 14px 0" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "0", borderBottom: `1px solid ${colors.border}` }}>
                     <button
-                        onClick={() => { setSessionTab("human"); setShowHistory(false); }}
+                        onClick={() => { setSessionTab("remote"); setShowHistory(false); }}
                         style={{
                             border: "none",
-                            background: sessionTab === "human" ? colors.surface : "transparent",
-                            borderBottom: sessionTab === "human" ? `2px solid ${colors.primary}` : "2px solid transparent",
+                            background: sessionTab === "remote" ? colors.surface : "transparent",
+                            borderBottom: sessionTab === "remote" ? `2px solid ${colors.primary}` : "2px solid transparent",
                             padding: "8px 16px",
                             fontSize: "0.8rem",
-                            fontWeight: sessionTab === "human" ? 700 : 500,
-                            color: sessionTab === "human" ? colors.primary : colors.textMuted,
+                            fontWeight: sessionTab === "remote" ? 700 : 500,
+                            color: sessionTab === "remote" ? colors.primary : colors.textMuted,
                             cursor: "pointer",
                             transition: "all 0.15s",
                         }}
                     >
-                        👤 人类
-                        {humanLiveCount > 0 && (
+                        ☁️ 远程
+                        {remoteLiveCount > 0 && (
                             <span style={{ marginLeft: "6px", fontSize: "0.68rem", background: "#eef2ff", color: "#4338ca", padding: "1px 6px", borderRadius: "999px" }}>
-                                {humanLiveCount}
+                                {remoteLiveCount}
                             </span>
                         )}
                     </button>
                     <button
-                        onClick={() => { setSessionTab("ai"); setShowHistory(false); }}
+                        onClick={() => { setSessionTab("background"); setShowHistory(false); }}
                         style={{
                             border: "none",
-                            background: sessionTab === "ai" ? colors.surface : "transparent",
-                            borderBottom: sessionTab === "ai" ? `2px solid #7c3aed` : "2px solid transparent",
+                            background: sessionTab === "background" ? colors.surface : "transparent",
+                            borderBottom: sessionTab === "background" ? `2px solid #7c3aed` : "2px solid transparent",
                             padding: "8px 16px",
                             fontSize: "0.8rem",
-                            fontWeight: sessionTab === "ai" ? 700 : 500,
-                            color: sessionTab === "ai" ? "#7c3aed" : colors.textMuted,
+                            fontWeight: sessionTab === "background" ? 700 : 500,
+                            color: sessionTab === "background" ? "#7c3aed" : colors.textMuted,
                             cursor: "pointer",
                             transition: "all 0.15s",
                         }}
                     >
-                        🤖 AI
-                        {aiLiveCount > 0 && (
+                        ⚙️ 后台
+                        {bgTotalCount > 0 && (
                             <span style={{ marginLeft: "6px", fontSize: "0.68rem", background: "#f0e6ff", color: "#6b21a8", padding: "1px 6px", borderRadius: "999px" }}>
-                                {aiLiveCount}
+                                {bgTotalCount}
                             </span>
                         )}
                     </button>
                     <div style={{ flex: 1 }} />
-                    {historySessions.length > 0 && (
+                    {!isBackgroundTab && historySessions.length > 0 && (
                         <button
                             className="btn-link"
                             style={{ fontSize: "0.72rem", marginBottom: "4px" }}
@@ -403,37 +565,57 @@ export function RemoteSessionList(props: Props) {
                 </div>
             </div>
 
-            {/* Subtitle for AI tab */}
-            {isAITab && (
-                <div style={{ padding: "6px 14px 0", fontSize: "0.7rem", color: colors.textMuted }}>
-                    MaClaw 创建的编程工具进程 — 仅监控，不可操作
-                </div>
+            {/* Remote tab content */}
+            {!isBackgroundTab && (
+                <>
+                    {liveSessions.length === 0 && !showHistory ? (
+                        <div style={{ padding: "20px 14px", textAlign: "center", fontSize: "0.76rem", color: colors.textMuted }}>
+                            当前没有运行中的远程实例
+                        </div>
+                    ) : (
+                        liveSessions.length > 0 && renderTable(liveSessions, false, false)
+                    )}
+                    {showHistory && historySessions.length > 0 && (
+                        <div style={{ borderTop: `1px solid ${colors.border}` }}>
+                            <div style={{ padding: "8px 14px 4px", fontSize: "0.72rem", color: colors.textMuted, fontWeight: 500 }}>
+                                已结束
+                            </div>
+                            {renderTable(historySessions, true, false)}
+                        </div>
+                    )}
+                </>
             )}
 
-            {/* Live sessions */}
-            {liveSessions.length === 0 && !showHistory ? (
-                <div style={{ padding: "20px 14px", textAlign: "center", fontSize: "0.76rem", color: colors.textMuted }}>
-                    {isAITab ? "当前没有运行中的 AI 进程" : "当前没有运行中的远程实例"}
-                </div>
-            ) : (
-                liveSessions.length > 0 && renderTable(liveSessions, false, isAITab)
-            )}
+            {/* Background tab content */}
+            {isBackgroundTab && (
+                <>
+                    {/* Agent Loop section */}
+                    {renderAgentLoops()}
 
-            {/* History sessions */}
-            {showHistory && historySessions.length > 0 && (
-                <div style={{ borderTop: `1px solid ${colors.border}` }}>
-                    <div style={{ padding: "8px 14px 4px", fontSize: "0.72rem", color: colors.textMuted, fontWeight: 500 }}>
-                        已结束
+                    {/* AI coding sessions section */}
+                    <div>
+                        <div style={{ padding: "8px 14px 4px", fontSize: "0.72rem", color: colors.textMuted, fontWeight: 600 }}>
+                            AI 编程会话
+                        </div>
+                        {aiSessions.length === 0 && bgLoops.length === 0 ? (
+                            <div style={{ padding: "20px 14px", textAlign: "center", fontSize: "0.76rem", color: colors.textMuted }}>
+                                当前没有运行中的后台任务
+                            </div>
+                        ) : aiSessions.length === 0 ? (
+                            <div style={{ padding: "10px 14px", textAlign: "center", fontSize: "0.74rem", color: colors.textMuted }}>
+                                暂无 AI 编程会话
+                            </div>
+                        ) : (
+                            renderTable(aiSessions, false, true)
+                        )}
                     </div>
-                    {renderTable(historySessions, true, isAITab)}
-                </div>
+                </>
             )}
 
             {/* Console modal */}
             {consoleSessionId && (() => {
                 const session = remoteSessions.find((s) => s.id === consoleSessionId);
                 if (!session) return null;
-                const isAIConsole = isAISession(session);
                 return (
                     <RemoteSessionConsole
                         session={session}
@@ -442,7 +624,7 @@ export function RemoteSessionList(props: Props) {
                         killRemoteSession={killRemoteSession}
                         refreshSessionsOnly={refreshSessionsOnly}
                         onClose={() => setConsoleSessionId(null)}
-                        readOnly={isAIConsole}
+                        readOnly={consoleReadOnly || isAISession(session)}
                     />
                 );
             })()}

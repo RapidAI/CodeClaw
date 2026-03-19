@@ -331,3 +331,10 @@ export function ClawNetManualPickTask(arg1:string):Promise<any>;
 export function SendAIAssistantMessage(arg1:string):Promise<any>;
 
 export function ClearAIAssistantHistory():Promise<void>;
+
+// Background Loop bindings
+export function ListBackgroundLoops():Promise<Array<any>>;
+
+export function StopBackgroundLoop(arg1:string):Promise<void>;
+
+export function ContinueBackgroundLoop(arg1:string, arg2:number):Promise<void>;

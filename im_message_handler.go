@@ -25,11 +25,12 @@ import (
 
 // IMUserMessage is the payload of an "im.user_message" from Hub.
 type IMUserMessage struct {
-	UserID        string `json:"user_id"`
-	Platform      string `json:"platform"`
-	Text          string `json:"text"`
-	MinIterations int    `json:"min_iterations,omitempty"` // floor for agent loop iterations (used by scheduled tasks)
-	IsBackground  bool   `json:"is_background,omitempty"`  // true for scheduled tasks / auto-picked tasks (uses separate HTTP client)
+	UserID            string   `json:"user_id"`
+	Platform          string   `json:"platform"`
+	Text              string   `json:"text"`
+	MinIterations     int      `json:"min_iterations,omitempty"`      // floor for agent loop iterations (used by scheduled tasks)
+	IsBackground      bool     `json:"is_background,omitempty"`       // true for scheduled tasks / auto-picked tasks (uses separate HTTP client)
+	BackgroundSlotKind string  `json:"background_slot_kind,omitempty"` // "coding", "scheduled", "auto" — determines concurrency slot (default: "scheduled")
 }
 
 // IMAgentResponse is the structured reply sent back to Hub.
@@ -300,7 +301,10 @@ func msgHasToolCalls(m interface{}) bool {
 // trimConversation trims conversation messages to fit within tokenLimit.
 // toolsTokens is the estimated token count consumed by tool definitions,
 // which must be subtracted from the available budget for messages.
-func trimConversation(msgs []interface{}, tokenLimit int, toolsTokens int) []interface{} {
+// summarizer is an optional callback that summarizes dropped messages into a
+// short text so the LLM retains key context. When nil, dropped messages are
+// replaced with a generic placeholder.
+func trimConversation(msgs []interface{}, tokenLimit int, toolsTokens int, summarizer func(string) string) []interface{} {
 	if tokenLimit <= 0 {
 		tokenLimit = defaultContextTokens * 80 / 100
 	}
@@ -353,44 +357,116 @@ func trimConversation(msgs []interface{}, tokenLimit int, toolsTokens int) []int
 	// increasing until the remaining tail fits within the budget.
 	// This preserves as much recent context as possible.
 	systemMsg := msgs[:1]
-	placeholder := []interface{}{map[string]string{
+	fallbackPlaceholder := []interface{}{map[string]string{
 		"role":    "user",
 		"content": "[注意：中间的对话历史因上下文长度限制已被省略，请基于最近的上下文继续工作]",
 	}}
 
 	// Start from keeping all groups, then drop from the front.
+	// First pass: find the minimum dropCount without summarization.
+	bestDropCount := -1
 	for dropCount := 1; dropCount < len(groups); dropCount++ {
 		kept := groups[dropCount:]
+		var result []interface{}
+		result = append(result, systemMsg...)
+		result = append(result, fallbackPlaceholder...)
+		for _, g := range kept {
+			result = append(result, msgs[g.start:g.end]...)
+		}
+		if estimateConversationTokens(result) <= msgBudget {
+			bestDropCount = dropCount
+			break
+		}
+	}
+
+	if bestDropCount > 0 {
+		dropped := groups[:bestDropCount]
+		kept := groups[bestDropCount:]
+
+		// Try to summarize the dropped messages (one LLM call only).
+		placeholder := fallbackPlaceholder
+		if summarizer != nil && len(dropped) > 0 {
+			var sb strings.Builder
+			for _, g := range dropped {
+				for idx := g.start; idx < g.end; idx++ {
+					data, _ := json.Marshal(msgs[idx])
+					sb.Write(data)
+					sb.WriteByte('\n')
+				}
+			}
+			raw := sb.String()
+			if len(raw) > 32000 {
+				raw = raw[:32000] + "\n...(truncated)"
+			}
+			if summary := summarizer(raw); summary != "" {
+				// Cap summary to ~2000 tokens (~5000 chars) to avoid blowing the budget.
+				if len(summary) > 5000 {
+					runes := []rune(summary)
+					if len(runes) > 5000 {
+						summary = string(runes[:5000]) + "…"
+					}
+				}
+				placeholder = []interface{}{
+					map[string]string{"role": "user", "content": "[对话历史摘要]\n" + summary},
+					map[string]string{"role": "assistant", "content": "好的，我已了解之前的对话上下文。"},
+				}
+			}
+		}
+
 		var result []interface{}
 		result = append(result, systemMsg...)
 		result = append(result, placeholder...)
 		for _, g := range kept {
 			result = append(result, msgs[g.start:g.end]...)
 		}
-		if estimateConversationTokens(result) <= msgBudget {
-			return result
+		// If summary made it larger than fallback, just use fallback.
+		if estimateConversationTokens(result) > msgBudget {
+			result = result[:0]
+			result = append(result, systemMsg...)
+			result = append(result, fallbackPlaceholder...)
+			for _, g := range kept {
+				result = append(result, msgs[g.start:g.end]...)
+			}
 		}
+		return result
 	}
 
 	// Even keeping only the last group doesn't fit — try secondary truncation
 	// of tool results within the last group to squeeze it in.
 	lastG := groups[len(groups)-1]
+	result := truncateLastGroup(msgs, lastG.start, lastG.end, systemMsg, fallbackPlaceholder)
+	if estimateConversationTokens(result) <= msgBudget {
+		return result
+	}
+
+	// Still over budget — aggressively truncate assistant content in the result
+	// while keeping tool-call pairs intact.
+	result = truncateAssistantContent(result, msgBudget)
+	if estimateConversationTokens(result) <= msgBudget {
+		return result
+	}
+
+	// Last resort: drop the entire tool-call group, keep only system +
+	// placeholder + a minimal user message so the LLM can still respond.
+	// This avoids orphaned tool messages that would cause API errors.
+	return append(systemMsg, fallbackPlaceholder...)
+}
+
+// truncateLastGroup builds a result from system + placeholder + the last
+// message group, truncating tool-result content to fit.
+func truncateLastGroup(msgs []interface{}, start, end int, systemMsg, placeholder []interface{}) []interface{} {
 	var result []interface{}
 	result = append(result, systemMsg...)
 	result = append(result, placeholder...)
-	for idx := lastG.start; idx < lastG.end; idx++ {
+	for idx := start; idx < end; idx++ {
 		m := msgs[idx]
 		if mm, ok := m.(map[string]interface{}); ok {
 			if role, _ := mm["role"].(string); role == "tool" {
 				if content, _ := mm["content"].(string); len(content) > 1024 {
-					// Aggressively truncate tool results in the last group.
-					// Use rune-safe slicing to avoid splitting multi-byte UTF-8 chars.
 					runes := []rune(content)
 					headRunes := 400
 					tailRunes := 200
-					if len(runes) <= headRunes+tailRunes {
-						// Short enough in runes — keep as-is.
-					} else {
+					if len(runes) > headRunes+tailRunes {
 						truncated := string(runes[:headRunes]) + "\n…(截断)…\n" + string(runes[len(runes)-tailRunes:])
 						cp := make(map[string]interface{}, len(mm))
 						for k, v := range mm {
@@ -406,6 +482,57 @@ func trimConversation(msgs []interface{}, tokenLimit int, toolsTokens int) []int
 		result = append(result, m)
 	}
 	return result
+}
+
+// truncateAssistantContent shrinks assistant message text content in the
+// conversation to help fit within the token budget. It never touches
+// tool_calls or tool messages to avoid breaking call/result pairing.
+func truncateAssistantContent(msgs []interface{}, budget int) []interface{} {
+	result := make([]interface{}, len(msgs))
+	copy(result, msgs)
+	for i, m := range result {
+		if estimateConversationTokens(result) <= budget {
+			break
+		}
+		mm, ok := m.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := mm["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+		content, _ := mm["content"].(string)
+		if len(content) <= 200 {
+			continue
+		}
+		runes := []rune(content)
+		if len(runes) <= 200 {
+			continue
+		}
+		cp := make(map[string]interface{}, len(mm))
+		for k, v := range mm {
+			cp[k] = v
+		}
+		cp["content"] = string(runes[:100]) + "\n…(截断)…\n" + string(runes[len(runes)-50:])
+		result[i] = cp
+	}
+	return result
+}
+
+// makeSummarizer returns a summarizer callback that uses doSimpleLLMRequest
+// to condense dropped conversation history into a short summary.
+func makeSummarizer(cfg MaclawLLMConfig, httpClient *http.Client) func(string) string {
+	return func(text string) string {
+		msgs := []interface{}{
+			map[string]string{"role": "user", "content": "请简洁总结以下对话历史，保留关键事实、决策和待办事项：\n\n" + text},
+		}
+		result, err := doSimpleLLMRequest(cfg, msgs, httpClient, 30*time.Second)
+		if err != nil || result.Content == "" {
+			return ""
+		}
+		return result.Content
+	}
 }
 
 func trimHistory(entries []conversationEntry) []conversationEntry {
@@ -541,10 +668,20 @@ type IMMessageHandler struct {
 	// Dynamic loop limit — set by the "set_max_iterations" tool during an
 	// active agent loop. Reset to 0 at the start of each runAgentLoop call.
 	// A positive value overrides the configured maxIter for the current loop.
-	// TODO: This field is not goroutine-safe when multiple agent loops run
-	// concurrently on the same handler (e.g. chat + scheduled task). Move
-	// to a per-loop context to eliminate the race.
+	// NOTE: This field is kept as a legacy bridge alongside currentLoopCtx.
+	// Both are kept in sync by toolSetMaxIterations. Will be fully replaced
+	// by per-loop LoopContext.MaxIterations once Task 5 routes background
+	// loops through bgManager (eliminating shared handler state).
 	loopMaxOverride int
+
+	// currentLoopCtx points to the LoopContext of the currently executing
+	// runAgentLoop. Used by tools (e.g. set_max_iterations) to interact
+	// with the active loop. Set at the start of runAgentLoop, cleared at end.
+	currentLoopCtx *LoopContext
+
+	// Background loop manager and session monitor (lazily initialized via setters).
+	bgManager      *BackgroundLoopManager
+	sessionMonitor *SessionMonitor
 }
 
 // NewIMMessageHandler creates a new handler.
@@ -660,6 +797,16 @@ func (h *IMMessageHandler) SetTemplateManager(tm *SessionTemplateManager) {
 // SetScheduledTaskManager configures the scheduled task manager.
 func (h *IMMessageHandler) SetScheduledTaskManager(stm *ScheduledTaskManager) {
 	h.scheduledTaskManager = stm
+}
+
+// SetBackgroundLoopManager configures the background loop manager.
+func (h *IMMessageHandler) SetBackgroundLoopManager(blm *BackgroundLoopManager) {
+	h.bgManager = blm
+}
+
+// SetSessionMonitor configures the session monitor.
+func (h *IMMessageHandler) SetSessionMonitor(sm *SessionMonitor) {
+	h.sessionMonitor = sm
 }
 
 // getTools returns the current tool definitions, using the generator with
@@ -822,6 +969,46 @@ func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProg
 		httpClient = h.taskClient
 	}
 
+	// --- Background routing: delegate to BackgroundLoopManager ---
+	if msg.IsBackground && h.bgManager != nil {
+		slotKind := parseSlotKind(msg.BackgroundSlotKind)
+		maxIter := h.app.GetMaclawAgentMaxIterations()
+		if msg.MinIterations > maxIter {
+			maxIter = msg.MinIterations
+		}
+
+		loopCtx, waitC := h.bgManager.SpawnOrQueue(slotKind, msg.UserID, msg.Text, maxIter)
+		if loopCtx == nil && waitC != nil {
+			// Slot full — block until a slot opens.
+			loopCtx = <-waitC
+		}
+		if loopCtx == nil {
+			return &IMAgentResponse{Error: "后台任务启动失败：无法获取执行槽位"}
+		}
+		loopCtx.HTTPClient = httpClient
+
+		var systemPrompt string
+		if h.memoryStore != nil {
+			systemPrompt = h.buildSystemPromptWithMemory(msg.Text)
+		} else {
+			systemPrompt = h.buildSystemPrompt()
+		}
+
+		history := h.memory.load(msg.UserID)
+		history = h.compactHistory(history, httpClient)
+
+		result := h.runAgentLoop(loopCtx, msg.UserID, systemPrompt, history, msg.Text, onProgress, msg.MinIterations, msg.Platform)
+
+		// Mark loop as completed/failed and dequeue next.
+		if result != nil && result.Error != "" {
+			loopCtx.SetState("failed")
+		} else {
+			loopCtx.SetState("completed")
+		}
+		h.bgManager.Complete(loopCtx.ID)
+		return result
+	}
+
 	history := h.memory.load(msg.UserID)
 	history = h.compactHistory(history, httpClient)
 	var systemPrompt string
@@ -830,7 +1017,14 @@ func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProg
 	} else {
 		systemPrompt = h.buildSystemPrompt()
 	}
-	return h.runAgentLoop(msg.UserID, systemPrompt, history, msg.Text, onProgress, msg.MinIterations, httpClient, msg.Platform)
+
+	// Create a LoopContext for this chat loop.
+	loopCtx := NewLoopContext("chat", h.app.GetMaclawAgentMaxIterations(), httpClient)
+	// Wire the bgManager's statusC so the chat loop can drain background events.
+	if h.bgManager != nil {
+		loopCtx.StatusC = h.bgManager.statusC
+	}
+	return h.runAgentLoop(loopCtx, msg.UserID, systemPrompt, history, msg.Text, onProgress, msg.MinIterations, msg.Platform)
 }
 
 // handleExitCommand terminates all active sessions, resets conversation
@@ -1023,7 +1217,7 @@ func (h *IMMessageHandler) doOpenAILLMRequest(cfg MaclawLLMConfig, messages []in
 		if len(msg) > 512 {
 			msg = msg[:512] + "..."
 		}
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+		return nil, dumpLLMContext(resp.StatusCode, msg, data)
 	}
 
 	var result llmResponse
@@ -1198,7 +1392,7 @@ func (h *IMMessageHandler) doAnthropicLLMRequest(cfg MaclawLLMConfig, messages [
 		if len(msg) > 512 {
 			msg = msg[:512] + "..."
 		}
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+		return nil, dumpLLMContext(resp.StatusCode, msg, data)
 	}
 
 	// Parse Anthropic response and convert to internal llmResponse format
@@ -1259,13 +1453,50 @@ type anthropicContentBlock struct {
 // Agentic Loop — multi-round tool calling
 // ---------------------------------------------------------------------------
 
-func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []conversationEntry, userText string, onProgress ProgressCallback, minIterations int, httpClient *http.Client, platform string) (result *IMAgentResponse) {
+// parseSlotKind converts a string slot kind to the SlotKind enum.
+// Defaults to SlotKindScheduled for unknown values.
+func parseSlotKind(s string) SlotKind {
+	switch s {
+	case "coding":
+		return SlotKindCoding
+	case "scheduled", "":
+		return SlotKindScheduled
+	case "auto":
+		return SlotKindAuto
+	default:
+		return SlotKindScheduled
+	}
+}
+
+// drainStatusEvents non-blockingly drains all pending StatusEvents from the
+// LoopContext's StatusC channel, injecting each as a system message into the
+// conversation and forwarding to the user via sendProgress.
+func drainStatusEvents(ctx *LoopContext, conversation *[]interface{}, sendProgress func(string)) {
+	for {
+		select {
+		case evt := <-ctx.StatusC:
+			statusMsg := fmt.Sprintf("[后台事件] %s", evt.Message)
+			*conversation = append(*conversation, map[string]string{
+				"role": "system", "content": statusMsg,
+			})
+			sendProgress(fmt.Sprintf("📡 %s", evt.Message))
+		default:
+			return
+		}
+	}
+}
+
+func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt string, history []conversationEntry, userText string, onProgress ProgressCallback, minIterations int, platform string) (result *IMAgentResponse) {
 	// panic recovery — 防止工具执行异常导致 goroutine 崩溃
 	defer func() {
 		if r := recover(); r != nil {
 			result = &IMAgentResponse{Error: fmt.Sprintf("Agent 内部错误: %v", r)}
 		}
 	}()
+
+	// Wire the loop context so tools can access it.
+	h.currentLoopCtx = ctx
+	defer func() { h.currentLoopCtx = nil }()
 
 	// Helper to send progress if callback is set.
 	sendProgress := func(text string) {
@@ -1322,9 +1553,14 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 	cfg := h.app.GetMaclawLLMConfig()
 	maxIter := h.app.GetMaclawAgentMaxIterations()
 	h.loopMaxOverride = 0 // reset dynamic override for this loop
+	// Sync initial maxIter into the LoopContext so ctx is the source of truth.
+	if ctx.MaxIterations() <= 0 {
+		ctx.SetMaxIterations(maxIter)
+	}
 	allTools := h.getTools()
 	tools := h.routeTools(userText, allTools)
 	toolsTokenBudget := estimateToolsTokens(tools)
+	httpClient := ctx.HTTPClient
 
 	var conversation []interface{}
 	conversation = append(conversation, map[string]string{"role": "system", "content": systemPrompt})
@@ -1350,18 +1586,77 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 	}
 
 	for iteration := 0; ; iteration++ {
-		// Check dynamic override from set_max_iterations tool each iteration.
+		ctx.SetIteration(iteration)
+
+		// --- Check dynamic override from set_max_iterations tool ---
+		// Both loopMaxOverride (legacy) and ctx.MaxIterations() are kept in
+		// sync by toolSetMaxIterations. Read from ctx as source of truth.
 		if h.loopMaxOverride > 0 {
 			override := h.loopMaxOverride
-			// Never let a dynamic override drop below the caller's floor.
 			if minIterations > 0 && override < minIterations {
 				override = minIterations
 			}
 			effectiveMax = override
+			// Keep ctx in sync.
+			ctx.SetMaxIterations(effectiveMax)
+		} else {
+			// ctx may have been updated externally (e.g. by ContinueC).
+			if cm := ctx.MaxIterations(); cm > 0 && cm != effectiveMax {
+				effectiveMax = cm
+			}
 		}
+
+		// --- Background loop: pause near limit, wait for 续命 ---
+		// Only pause if: (a) background loop, (b) effectiveMax > 4 to ensure
+		// meaningful work before first pause, (c) iteration is at the pause
+		// threshold. The threshold is effectiveMax-2 to give 2 remaining rounds
+		// for graceful wrap-up after resume.
+		if ctx.Kind == LoopKindBackground && effectiveMax > 4 && iteration == effectiveMax-2 {
+			ctx.SetState("paused")
+			// Notify via StatusC that we're approaching the limit.
+			if ctx.StatusC != nil {
+				select {
+				case ctx.StatusC <- StatusEvent{
+					Type:      StatusEventApproachingLimit,
+					LoopID:    ctx.ID,
+					SessionID: ctx.SessionID,
+					Message:   fmt.Sprintf("后台任务 %s 即将达到最大轮数 (%d/%d)", ctx.ID, iteration, effectiveMax),
+					Remaining: effectiveMax - iteration,
+				}:
+				default:
+				}
+			}
+			// Wait for continue signal, cancel, or timeout (5 min).
+			select {
+			case extra := <-ctx.ContinueC:
+				ctx.AddMaxIterations(extra)
+				effectiveMax = ctx.MaxIterations()
+				ctx.SetState("running")
+			case <-ctx.CancelC:
+				ctx.SetState("stopped")
+				return &IMAgentResponse{Text: fmt.Sprintf("后台任务 %s 已被停止。", ctx.ID)}
+			case <-time.After(5 * time.Minute):
+				ctx.SetState("timeout")
+				return &IMAgentResponse{Text: fmt.Sprintf("后台任务 %s 等待续命超时，已自动结束。", ctx.ID)}
+			}
+		}
+
+		// --- Normal iteration limit check ---
 		if iteration >= effectiveMax {
 			break
 		}
+
+		// --- Chat loop: drain StatusC events before LLM call ---
+		if ctx.Kind == LoopKindChat && ctx.StatusC != nil {
+			drainStatusEvents(ctx, &conversation, sendProgress)
+		}
+
+		// --- Check cancellation ---
+		if ctx.IsCancelled() {
+			ctx.SetState("stopped")
+			break
+		}
+
 		if iteration > 0 {
 			if isDebug() {
 				if maxIter > 0 || h.loopMaxOverride > 0 {
@@ -1375,7 +1670,7 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 				sendProgress("⏳ 任务较复杂，正在耐心处理中，稍后发你结果…")
 			}
 		}
-		conversation = trimConversation(conversation, cfg.EffectiveContextTokens(), toolsTokenBudget)
+		conversation = trimConversation(conversation, cfg.EffectiveContextTokens(), toolsTokenBudget, makeSummarizer(cfg, httpClient))
 		resp, err := h.doLLMRequest(cfg, conversation, tools, httpClient)
 		if err != nil {
 			return &IMAgentResponse{Error: fmt.Sprintf("LLM 调用失败: %s", err.Error())}
@@ -1566,7 +1861,7 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 		sendProgress("⏳ 推理轮次已用完，但编程会话仍在运行，正在检查状态…")
 
 		// Run one bonus iteration to let the agent observe current session state.
-		conversation = trimConversation(conversation, cfg.EffectiveContextTokens(), toolsTokenBudget)
+		conversation = trimConversation(conversation, cfg.EffectiveContextTokens(), toolsTokenBudget, makeSummarizer(cfg, httpClient))
 		bonusResp, err := h.doLLMRequest(cfg, conversation, tools, httpClient)
 		if err == nil && len(bonusResp.Choices) > 0 {
 			bc := bonusResp.Choices[0]
@@ -1717,13 +2012,15 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 
 **确认阶段规则：**
 - 等待用户明确同意（如"好的"、"可以"、"确认"、"没问题"）后才调用 create_session
-- 如果用户提出修正，更新理解后重新输出确认消息
+- 如果用户提出修正或追加新需求（如"加音效"、"还要支持XX"、"改成YY"），将新需求整合到当前方案中，重新输出完整的确认消息，不要直接开始编程
+- ⚠️ 关键：在确认阶段，任何不是明确同意或跳过信号的用户回复，都应视为需求变更/补充，必须重新确认。不要把追加需求当成新的独立指令直接执行
 - 如果用户在确认阶段发出跳过信号，立即执行
 
 ### 第四步：执行编程任务
 用户确认后（或跳过确认后），按以下步骤执行：
 1. 创建会话：调用 create_session 启动编程工具
 2. 发送指令：调用 get_session_output 确认状态为 running 后（最多检查 2 次），立即用 send_and_observe 将确认阶段达成的需求理解和实现方案整合到编程指令中发送给编程工具
+⚠️ 严禁在 create_session 之后、send_and_observe 之前插入 bash、read_file、write_file 等其他工具调用。创建会话后的第一个动作必须是 get_session_output 检查状态，第二个动作必须是 send_and_observe 发送编程指令。
 3. 跟踪进度：
    - 简单操作（ls、cat 等）：send_and_observe 会直接返回结果
    - 复杂编程任务（写代码、重构等）：编程工具可能需要数分钟完成。如果 send_and_observe 返回时会话状态为 busy，每 15-30 秒调用一次 get_session_output 检查进度是正常的
@@ -1815,6 +2112,24 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 			for _, s := range servers {
 				b.WriteString(fmt.Sprintf("- [%s] %s 状态=%s\n", s.ID, s.Name, s.HealthStatus))
 			}
+		}
+	}
+
+	// Inject background loop status when bgManager is active.
+	if h.bgManager != nil {
+		bgLoops := h.bgManager.List()
+		if len(bgLoops) > 0 {
+			b.WriteString("\n## 后台任务\n")
+			for _, lctx := range bgLoops {
+				b.WriteString(fmt.Sprintf("- [%s] 类型=%s 状态=%s 轮次=%d/%d",
+					lctx.ID, lctx.SlotKind.String(), lctx.State(),
+					lctx.Iteration(), lctx.MaxIterations()))
+				if lctx.Description != "" {
+					b.WriteString(fmt.Sprintf(" 描述=%s", lctx.Description))
+				}
+				b.WriteString("\n")
+			}
+			b.WriteString("⚠️ 有后台任务正在运行时，如果用户提出新的编程需求，先记录需求，等后台任务完成后再处理。\n")
 		}
 	}
 
@@ -3799,6 +4114,10 @@ func (h *IMMessageHandler) toolSetMaxIterations(args map[string]interface{}) str
 	}
 	reason := stringVal(args, "reason")
 	h.loopMaxOverride = limit
+	// Also update the active LoopContext so background loops see the change.
+	if h.currentLoopCtx != nil {
+		h.currentLoopCtx.SetMaxIterations(limit)
+	}
 
 	// Persist to config so the setting survives across conversations.
 	if err := h.app.SetMaclawAgentMaxIterations(limit); err != nil {

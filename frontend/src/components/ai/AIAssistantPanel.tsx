@@ -78,6 +78,10 @@ const outputAreaStyle: React.CSSProperties = {
     overflowX: "hidden",
     textAlign: "left",
     color: "#d4d4d4",
+    background: "#0c0c0c",
+    fontFamily: "'Cascadia Code', 'Cascadia Mono', 'Consolas', 'Courier New', monospace",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-all",
 };
 
 const inputBarStyle: React.CSSProperties = {
@@ -523,7 +527,6 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, sendMessage
             {/* ── Chat area ── */}
             <div
                 ref={outputContainerRef}
-                className="terminal-output"
                 style={outputAreaStyle}
                 onScroll={handleScroll}
             >

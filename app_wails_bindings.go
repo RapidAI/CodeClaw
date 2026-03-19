@@ -423,3 +423,35 @@ func (a *App) ClearAIAssistantHistory() error {
 	hubClient.imHandler.memory.clear("desktop-user")
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// Background Loop Wails bindings
+// ---------------------------------------------------------------------------
+
+// ListBackgroundLoops returns all active background loops for the frontend.
+func (a *App) ListBackgroundLoops() []BackgroundLoopView {
+	hubClient := a.hubClient()
+	if hubClient == nil || hubClient.imHandler == nil || hubClient.imHandler.bgManager == nil {
+		return nil
+	}
+	return hubClient.imHandler.bgManager.ListViews()
+}
+
+// StopBackgroundLoop gracefully stops a background loop by ID.
+func (a *App) StopBackgroundLoop(loopID string) error {
+	hubClient := a.hubClient()
+	if hubClient == nil || hubClient.imHandler == nil || hubClient.imHandler.bgManager == nil {
+		return fmt.Errorf("background loop manager not initialized")
+	}
+	hubClient.imHandler.bgManager.Stop(loopID)
+	return nil
+}
+
+// ContinueBackgroundLoop sends additional rounds to a paused loop.
+func (a *App) ContinueBackgroundLoop(loopID string, additionalRounds int) error {
+	hubClient := a.hubClient()
+	if hubClient == nil || hubClient.imHandler == nil || hubClient.imHandler.bgManager == nil {
+		return fmt.Errorf("background loop manager not initialized")
+	}
+	return hubClient.imHandler.bgManager.SendContinue(loopID, additionalRounds)
+}

@@ -499,6 +499,24 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 	if a.securityFirewall != nil {
 		hubClient.imHandler.SetSecurityFirewall(a.securityFirewall)
 	}
+	// Initialize and wire BackgroundLoopManager + SessionMonitor.
+	{
+		statusC := make(chan StatusEvent, 32)
+		blm := NewBackgroundLoopManager(statusC)
+		// Emit Wails event when background loop state changes.
+		blm.OnChange = func() {
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, "background-loops-changed")
+			}
+		}
+		hubClient.imHandler.SetBackgroundLoopManager(blm)
+		// Wire the statusC into the chat loop's LoopContext so it can drain
+		// background events. This is done lazily: the chat LoopContext gets
+		// statusC assigned in HandleIMMessageWithProgress before runAgentLoop.
+
+		sm := NewSessionMonitor(a.remoteSessions, statusC, 20*time.Second)
+		hubClient.imHandler.SetSessionMonitor(sm)
+	}
 	if a.conversationArchiver != nil {
 		hubClient.imHandler.memory.archiver = a.conversationArchiver
 	}

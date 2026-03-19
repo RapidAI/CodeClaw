@@ -7,9 +7,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
+
+// dumpLLMContext saves the request body to a temp file when an HTTP 500 error
+// occurs, and returns an enriched error message containing the context length
+// (in bytes) and the dump file path.
+func dumpLLMContext(statusCode int, respMsg string, requestBody []byte) error {
+	if statusCode != http.StatusInternalServerError {
+		return fmt.Errorf("HTTP %d: %s", statusCode, respMsg)
+	}
+	ctxLen := len(requestBody)
+	dumpFile := filepath.Join(os.TempDir(), fmt.Sprintf("llm_context_%d.json", time.Now().UnixMilli()))
+	if err := os.WriteFile(dumpFile, requestBody, 0644); err != nil {
+		return fmt.Errorf("HTTP %d (context %d bytes, dump failed: %v): %s", statusCode, ctxLen, err, respMsg)
+	}
+	return fmt.Errorf("HTTP %d (context %d bytes, dumped to %s): %s", statusCode, ctxLen, dumpFile, respMsg)
+}
 
 // llmSimpleResponse is a minimal response from a simple (non-tool-calling) LLM request.
 type llmSimpleResponse struct {
@@ -59,7 +76,7 @@ func doSimpleOpenAIRequest(cfg MaclawLLMConfig, messages []interface{}, client *
 		if len(msg) > 512 {
 			msg = msg[:512] + "..."
 		}
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+		return nil, dumpLLMContext(resp.StatusCode, msg, data)
 	}
 
 	var result struct {
@@ -137,7 +154,7 @@ func doSimpleAnthropicRequest(cfg MaclawLLMConfig, messages []interface{}, clien
 		if len(msg) > 512 {
 			msg = msg[:512] + "..."
 		}
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+		return nil, dumpLLMContext(resp.StatusCode, msg, data)
 	}
 
 	var result struct {

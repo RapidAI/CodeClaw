@@ -3117,10 +3117,10 @@ ${instruction}`;
                         className={`sidebar-item ${navTab === 'remote' ? 'active' : ''}`}
                         onClick={() => switchTool('remote')}
                         style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'remote' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                        title={lang === 'zh-Hans' ? '远程' : lang === 'zh-Hant' ? '遠端' : 'Remote'}
+                        title={lang === 'zh-Hans' ? '任务' : lang === 'zh-Hant' ? '任務' : 'Tasks'}
                     >
                         <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>📡</span>
-                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{lang === 'zh-Hans' ? '远程' : lang === 'zh-Hant' ? '遠端' : 'Remote'}</span>
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{lang === 'zh-Hans' ? '任务' : lang === 'zh-Hant' ? '任務' : 'Tasks'}</span>
                     </div>
 
                     <div
@@ -3353,7 +3353,7 @@ ${instruction}`;
                                                                         navTab === 'projects' ? t("projectManagement") :
                                                                     navTab === 'skills' ? t("skills") :
                                                                         navTab === 'tutorial' ? t("tutorial") :
-                                                                            navTab === 'remote' ? (lang === 'zh-Hans' ? '远程管理' : lang === 'zh-Hant' ? '遠端管理' : 'Remote Management') :
+                                                                            navTab === 'remote' ? (lang === 'zh-Hans' ? '任务管理' : lang === 'zh-Hant' ? '任務管理' : 'Task Management') :
                                                                                 navTab === 'api-store' ? t("apiStore") :
                                                                                     navTab === 'mcp' ? 'MCP' :
                                                                                         navTab === 'settings' ? t("globalSettings") :

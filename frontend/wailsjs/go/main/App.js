@@ -721,3 +721,16 @@ export function SendAIAssistantMessage(arg1) {
 export function ClearAIAssistantHistory() {
   return window['go']['main']['App']['ClearAIAssistantHistory']();
 }
+
+// Background Loop bindings
+export function ListBackgroundLoops() {
+  return window['go']['main']['App']['ListBackgroundLoops']();
+}
+
+export function StopBackgroundLoop(arg1) {
+  return window['go']['main']['App']['StopBackgroundLoop'](arg1);
+}
+
+export function ContinueBackgroundLoop(arg1, arg2) {
+  return window['go']['main']['App']['ContinueBackgroundLoop'](arg1, arg2);
+}
