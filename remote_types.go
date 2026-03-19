@@ -6,6 +6,7 @@ import (
 )
 
 type SessionStatus string
+type ThinkingState int
 type RemoteLaunchSource string
 
 const (
@@ -22,6 +23,11 @@ const (
 	RemoteLaunchSourceMobile  RemoteLaunchSource = "mobile"
 	RemoteLaunchSourceHandoff RemoteLaunchSource = "handoff"
 	RemoteLaunchSourceAI      RemoteLaunchSource = "ai"
+)
+
+const (
+	ThinkingIdle     ThinkingState = iota // Agent is idle / waiting for input
+	ThinkingActive                        // Agent is actively processing (LLM call in flight)
 )
 
 func normalizeRemoteLaunchSource(source RemoteLaunchSource) RemoteLaunchSource {
@@ -79,6 +85,8 @@ type SessionSummary struct {
 	Status          string   `json:"status"`
 	Severity        string   `json:"severity"`
 	WaitingForUser  bool     `json:"waiting_for_user"`
+	Thinking        bool     `json:"thinking"`
+	ThinkingSince   int64    `json:"thinking_since,omitempty"`
 	CurrentTask     string   `json:"current_task"`
 	ProgressSummary string   `json:"progress_summary"`
 	LastResult      string   `json:"last_result"`
@@ -176,9 +184,11 @@ type RemoteSession struct {
 	UpdatedAt time.Time
 
 	// Stall detection and completion analysis fields (protected by mu).
-	StallState     StallState      // current stall state, updated by StallDetector
+	StallState      StallState      // current stall state, updated by StallDetector
 	CompletionLevel CompletionLevel // latest completion analysis result
-	LastNudgeCount int             // nudge count from the most recent stall episode
+	LastNudgeCount  int             // nudge count from the most recent stall episode
+	ThinkingState   ThinkingState   // current thinking state (idle/active)
+	ThinkingSince   time.Time       // when the current thinking state started
 
 	Summary SessionSummary
 	Preview SessionPreview
@@ -202,6 +212,10 @@ type RemoteSession struct {
 	// Permissions manages tool-use permission requests for this session.
 	// Initialized based on the session's YoloMode setting.
 	Permissions *PermissionHandler
+
+	// LaunchFingerprint is a hash of the LaunchSpec fields that affect
+	// session behavior. Used to detect parameter changes across launches.
+	LaunchFP string
 
 	workspaceRelease func()
 	configCleanup    func() // restores tool config files modified by onboarding

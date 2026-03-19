@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // HubSkillUpdateInfo describes an available update for a locally installed Hub Skill.
@@ -386,4 +388,38 @@ func (a *App) TriggerScheduledTask(id string) error {
 		return fmt.Errorf("scheduled task manager not initialized")
 	}
 	return a.scheduledTaskManager.TriggerNow(id)
+}
+
+// ---------------------------------------------------------------------------
+// AI Assistant Wails bindings
+// ---------------------------------------------------------------------------
+
+// SendAIAssistantMessage handles a desktop AI assistant message (Wails binding).
+func (a *App) SendAIAssistantMessage(text string) (*IMAgentResponse, error) {
+	a.ensureRemoteInfra()
+	hubClient := a.hubClient()
+	if hubClient == nil || hubClient.imHandler == nil {
+		return nil, fmt.Errorf("AI assistant not initialized")
+	}
+	msg := IMUserMessage{
+		UserID:   "desktop-user",
+		Platform: "desktop",
+		Text:     text,
+	}
+	onProgress := func(progressText string) {
+		runtime.EventsEmit(a.ctx, "ai-assistant-progress", progressText)
+	}
+	resp := hubClient.imHandler.HandleIMMessageWithProgress(msg, onProgress)
+	return resp, nil
+}
+
+// ClearAIAssistantHistory clears the desktop AI assistant conversation memory (Wails binding).
+func (a *App) ClearAIAssistantHistory() error {
+	a.ensureRemoteInfra()
+	hubClient := a.hubClient()
+	if hubClient == nil || hubClient.imHandler == nil {
+		return fmt.Errorf("AI assistant not initialized")
+	}
+	hubClient.imHandler.memory.clear("desktop-user")
+	return nil
 }

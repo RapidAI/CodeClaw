@@ -145,7 +145,7 @@ func NewClawNetClient() *ClawNetClient {
 	return &ClawNetClient{
 		baseURL: "http://127.0.0.1:3998",
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: 3 * time.Second,
 		},
 	}
 }
@@ -270,7 +270,14 @@ func (c *ClawNetClient) StopDaemon() {
 }
 
 // IsRunning returns true if the daemon is reachable.
+// It retries once after a short pause to tolerate transient failures
+// (e.g. after system wake from sleep).
 func (c *ClawNetClient) IsRunning() bool {
+	if c.ping() {
+		return true
+	}
+	// One quick retry to avoid false negatives on transient hiccups.
+	time.Sleep(300 * time.Millisecond)
 	return c.ping()
 }
 

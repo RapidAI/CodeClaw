@@ -1541,15 +1541,59 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 - 智能推断参数：如果用户没有指定 session_id 等参数，查看当前会话列表自动选择。
 
 ## ⚠️ 编程任务工作流（极其重要）
-当用户提出编程需求时，按以下步骤执行：
-1. 理解需求：如果用户指令模糊（如"优化一下性能"），先澄清具体目标和范围再动手；如果指令明确（如"给 login.go 加个超时处理"），可以直接执行
-2. 创建会话：调用 create_session 启动编程工具
-3. 发送指令：调用 get_session_output 确认状态为 running 后（最多检查 2 次），立即用 send_and_observe 将需求发送给编程工具
-4. 跟踪进度：
+
+### 第一步：识别任务类型
+- 编程任务（Coding_Task）：需要调用 create_session 启动远程编程工具的需求（写代码、重构、修 bug、添加功能等）
+- 非编程任务：简单问答、文件操作（bash/read_file/write_file）、配置管理、截屏等 → 直接执行，不需要确认
+
+### 第二步：检查跳过信号（Skip_Signal）
+如果用户消息中包含以下表达，跳过确认直接执行：
+- 中文：直接做、不用问了、按你的想法来、直接开始、不用确认、马上做、赶紧做
+- English：just do it、skip confirmation、go ahead、do it now
+
+### 第三步：需求确认（Confirmation Phase）
+对于编程任务且无跳过信号时，必须先输出确认消息再执行：
+
+**确认消息格式：**
+📋 **需求确认**
+1. 需求理解：[用简洁语言复述你对需求的理解]
+2. 实现方案：[涉及的文件和大致实现思路]
+3. 边界情况：[需要用户决定的设计决策点，如无则省略]
+
+请确认是否按此方案执行？
+
+**确认阶段规则：**
+- 等待用户明确同意（如"好的"、"可以"、"确认"、"没问题"）后才调用 create_session
+- 如果用户提出修正，更新理解后重新输出确认消息
+- 如果用户在确认阶段发出跳过信号，立即执行
+
+### 第四步：执行编程任务
+用户确认后（或跳过确认后），按以下步骤执行：
+1. 创建会话：调用 create_session 启动编程工具
+2. 发送指令：调用 get_session_output 确认状态为 running 后（最多检查 2 次），立即用 send_and_observe 将确认阶段达成的需求理解和实现方案整合到编程指令中发送给编程工具
+3. 跟踪进度：
    - 简单操作（ls、cat 等）：send_and_observe 会直接返回结果
    - 复杂编程任务（写代码、重构等）：编程工具可能需要数分钟完成。如果 send_and_observe 返回时会话状态为 busy，每 15-30 秒调用一次 get_session_output 检查进度是正常的
    - ⚠️ 绝对不要终止状态为 busy 的编程会话——编程工具正在工作中
 ⚠️ 编程工具启动后会等待输入，不发送指令它不会开始工作。对已退出或出错的会话不要反复轮询 get_session_output。
+
+### 第五步：任务完成后 Review/Fix/Optimize（RFO Phase）
+当编程任务成功完成（会话状态为 waiting_input 或 exited 且 exit_code=0）时：
+
+**RFO 询问格式：**
+✅ 任务已完成。是否需要进一步优化代码质量？（会消耗额外 tokens）
+- Review：审查代码质量、命名、结构
+- Fix：修复潜在问题、边界情况
+- Optimize：性能优化、代码简化
+- 跳过：直接结束
+
+**RFO 规则：**
+- 用户可选择一个或多个选项（如"review 和 optimize"、"全部"）
+- 多选时按 Review → Fix → Optimize 顺序执行
+- 每个选项通过 send_and_observe 发送对应指令给编程工具
+- 每个选项完成后报告结果再执行下一个
+- 用户说"不需要"、"跳过"、"skip"时直接结束
+- 如果任务失败（exit_code≠0 或 error 状态），跳过 RFO 直接报告失败
 
 ## ⚠️ 执行验证原则
 每次执行操作后，必须验证是否真正成功，绝不能仅凭工具返回"已发送"就告诉用户执行成功。
@@ -2366,9 +2410,36 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 	}
 
 	// When the session is busy (coding tool actively executing), hint the
-	// Agent to wait and check back periodically.
+	// Agent based on the current stall detection state.
 	if status == string(SessionBusy) {
-		b.WriteString(fmt.Sprintf("\n⏳ 编程工具正在工作中，请等待 15-30 秒后再次检查进度。不要终止正在工作的会话。"))
+		session.mu.RLock()
+		stallState := session.StallState
+		session.mu.RUnlock()
+
+		switch stallState {
+		case StallStateSuspected:
+			b.WriteString("\n⏳ 编程工具输出暂停，系统正在尝试恢复，请稍后再检查")
+		case StallStateStuck:
+			b.WriteString("\n⚠️ 编程工具可能已卡住，建议发送具体指令或终止会话")
+		default: // StallStateNormal
+			b.WriteString("\n⏳ 编程工具正在工作中，请等待后再检查进度")
+		}
+	}
+
+	// When the session is waiting for input, hint the Agent based on the
+	// semantic completion analysis result.
+	if status == string(SessionWaitingInput) {
+		session.mu.RLock()
+		completionLevel := session.CompletionLevel
+		session.mu.RUnlock()
+
+		switch completionLevel {
+		case CompletionCompleted:
+			b.WriteString("\n✅ 任务似乎已完成，可以查看结果")
+		case CompletionIncomplete:
+			b.WriteString("\n⚠️ 任务似乎未完成，建议发送「继续」让编程工具继续工作")
+		// CompletionUncertain: 保持现有默认提示（"⚠️ 会话正在等待用户输入"）
+		}
 	}
 
 	// When the session has exited with a non-zero code, append a strong
@@ -2521,9 +2592,10 @@ func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) strin
 		}
 	}
 
-	// Check if session is still busy after polling — flag for busy-wait hint.
+	// Check if session is still busy after polling — read stall state for precise hint.
 	session.mu.RLock()
 	stillBusy := session.Status == SessionBusy
+	stallState := session.StallState
 	session.mu.RUnlock()
 
 	// Check if new images were produced during the command execution.
@@ -2541,9 +2613,11 @@ func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) strin
 		"lines":      float64(40),
 	})
 
-	if stillBusy {
-		output += fmt.Sprintf("\n\n⏳ 编程工具仍在工作中（状态: busy）。请等待 15-30 秒后调用 get_session_output(session_id=\"%s\") 检查进度。不要终止会话。", sessionID)
-	}
+	// NOTE: busy/stall hints are already appended by toolGetSessionOutput above,
+	// so we do NOT duplicate them here. The stillBusy/stallState variables are
+	// retained for potential future use (e.g. deciding whether to retry).
+	_ = stillBusy
+	_ = stallState
 
 	if newImageCount > 0 {
 		output += fmt.Sprintf("\n\n📷 会话产生了 %d 张图片，已自动通过 IM 发送给用户。", newImageCount)

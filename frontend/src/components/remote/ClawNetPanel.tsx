@@ -208,7 +208,7 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
     useEffect(() => {
         ClawNetGetBinaryPath().then(setBinPath).catch(() => {});
         refreshStatus();
-        const timer = setInterval(refreshStatus, 15000);
+        const timer = setInterval(refreshStatus, 8000);
         return () => clearInterval(timer);
     }, [refreshStatus]);
 

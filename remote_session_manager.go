@@ -19,12 +19,15 @@ type RemoteSessionManager struct {
 	workspacePreparer WorkspacePreparer
 	pipelineFactory   func() *OutputPipeline
 
+	stallDetector      *StallDetector
+	completionAnalyzer *CompletionAnalyzer
+
 	mu       sync.RWMutex
 	sessions map[string]*RemoteSession
 }
 
 func NewRemoteSessionManager(app *App) *RemoteSessionManager {
-	return &RemoteSessionManager{
+	m := &RemoteSessionManager{
 		app:      app,
 		sessions: map[string]*RemoteSession{},
 		executionFactory: func(spec LaunchSpec) (ExecutionStrategy, error) {
@@ -38,6 +41,36 @@ func NewRemoteSessionManager(app *App) *RemoteSessionManager {
 			return app.remoteProviderAdapter(tool)
 		},
 	}
+
+	m.stallDetector = NewStallDetector(StallDetectorConfig{}, app.log)
+	m.completionAnalyzer = NewCompletionAnalyzer(CompletionAnalyzerConfig{})
+
+	m.stallDetector.OnStallStateChanged = func(sessionID string, state StallState, nudgeCount int) {
+		s, ok := m.Get(sessionID)
+		if !ok {
+			return
+		}
+		s.mu.Lock()
+		s.StallState = state
+		s.LastNudgeCount = nudgeCount
+		switch state {
+		case StallStateSuspected:
+			s.Summary.SuggestedAction = "编程工具输出暂停，系统正在尝试恢复"
+		case StallStateStuck:
+			s.Summary.SuggestedAction = "编程工具可能已卡住，建议发送具体指令或终止会话"
+		case StallStateNormal:
+			s.Summary.SuggestedAction = ""
+		}
+		s.Summary.UpdatedAt = time.Now().Unix()
+		snap := s.Summary
+		s.mu.Unlock()
+		if m.hubClient != nil {
+			_ = m.hubClient.SendSessionSummary(snap)
+		}
+		m.app.emitRemoteStateChanged()
+	}
+
+	return m
 }
 
 func (m *RemoteSessionManager) SetHubClient(client *RemoteHubClient) {
@@ -192,6 +225,7 @@ func (m *RemoteSessionManager) Create(spec LaunchSpec) (*RemoteSession, error) {
 		},
 		workspaceRelease: workspace.Release,
 		configCleanup:    configRestore,
+		LaunchFP:         LaunchFingerprint(spec),
 	}
 
 	// Initialize permission handler based on YoloMode setting.
@@ -625,6 +659,54 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 
 	sessionStarted := false
 
+	// updateThinking transitions the session's thinking state and syncs
+	// the summary to Hub when the state actually changes. Inspired by
+	// happy-coder's fd3-based thinking tracker, but driven by SDK
+	// message types instead of fetch interception.
+	updateThinking := func(active bool) {
+		s.mu.Lock()
+		newState := ThinkingIdle
+		if active {
+			newState = ThinkingActive
+		}
+		if s.ThinkingState == newState {
+			s.mu.Unlock()
+			return
+		}
+		s.ThinkingState = newState
+		s.ThinkingSince = time.Now()
+		s.Summary.Thinking = active
+		if active {
+			s.Summary.ThinkingSince = s.ThinkingSince.UnixMilli()
+		} else {
+			s.Summary.ThinkingSince = 0
+		}
+		s.Summary.UpdatedAt = time.Now().Unix()
+		snap := s.Summary
+		s.mu.Unlock()
+
+		if m.hubClient != nil {
+			_ = m.hubClient.SendSessionSummary(snap)
+		}
+		m.app.emitRemoteStateChanged()
+	}
+
+	// eventCoalescer buffers tool_use events for a short window so that
+	// fast tool calls (use + result within 300ms) are merged into a single
+	// IM push instead of two separate messages.
+	eventCoalescer := NewEventCoalescer(300*time.Millisecond, func(events []ImportantEvent) {
+		for _, evt := range events {
+			if m.hubClient != nil {
+				_ = m.hubClient.SendImportantEvent(evt)
+			}
+		}
+	})
+	defer eventCoalescer.Close()
+
+	// toolUseToEventID maps SDK tool_use block IDs to coalescer event IDs
+	// so that incoming tool_result blocks can trigger CompleteToolCall.
+	toolUseToEventID := make(map[string]string)
+
 	// streamAccum accumulates streaming text_delta fragments into the
 	// current line.  The in-progress text is kept as the last element of
 	// RawOutputLines so the frontend always sees it.  When a newline
@@ -730,6 +812,8 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			appendStreamText(text)
 			s.mu.Unlock()
 
+			m.stallDetector.ResetTimer(s.ID, len(text) > 0)
+
 			// Accumulate text for preview pipeline — only send complete
 			// lines (containing \n) to avoid fragmenting words/characters
 			// into separate preview lines that get joined with spaces.
@@ -816,6 +900,10 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 							evt := buildSDKToolUseEvent(s, block)
 							s.Events = appendRecentEvents(s.Events, evt, maxRecentImportantEvents)
 							eventsToSync = append(eventsToSync, evt)
+							// Track block.ID → EventID for coalescer completion
+							if block.ID != "" {
+								toolUseToEventID[block.ID] = evt.EventID
+							}
 						}
 					}
 					extracted := extractImagesFromBlocks(s.ID, msg.Message.Content, "sdk-image", m.app)
@@ -846,6 +934,16 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 							AfterLineIdx: len(s.RawOutputLines) - 1,
 						})
 					}
+					// Notify coalescer that tool calls completed, enabling
+					// merged "tool X ✓" events for fast tool calls.
+					for _, block := range msg.Message.Content {
+						if block.Type == "tool_result" && block.ToolUseID != "" {
+							if eid, ok := toolUseToEventID[block.ToolUseID]; ok {
+								eventCoalescer.CompleteToolCall(eid)
+								delete(toolUseToEventID, block.ToolUseID)
+							}
+						}
+					}
 				}
 
 			case "result":
@@ -853,12 +951,25 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 				s.Status = SessionWaitingInput
 				s.Summary.Status = string(SessionWaitingInput)
 				s.Summary.WaitingForUser = true
+				// Clear thinking state inline so the snapshot is consistent.
+				s.ThinkingState = ThinkingIdle
+				s.ThinkingSince = time.Time{}
+				s.Summary.Thinking = false
+				s.Summary.ThinkingSince = 0
 				s.Summary.UpdatedAt = now.Unix()
 				if msg.Result != nil {
 					s.Summary.ProgressSummary = fmt.Sprintf("Completed in %.1fs, %d turns", msg.Result.Duration/1000, msg.Result.NumTurns)
 				}
+				// Analyze completion level (pure function, safe under s.mu)
+				level := m.completionAnalyzer.Analyze(s.RawOutputLines, s.Tool, msg.Result)
+				s.CompletionLevel = level
 				snap := s.Summary
 				summaryToSync = &snap
+
+				// Clear toolUseToEventID on result to prevent unbounded
+				// growth when tool_use blocks have no matching tool_result
+				// (e.g. interrupted turns).
+				toolUseToEventID = make(map[string]string)
 			}
 			s.mu.Unlock()
 
@@ -866,14 +977,23 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 				_ = m.hubClient.SendSessionSummary(*summaryToSync)
 			}
 			for _, evt := range eventsToSync {
-				if m.hubClient != nil {
-					_ = m.hubClient.SendImportantEvent(evt)
-				}
+				eventCoalescer.Enqueue(evt)
 			}
 			for _, img := range imagesToSync {
 				if m.hubClient != nil {
 					_ = m.hubClient.SendSessionImage(img)
 				}
+			}
+
+			// Stall detector integration (outside s.mu lock — StallDetector has its own lock)
+			switch msg.Type {
+			case "assistant":
+				updateThinking(true)
+				m.stallDetector.StartMonitoring(s.ID, s.Exec, s.Tool)
+			case "result":
+				// Thinking state already cleared inline under s.mu above;
+				// updateThinking is a no-op here but kept for symmetry.
+				m.stallDetector.StopMonitoring(s.ID)
 			}
 
 			m.app.refreshPowerOptimizationState()
@@ -1037,6 +1157,7 @@ func (m *RemoteSessionManager) runGeminiACPOutputLoop(s *RemoteSession) {
 			if m.hubClient != nil {
 				_ = m.hubClient.SendSessionSummary(snap)
 			}
+			m.stallDetector.StartMonitoring(s.ID, s.Exec, s.Tool)
 		} else if strings.HasPrefix(trimmedText, "[gemini-acp] turn complete:") {
 			// Prompt completed — session is waiting for next input
 			s.mu.Lock()
@@ -1044,11 +1165,15 @@ func (m *RemoteSessionManager) runGeminiACPOutputLoop(s *RemoteSession) {
 			s.Summary.Status = string(SessionWaitingInput)
 			s.Summary.WaitingForUser = true
 			s.Summary.UpdatedAt = time.Now().Unix()
+			// Analyze completion level (pure function, safe under s.mu)
+			level := m.completionAnalyzer.Analyze(s.RawOutputLines, s.Tool, nil)
+			s.CompletionLevel = level
 			snap := s.Summary
 			s.mu.Unlock()
 			if m.hubClient != nil {
 				_ = m.hubClient.SendSessionSummary(snap)
 			}
+			m.stallDetector.StopMonitoring(s.ID)
 		} else if strings.HasPrefix(trimmedText, "[gemini-acp] prompt error:") {
 			// Prompt failed — session is waiting for next input
 			s.mu.Lock()
@@ -1081,6 +1206,8 @@ func (m *RemoteSessionManager) runGeminiACPOutputLoop(s *RemoteSession) {
 		s.mu.Lock()
 		appendRawOutputLines(s, lines)
 		s.mu.Unlock()
+
+		m.stallDetector.ResetTimer(s.ID, true)
 
 		result := pipeline.Consume(s, chunk)
 
@@ -1115,6 +1242,7 @@ func (m *RemoteSessionManager) runExitLoop(s *RemoteSession) {
 	// Ensure config cleanup runs even if the exit channel is nil or closed
 	// unexpectedly, so the user's native tool config is always restored.
 	defer func() {
+		m.stallDetector.StopMonitoring(s.ID)
 		if s.configCleanup != nil {
 			s.configCleanup()
 			s.configCleanup = nil

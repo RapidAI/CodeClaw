@@ -49,6 +49,8 @@ type RemoteSessionView struct {
 	ModelID        string           `json:"model_id"`
 	ExecutionMode  string           `json:"execution_mode"`
 	Status         SessionStatus    `json:"status"`
+	Thinking       bool             `json:"thinking"`
+	ThinkingSince  int64            `json:"thinking_since,omitempty"`
 	PID            int              `json:"pid"`
 	CreatedAt      time.Time        `json:"created_at"`
 	UpdatedAt      time.Time        `json:"updated_at"`
@@ -71,6 +73,11 @@ func toRemoteSessionView(s *RemoteSession) RemoteSessionView {
 	updatedAt := s.UpdatedAt
 	createdAt := s.CreatedAt
 	exec := s.Exec
+	thinking := s.ThinkingState == ThinkingActive
+	var thinkingSince int64
+	if thinking && !s.ThinkingSince.IsZero() {
+		thinkingSince = s.ThinkingSince.UnixMilli()
+	}
 	s.mu.RUnlock()
 
 	sanitizeSessionSummary(&summary)
@@ -105,6 +112,8 @@ func toRemoteSessionView(s *RemoteSession) RemoteSessionView {
 		ModelID:        s.ModelID,
 		ExecutionMode:  execMode,
 		Status:         status,
+		Thinking:       thinking,
+		ThinkingSince:  thinkingSince,
 		PID:            pid,
 		CreatedAt:      createdAt,
 		UpdatedAt:      updatedAt,

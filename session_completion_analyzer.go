@@ -76,8 +76,7 @@ func (a *CompletionAnalyzer) Analyze(lines []string, tool string, sdkResult *SDK
 
 		// Check Gemini ACP turn-complete marker.
 		if strings.HasPrefix(lower, "[gemini-acp] turn complete:") {
-			rest := strings.TrimSpace(line[len("[gemini-acp] turn complete:"):])
-			restLower := strings.ToLower(rest)
+			restLower := strings.TrimSpace(lower[len("[gemini-acp] turn complete:"):])
 			if strings.Contains(restLower, "success") || strings.Contains(restLower, "done") || strings.Contains(restLower, "completed") {
 				completionCount++
 			}

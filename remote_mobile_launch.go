@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type RemoteLaunchProject struct {
@@ -123,6 +124,51 @@ func (a *App) StartRemoteSessionForProject(req RemoteStartSessionRequest) (Remot
 	session, err := a.remoteSessions.Create(spec)
 	if err != nil && session == nil {
 		return RemoteSessionView{}, err
+	}
+
+	// Mode change detection: if there's an existing active session for the
+	// same project with a different fingerprint, log a warning and attach
+	// a mode_change event so the user knows the parameters changed.
+	if session != nil {
+		newFP := session.LaunchFP
+		for _, existing := range a.remoteSessions.List() {
+			if existing.ID == session.ID {
+				continue
+			}
+			// Match by any path: original project path OR resolved workspace path.
+			sameProject := existing.ProjectPath == session.ProjectPath ||
+				(existing.WorkspacePath != "" && existing.WorkspacePath == session.WorkspacePath) ||
+				(existing.WorkspaceRoot != "" && existing.WorkspaceRoot == session.WorkspaceRoot)
+			if !sameProject {
+				continue
+			}
+			if !isActiveRemoteSessionStatus(existing.Status) {
+				continue
+			}
+			existing.mu.RLock()
+			oldFP := existing.LaunchFP
+			existing.mu.RUnlock()
+			if oldFP != "" && oldFP != newFP {
+				a.log(fmt.Sprintf("[mode-change] project=%s old_session=%s new_session=%s old_fp=%s new_fp=%s",
+					session.ProjectPath, existing.ID, session.ID, oldFP, newFP))
+				evt := ImportantEvent{
+					EventID:   fmt.Sprintf("evt_%d_mode_change", time.Now().UnixNano()),
+					SessionID: session.ID,
+					Type:      "mode_change",
+					Severity:  "warning",
+					Title:     "Session parameters changed",
+					Summary:   fmt.Sprintf("New session uses different parameters than active session %s", existing.ID),
+					CreatedAt: time.Now().Unix(),
+				}
+				session.mu.Lock()
+				session.Events = append(session.Events, evt)
+				session.mu.Unlock()
+				if a.remoteSessions.hubClient != nil {
+					_ = a.remoteSessions.hubClient.SendImportantEvent(evt)
+				}
+			}
+			break
+		}
 	}
 
 	a.emitRemoteStateChanged()

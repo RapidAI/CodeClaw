@@ -7,14 +7,11 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Exploratory tests for coding-session-premature-abandon bugfix.
+// Tests for coding-session-premature-abandon bugfix + session-stall-detection.
 //
-// These tests confirm the bug conditions on UNFIXED code:
-// 1. send_and_observe returns no busy-wait guidance when session stays busy
-// 2. get_session_output returns no busy hint for busy sessions
-// 3. System prompt discourages polling without exception for busy sessions
-//
-// All tests are expected to PASS on unfixed code (confirming the bug exists).
+// Tests 1.x verify the fix is in place (busy hints are present).
+// Tests 6.x verify fix-specific behaviors.
+// Tests 7.x verify preservation of non-busy behaviors.
 // ---------------------------------------------------------------------------
 
 // newBusyTestSession creates a RemoteSession in busy status with a fake
@@ -50,22 +47,19 @@ func newTestIMHandler(sessions map[string]*RemoteSession) *IMMessageHandler {
 }
 
 // ---------------------------------------------------------------------------
-// 1.2 TestSendAndObserve_BusySession_NoBusyHint
+// 1.2 TestSendAndObserve_BusySession_HasBusyHint
 //
-// Calls toolSendAndObserve with a mock session that stays busy for 60s.
-// On unfixed code, the return value should NOT contain busy-wait guidance
-// like "编程工具仍在工作中", confirming the bug.
+// Calls toolSendAndObserve with a mock session that stays busy.
+// After the premature-abandon bugfix + stall detection feature, the return
+// value MUST contain busy-wait guidance (stall-state-aware hint).
 // ---------------------------------------------------------------------------
-func TestSendAndObserve_BusySession_NoBusyHint(t *testing.T) {
+func TestSendAndObserve_BusySession_HasBusyHint(t *testing.T) {
 	session := newBusyTestSession("sess-busy-1")
 
 	h := newTestIMHandler(map[string]*RemoteSession{
 		"sess-busy-1": session,
 	})
 
-	// Run toolSendAndObserve — the session stays busy throughout the
-	// polling loop (~8s on unfixed code). We use a goroutine to keep
-	// the session in busy status (it already is, we just don't change it).
 	start := time.Now()
 	result := h.toolSendAndObserve(map[string]interface{}{
 		"session_id": "sess-busy-1",
@@ -76,28 +70,20 @@ func TestSendAndObserve_BusySession_NoBusyHint(t *testing.T) {
 	t.Logf("toolSendAndObserve returned after %v", elapsed)
 	t.Logf("result:\n%s", result)
 
-	// On unfixed code, the result should NOT contain busy-wait guidance.
-	// This confirms the bug: Agent gets no hint to wait for busy sessions.
-	busyHints := []string{
-		"编程工具仍在工作中",
-		"请等待",
-		"不要终止会话",
-	}
-	for _, hint := range busyHints {
-		if strings.Contains(result, hint) {
-			t.Errorf("UNEXPECTED: result contains busy-wait hint %q — bug may already be fixed", hint)
-		}
+	// After the fix, the result MUST contain a busy-state hint from the
+	// stall detection feature (StallStateNormal → "编程工具正在工作中").
+	if !strings.Contains(result, "编程工具正在工作中") {
+		t.Errorf("expected result to contain '编程工具正在工作中', got:\n%s", result)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// 1.3 TestGetSessionOutput_BusyStatus_NoHint
+// 1.3 TestGetSessionOutput_BusyStatus_HasHint
 //
 // Calls toolGetSessionOutput with a session in busy status.
-// On unfixed code, the return value should NOT contain a busy-state hint,
-// confirming the missing hint bug.
+// After the fix, the return value MUST contain a busy-state hint.
 // ---------------------------------------------------------------------------
-func TestGetSessionOutput_BusyStatus_NoHint(t *testing.T) {
+func TestGetSessionOutput_BusyStatus_HasHint(t *testing.T) {
 	session := &RemoteSession{
 		ID:        "sess-busy-2",
 		Tool:      "claude-code",
@@ -130,52 +116,32 @@ func TestGetSessionOutput_BusyStatus_NoHint(t *testing.T) {
 		t.Fatal("expected result to contain 'busy' status")
 	}
 
-	// On unfixed code, there should be NO busy-state hint.
-	// The existing code has hints for "running" (no output) and "starting",
-	// but nothing for "busy".
-	busyHints := []string{
-		"编程工具正在工作中",
-		"请等待",
-		"不要终止正在工作的会话",
-	}
-	for _, hint := range busyHints {
-		if strings.Contains(result, hint) {
-			t.Errorf("UNEXPECTED: result contains busy hint %q — bug may already be fixed", hint)
-		}
+	// After the fix, the result MUST contain a busy-state hint.
+	if !strings.Contains(result, "编程工具正在工作中") {
+		t.Errorf("expected result to contain '编程工具正在工作中', got:\n%s", result)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// 1.4 TestSystemPrompt_DiscoursagesPolling
+// 1.4 TestSystemPrompt_HasBusyPollingGuidance
 //
-// Verifies the system prompt contains "不要反复轮询 get_session_output"
-// without any qualification for busy sessions. On unfixed code, this
-// blanket prohibition confirms the contradictory guidance bug.
+// Verifies the system prompt contains guidance for busy session polling.
+// After the fix, the prompt should contain busy-session-specific guidance.
 // ---------------------------------------------------------------------------
-func TestSystemPrompt_DiscoursagesPolling(t *testing.T) {
+func TestSystemPrompt_HasBusyPollingGuidance(t *testing.T) {
 	h := newTestIMHandler(map[string]*RemoteSession{})
 
 	prompt := h.buildSystemPrompt()
 
 	t.Logf("system prompt length: %d chars", len(prompt))
 
-	// On unfixed code, the prompt should contain the blanket prohibition.
-	if !strings.Contains(prompt, "不要反复轮询 get_session_output") {
-		t.Fatal("expected system prompt to contain '不要反复轮询 get_session_output'")
+	// After the fix, the prompt should contain busy-session polling guidance.
+	if !strings.Contains(prompt, "每 15-30 秒") {
+		t.Error("expected system prompt to contain '每 15-30 秒' (periodic polling guidance)")
 	}
 
-	// On unfixed code, the prompt should NOT contain guidance for
-	// periodically checking busy sessions (e.g., "每 15-30 秒" or
-	// "busy" session-specific polling guidance).
-	busyPollingGuidance := []string{
-		"每 15-30 秒",
-		"busy 状态",
-		"编程工具正在工作",
-	}
-	for _, guidance := range busyPollingGuidance {
-		if strings.Contains(prompt, guidance) {
-			t.Errorf("UNEXPECTED: system prompt contains busy-session polling guidance %q — bug may already be fixed", guidance)
-		}
+	if !strings.Contains(prompt, "编程工具正在工作中") {
+		t.Error("expected system prompt to contain '编程工具正在工作中'")
 	}
 }
 
@@ -194,7 +160,7 @@ func TestSystemPrompt_DiscoursagesPolling(t *testing.T) {
 //
 // Calls toolSendAndObserve with a mock session that stays busy.
 // On fixed code, the return value MUST contain busy-wait guidance
-// "编程工具仍在工作中".
+// "编程工具正在工作中" (stall-state-aware hint from StallDetector).
 //
 // Validates: Requirements 2.1, 2.2
 // ---------------------------------------------------------------------------
@@ -212,8 +178,8 @@ func TestSendAndObserve_BusySession_ReturnsBusyHint(t *testing.T) {
 
 	t.Logf("result:\n%s", result)
 
-	if !strings.Contains(result, "编程工具仍在工作中") {
-		t.Errorf("expected result to contain busy-wait guidance '编程工具仍在工作中', got:\n%s", result)
+	if !strings.Contains(result, "编程工具正在工作中") {
+		t.Errorf("expected result to contain busy-wait guidance '编程工具正在工作中', got:\n%s", result)
 	}
 }
 

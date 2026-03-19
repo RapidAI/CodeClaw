@@ -36,6 +36,8 @@ import { ScheduledTasksPanel } from './components/remote/ScheduledTasksPanel';
 import { ClawNetPanel } from './components/remote/ClawNetPanel';
 import { ClawNetTaskBoard } from './components/remote/ClawNetTaskBoard';
 import { OnboardingWizard } from './components/remote/OnboardingWizard';
+import { AIAssistantPanel } from './components/ai/AIAssistantPanel';
+import { useAIAssistant } from './components/ai/useAIAssistant';
 
 const subscriptionUrls: { [key: string]: string } = {
     "GLM": "https://bigmodel.cn/glm-coding",
@@ -1525,6 +1527,8 @@ function App() {
     const [showToast, setShowToast] = useState(false);
     const [skills, setSkills] = useState<main.Skill[]>([]);
     const [showAddSkillModal, setShowAddSkillModal] = useState(false);
+    const [showAIPanel, setShowAIPanel] = useState(false);
+    const aiAssistant = useAIAssistant();
     const [showRemoteActivationModal, setShowRemoteActivationModal] = useState(false);
     const [pendingRemoteLaunchTool, setPendingRemoteLaunchTool] = useState<string>("");
     const [remoteActivationDraft, setRemoteActivationDraft] = useState({ hub_url: "", hubcenter_url: "", email: "" });
@@ -2046,13 +2050,42 @@ function App() {
     // lightweight ClawNetIsRunning() call is idempotent, so the overlap is
     // harmless and keeps the globe indicator responsive on tab switches.
     const clawNetAutoStarted = useRef(false);
+    const clawNetPrevUp = useRef(false);
     useEffect(() => {
+        let retryTimer: ReturnType<typeof setTimeout> | null = null;
+        const clearRetry = () => {
+            if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        };
         const checkClawNet = () => {
-            ClawNetIsRunning().then(up => setClawNetRunning(up)).catch(() => {});
+            clearRetry();
+            ClawNetIsRunning().then(up => {
+                if (!up && clawNetPrevUp.current) {
+                    // Was online, now looks offline — quick retry in 2s to
+                    // avoid flashing the icon gray on a transient hiccup.
+                    retryTimer = setTimeout(() => {
+                        retryTimer = null;
+                        ClawNetIsRunning()
+                            .then(up2 => {
+                                clawNetPrevUp.current = up2;
+                                setClawNetRunning(up2);
+                            })
+                            .catch(() => {
+                                clawNetPrevUp.current = false;
+                                setClawNetRunning(false);
+                            });
+                    }, 2000);
+                } else {
+                    clawNetPrevUp.current = up;
+                    setClawNetRunning(up);
+                }
+            }).catch(() => {
+                clawNetPrevUp.current = false;
+                setClawNetRunning(false);
+            });
         };
         checkClawNet();
-        const timer = setInterval(checkClawNet, 15000);
-        return () => clearInterval(timer);
+        const timer = setInterval(checkClawNet, 5000);
+        return () => { clearInterval(timer); clearRetry(); };
     }, []);
 
     // Auto-start ClawNet daemon when enabled in config, so the user doesn't
@@ -3088,6 +3121,23 @@ ${instruction}`;
                     >
                         <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>📡</span>
                         <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{lang === 'zh-Hans' ? '远程' : lang === 'zh-Hant' ? '遠端' : 'Remote'}</span>
+                    </div>
+
+                    <div
+                        className={`sidebar-item ${showAIPanel ? 'active' : ''}`}
+                        onClick={() => setShowAIPanel(true)}
+                        style={{
+                            flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px',
+                            borderLeft: 'none',
+                            borderRight: showAIPanel ? '3px solid var(--primary-color)' : '3px solid transparent',
+                            justifyContent: 'center'
+                        }}
+                        title={lang === 'zh-Hans' ? 'AI 助手' : lang === 'zh-Hant' ? 'AI 助手' : 'AI Asst'}
+                    >
+                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🦞</span>
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>
+                            {lang === 'zh-Hans' ? 'AI 助手' : lang === 'zh-Hant' ? 'AI 助手' : 'AI Asst'}
+                        </span>
                     </div>
 
                     <div
@@ -6545,6 +6595,8 @@ ${instruction}`;
                     </div>
                 </div>
             )}
+
+            {showAIPanel && <AIAssistantPanel onClose={() => setShowAIPanel(false)} lang={lang} {...aiAssistant} />}
 
             {showToast && (
                 <div className="toast">
