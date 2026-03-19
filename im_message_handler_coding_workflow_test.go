@@ -161,3 +161,95 @@ func TestCodingWorkflowProperty2_ConfirmationContainsAllComponents(t *testing.T)
 		t.Errorf("Property 2 failed: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Feature: coding-interaction-workflow, Property 3: Coding vs non-coding task distinction
+//
+// Validates: Requirements 1.5, 6.4, 7.1, 7.3
+// For any valid system configuration, buildSystemPrompt() output must contain
+// clear criteria distinguishing Coding_Task from non-coding requests, and
+// explicitly list non-coding examples (file operations like bash/read_file/write_file,
+// configuration, screenshots, general questions).
+// ---------------------------------------------------------------------------
+func TestCodingWorkflowProperty3_CodingVsNonCodingDistinction(t *testing.T) {
+	f := func(cfg randomAppConfig) bool {
+		prompt := buildPromptForConfig(cfg)
+
+		// Must contain Coding_Task concept
+		hasCodingTask := strings.Contains(prompt, "Coding_Task") || strings.Contains(prompt, "编程任务")
+		if !hasCodingTask {
+			t.Logf("prompt missing Coding_Task / 编程任务")
+			return false
+		}
+
+		// Must contain non-coding task concept
+		hasNonCoding := strings.Contains(prompt, "非编程任务") || strings.Contains(prompt, "non-coding")
+		if !hasNonCoding {
+			t.Logf("prompt missing 非编程任务")
+			return false
+		}
+
+		// Must explicitly list non-coding examples: file operations
+		hasBash := strings.Contains(prompt, "bash")
+		hasReadFile := strings.Contains(prompt, "read_file")
+		hasWriteFile := strings.Contains(prompt, "write_file")
+		if !hasBash || !hasReadFile || !hasWriteFile {
+			t.Logf("prompt missing file operation examples (bash=%v, read_file=%v, write_file=%v)",
+				hasBash, hasReadFile, hasWriteFile)
+			return false
+		}
+
+		// Must mention configuration and screenshots as non-coding
+		hasConfig := strings.Contains(prompt, "配置")
+		hasScreenshot := strings.Contains(prompt, "截屏") || strings.Contains(prompt, "screenshot")
+		if !hasConfig || !hasScreenshot {
+			t.Logf("prompt missing config/screenshot examples (config=%v, screenshot=%v)",
+				hasConfig, hasScreenshot)
+			return false
+		}
+
+		return true
+	}
+
+	if err := quick.Check(f, quickConfig()); err != nil {
+		t.Errorf("Property 3 failed: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature: coding-interaction-workflow, Property 4: Skip_Signal bilingual patterns
+//
+// Validates: Requirements 2.1, 2.3, 6.3
+// For any valid system configuration, buildSystemPrompt() output must contain
+// Skip_Signal patterns in both Chinese (直接做, 不用问了) and English
+// (just do it, go ahead).
+// ---------------------------------------------------------------------------
+func TestCodingWorkflowProperty4_SkipSignalBilingualPatterns(t *testing.T) {
+	f := func(cfg randomAppConfig) bool {
+		prompt := buildPromptForConfig(cfg)
+
+		// Chinese Skip_Signal patterns
+		hasChineseSkip1 := strings.Contains(prompt, "直接做")
+		hasChineseSkip2 := strings.Contains(prompt, "不用问了")
+		if !hasChineseSkip1 || !hasChineseSkip2 {
+			t.Logf("prompt missing Chinese Skip_Signal (直接做=%v, 不用问了=%v)",
+				hasChineseSkip1, hasChineseSkip2)
+			return false
+		}
+
+		// English Skip_Signal patterns
+		hasEnglishSkip1 := strings.Contains(prompt, "just do it")
+		hasEnglishSkip2 := strings.Contains(prompt, "go ahead")
+		if !hasEnglishSkip1 || !hasEnglishSkip2 {
+			t.Logf("prompt missing English Skip_Signal (just do it=%v, go ahead=%v)",
+				hasEnglishSkip1, hasEnglishSkip2)
+			return false
+		}
+
+		return true
+	}
+
+	if err := quick.Check(f, quickConfig()); err != nil {
+		t.Errorf("Property 4 failed: %v", err)
+	}
+}
