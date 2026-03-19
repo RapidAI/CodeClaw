@@ -39,6 +39,7 @@ import { ClawNetKnowledgePanel } from './components/remote/ClawNetKnowledgePanel
 import { ClawNetSwarmPanel } from './components/remote/ClawNetSwarmPanel';
 import { ClawNetChatPanel } from './components/remote/ClawNetChatPanel';
 import { ClawNetResumePanel } from './components/remote/ClawNetResumePanel';
+import { ClawNetTabContainer } from './components/remote/ClawNetTabContainer';
 import { OnboardingWizard } from './components/remote/OnboardingWizard';
 import { AIAssistantPanel } from './components/ai/AIAssistantPanel';
 import { useAIAssistant } from './components/ai/useAIAssistant';
