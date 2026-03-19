@@ -9,6 +9,7 @@ export interface ChatMessage {
     fields?: Array<{ label: string; value: string }>;
     actions?: Array<{ label: string; command: string; style: string }>;
     localFilePath?: string;
+    localFilePaths?: string[];
     thumbnailBase64?: string;
     timestamp: number;
 }
@@ -47,6 +48,7 @@ export function useAIAssistant() {
                 fields: response.fields,
                 actions: response.actions,
                 localFilePath: response.local_file_path,
+                localFilePaths: response.local_file_paths,
                 thumbnailBase64: response.thumbnail_base64,
                 timestamp: Date.now(),
             };

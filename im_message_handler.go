@@ -42,6 +42,7 @@ type IMAgentResponse struct {
 	FileName        string             `json:"file_name,omitempty"`
 	FileMimeType    string             `json:"file_mime_type,omitempty"`
 	LocalFilePath   string             `json:"local_file_path,omitempty"`
+	LocalFilePaths  []string           `json:"local_file_paths,omitempty"`
 	ThumbnailBase64 string             `json:"thumbnail_base64,omitempty"`
 	Error           string             `json:"error,omitempty"`
 }
@@ -1425,7 +1426,10 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 
 		// Execute tool calls and feed results back.
 		var pendingImageKey string
-		var pendingFileData, pendingFileName, pendingFileMimeType string
+		type pendingFile struct {
+			name, mimeType, data string
+		}
+		var pendingFiles []pendingFile
 		screenshotAlreadySent := false
 		for _, tc := range choice.Message.ToolCalls {
 			sendToolProgress(fmt.Sprintf("⚙️ 正在执行工具: %s", tc.Function.Name))
@@ -1452,7 +1456,7 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 				toolContent = "截图已成功捕获并发送给用户。"
 			}
 
-			// Intercept file send results: extract base64 file data
+			// Intercept file send results: collect ALL files (not just the last one).
 			// Format: [file_base64|filename|mimetype]data
 			if strings.HasPrefix(result, "[file_base64|") {
 				rest := strings.TrimPrefix(result, "[file_base64|")
@@ -1460,10 +1464,12 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 					meta := rest[:closeBracket]
 					parts := strings.SplitN(meta, "|", 2)
 					if len(parts) == 2 {
-						pendingFileName = parts[0]
-						pendingFileMimeType = parts[1]
-						pendingFileData = rest[closeBracket+1:]
-						toolContent = fmt.Sprintf("文件 %s 已准备好，将发送给用户。", pendingFileName)
+						pendingFiles = append(pendingFiles, pendingFile{
+							name:     parts[0],
+							mimeType: parts[1],
+							data:     rest[closeBracket+1:],
+						})
+						toolContent = fmt.Sprintf("文件 %s 已准备好，将发送给用户。", parts[0])
 					}
 				}
 			}
@@ -1515,25 +1521,40 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 			return &IMAgentResponse{Text: "📷 截图已发送"}
 		}
 
-		// If a file was prepared, return it immediately for IM delivery.
-		if pendingFileData != "" {
+		// If file(s) were prepared, return them for delivery.
+		if len(pendingFiles) > 0 {
 			h.memory.save(userID, trimHistory(history))
-			// Desktop platform: save file locally and return path
+			// Desktop platform: save all files locally and return paths
 			if platform == "desktop" {
-				filePath, err := h.saveFileDataToLocal(pendingFileName, pendingFileData)
-				if err != nil {
-					return &IMAgentResponse{Text: fmt.Sprintf("文件已准备，但保存失败: %s", err.Error())}
+				var savedPaths []string
+				var failLines []string
+				for _, pf := range pendingFiles {
+					filePath, err := h.saveFileDataToLocal(pf.name, pf.data)
+					if err != nil {
+						failLines = append(failLines, fmt.Sprintf("📄 %s 保存失败: %s", pf.name, err.Error()))
+						continue
+					}
+					savedPaths = append(savedPaths, filePath)
 				}
-				return &IMAgentResponse{
-					Text:          fmt.Sprintf("📄 文件已保存: %s", filePath),
-					LocalFilePath: filePath,
+				// Text only contains failure messages (if any); paths are in LocalFilePaths
+				// so the frontend can render clickable links without duplication.
+				resp := &IMAgentResponse{
+					Text:           strings.Join(failLines, "\n"),
+					LocalFilePaths: savedPaths,
 				}
+				// Keep backward compat: also set singular field to first path
+				if len(savedPaths) > 0 {
+					resp.LocalFilePath = savedPaths[0]
+				}
+				return resp
 			}
+			// IM platforms: send the last file (IM channels support one attachment per message)
+			last := pendingFiles[len(pendingFiles)-1]
 			return &IMAgentResponse{
 				Text:         "",
-				FileData:     pendingFileData,
-				FileName:     pendingFileName,
-				FileMimeType: pendingFileMimeType,
+				FileData:     last.data,
+				FileName:     last.name,
+				FileMimeType: last.mimeType,
 			}
 		}
 	}

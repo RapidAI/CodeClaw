@@ -382,6 +382,20 @@ function renderMessage(msg: ChatMessage, executeAction: (cmd: string) => void): 
                         </div>
                     )}
                     {renderContentWithCodeBlocks(msg.content)}
+                    {msg.localFilePaths && msg.localFilePaths.length > 0 && (
+                        <div style={{ margin: "4px 0" }}>
+                            {msg.localFilePaths.map((fp, i) => (
+                                <div key={i} style={{ padding: "2px 0" }}>
+                                    <a href="#"
+                                       onClick={(e) => { e.preventDefault(); ShowItemInFolder(fp); }}
+                                       style={{ color: "#4ec9b0", textDecoration: "underline", cursor: "pointer", wordBreak: "break-all" }}
+                                       title={fp}>
+                                        📄 文件已保存: 📁 {fp}
+                                    </a>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                     {msg.fields && msg.fields.length > 0 && renderFields(msg.fields)}
                     {msg.actions && msg.actions.length > 0 && renderActions(msg.actions, executeAction)}
                 </div>
