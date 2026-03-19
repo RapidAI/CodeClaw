@@ -253,3 +253,135 @@ func TestCodingWorkflowProperty4_SkipSignalBilingualPatterns(t *testing.T) {
 		t.Errorf("Property 4 failed: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Feature: coding-interaction-workflow, Property 5: RFO workflow completeness
+//
+// Validates: Requirements 4.1, 4.2, 5.1, 5.2, 6.2
+// For any valid system configuration, buildSystemPrompt() output must contain:
+// (a) RFO trigger conditions (waiting_input or exited with exit_code=0),
+// (b) all three RFO options (Review, Fix, Optimize),
+// (c) the sequential execution order Review → Fix → Optimize.
+// ---------------------------------------------------------------------------
+func TestCodingWorkflowProperty5_RFOWorkflowCompleteness(t *testing.T) {
+	f := func(cfg randomAppConfig) bool {
+		prompt := buildPromptForConfig(cfg)
+
+		// (a) RFO trigger conditions
+		hasWaitingInput := strings.Contains(prompt, "waiting_input")
+		hasExitCode0 := strings.Contains(prompt, "exit_code=0") || strings.Contains(prompt, "exit code 0") || strings.Contains(prompt, "退出码")
+		if !hasWaitingInput {
+			t.Logf("prompt missing RFO trigger condition 'waiting_input'")
+			return false
+		}
+		// Must mention exited with success condition
+		hasExited := strings.Contains(prompt, "exited")
+		if !hasExited || !hasExitCode0 {
+			t.Logf("prompt missing RFO trigger condition for exited+exit_code=0 (exited=%v, exitCode0=%v)",
+				hasExited, hasExitCode0)
+			return false
+		}
+
+		// (b) All three RFO options
+		hasReview := strings.Contains(prompt, "Review")
+		hasFix := strings.Contains(prompt, "Fix")
+		hasOptimize := strings.Contains(prompt, "Optimize")
+		if !hasReview || !hasFix || !hasOptimize {
+			t.Logf("prompt missing RFO options (Review=%v, Fix=%v, Optimize=%v)",
+				hasReview, hasFix, hasOptimize)
+			return false
+		}
+
+		// (c) Sequential execution order: Review → Fix → Optimize
+		hasOrder := strings.Contains(prompt, "Review → Fix → Optimize")
+		if !hasOrder {
+			t.Logf("prompt missing sequential order 'Review → Fix → Optimize'")
+			return false
+		}
+
+		return true
+	}
+
+	if err := quick.Check(f, quickConfig()); err != nil {
+		t.Errorf("Property 5 failed: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature: coding-interaction-workflow, Property 6: Skip RFO on task failure
+//
+// Validates: Requirements 4.6
+// For any valid system configuration, buildSystemPrompt() output must contain
+// explicit instructions to skip RFO when task fails (exit_code≠0 or error status).
+// ---------------------------------------------------------------------------
+func TestCodingWorkflowProperty6_SkipRFOOnTaskFailure(t *testing.T) {
+	f := func(cfg randomAppConfig) bool {
+		prompt := buildPromptForConfig(cfg)
+
+		// Must mention skipping RFO on failure
+		hasFailureSkip := strings.Contains(prompt, "exit_code≠0") || strings.Contains(prompt, "exit_code!=0") || strings.Contains(prompt, "非零")
+		hasErrorStatus := strings.Contains(prompt, "error") || strings.Contains(prompt, "失败")
+		hasSkipRFO := strings.Contains(prompt, "跳过 RFO") || strings.Contains(prompt, "跳过RFO") || strings.Contains(prompt, "skip RFO")
+
+		if !hasFailureSkip {
+			t.Logf("prompt missing failure condition (exit_code≠0 or 非零)")
+			return false
+		}
+		if !hasErrorStatus {
+			t.Logf("prompt missing error status reference")
+			return false
+		}
+		if !hasSkipRFO {
+			t.Logf("prompt missing skip RFO instruction")
+			return false
+		}
+
+		return true
+	}
+
+	if err := quick.Check(f, quickConfig()); err != nil {
+		t.Errorf("Property 6 failed: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature: coding-interaction-workflow, Property 7: Existing workflow rules preserved
+//
+// Validates: Requirements 6.5
+// For any valid system configuration, buildSystemPrompt() output must preserve:
+// (a) 会话失败止损原则,
+// (b) 执行验证原则,
+// (c) busy 会话不终止规则 (绝对不要终止状态为 busy 的编程会话).
+// ---------------------------------------------------------------------------
+func TestCodingWorkflowProperty7_ExistingWorkflowRulesPreserved(t *testing.T) {
+	f := func(cfg randomAppConfig) bool {
+		prompt := buildPromptForConfig(cfg)
+
+		// (a) 会话失败止损原则
+		hasStopLoss := strings.Contains(prompt, "会话失败止损") || strings.Contains(prompt, "止损原则")
+		if !hasStopLoss {
+			t.Logf("prompt missing 会话失败止损原则")
+			return false
+		}
+
+		// (b) 执行验证原则
+		hasVerification := strings.Contains(prompt, "执行验证原则") || strings.Contains(prompt, "执行验证")
+		if !hasVerification {
+			t.Logf("prompt missing 执行验证原则")
+			return false
+		}
+
+		// (c) busy 会话不终止规则
+		hasBusyRule := strings.Contains(prompt, "绝对不要终止状态为 busy 的编程会话")
+		if !hasBusyRule {
+			t.Logf("prompt missing busy 会话不终止规则")
+			return false
+		}
+
+		return true
+	}
+
+	if err := quick.Check(f, quickConfig()); err != nil {
+		t.Errorf("Property 7 failed: %v", err)
+	}
+}
