@@ -96,15 +96,17 @@ export function ClawNetChatPanel({ lang, clawNetRunning }: Props) {
         setTopicBusy(true);
         try {
             const res = await ClawNetPostTopicMessage(activeTopic, topicText.trim());
+            if (!mountedRef.current) return;
             if (res.ok) { setTopicText(""); loadTopicMsgs(activeTopic); }
         } catch {}
-        setTopicBusy(false);
+        if (mountedRef.current) setTopicBusy(false);
     };
 
     const createTopic = async () => {
         if (!newTopicName.trim()) return;
         try {
             const res = await ClawNetCreateTopic(newTopicName.trim(), newTopicDesc.trim());
+            if (!mountedRef.current) return;
             if (res.ok) { setNewTopicName(""); setNewTopicDesc(""); setShowNewTopic(false); loadTopics(); }
         } catch {}
     };

@@ -41,7 +41,13 @@ export function ClawNetSwarmPanel({ lang, clawNetRunning }: Props) {
     const [actionMsg, setActionMsg] = useState("");
     const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const mountedRef = useRef(true);
-    useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+            if (msgTimer.current) clearTimeout(msgTimer.current);
+        };
+    }, []);
 
     // Fix: auto-clear action messages after a few seconds
     const showMsg = useCallback((msg: string) => {

@@ -70,7 +70,7 @@ export function ClawNetResumePanel({ lang, clawNetRunning }: Props) {
             if (failed) setMsg(`❌ ${(failed as any).error}`);
             else setMsg(zh ? "✅ 已保存" : "✅ Saved");
         } catch (e: any) { setMsg(`❌ ${e.message}`); }
-        setSaving(false);
+        if (mountedRef.current) setSaving(false);
     };
 
     const doSearch = async () => {
@@ -80,7 +80,7 @@ export function ClawNetResumePanel({ lang, clawNetRunning }: Props) {
             const res = await ClawNetSearchKnowledge(query.trim());
             if (mountedRef.current && res.ok) setResults(res.entries as any[] || []);
         } catch {}
-        setSearching(false);
+        if (mountedRef.current) setSearching(false);
     };
 
     if (!clawNetRunning) return <div style={cnLabel}>{zh ? "虾网未连接" : "ClawNet not connected"}</div>;
