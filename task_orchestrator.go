@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -33,6 +36,7 @@ type TaskOrchestrator2 struct {
 	contextBridge *ContextBridge
 	plans         map[string]*TaskPlan
 	mu            sync.RWMutex
+	persistPath   string // optional: path to persist plans on disk
 }
 
 // NewTaskOrchestrator2 creates a new task orchestrator.
@@ -43,6 +47,20 @@ func NewTaskOrchestrator2(manager *RemoteSessionManager, selector *ToolSelector,
 		contextBridge: bridge,
 		plans:         make(map[string]*TaskPlan),
 	}
+}
+
+// NewTaskOrchestrator2WithPersist creates a task orchestrator that persists
+// plans to disk. It loads any previously saved plans on creation.
+func NewTaskOrchestrator2WithPersist(manager *RemoteSessionManager, selector *ToolSelector, bridge *ContextBridge, persistPath string) *TaskOrchestrator2 {
+	o := &TaskOrchestrator2{
+		manager:       manager,
+		toolSelector:  selector,
+		contextBridge: bridge,
+		plans:         make(map[string]*TaskPlan),
+		persistPath:   persistPath,
+	}
+	_ = o.loadPlans()
+	return o
 }
 
 // CreatePlan creates a new execution plan.
@@ -64,10 +82,12 @@ func (o *TaskOrchestrator2) CreatePlan(description string, subTasks []PlanSubTas
 	o.mu.Lock()
 	o.plans[planID] = plan
 	o.mu.Unlock()
+	_ = o.savePlans()
 	return plan, nil
 }
 
 // Execute runs a plan. Subtasks with no dependencies run in parallel.
+// Already-completed subtasks are skipped (supports Resume).
 func (o *TaskOrchestrator2) Execute(planID string) error {
 	o.mu.Lock()
 	plan, ok := o.plans[planID]
@@ -79,6 +99,16 @@ func (o *TaskOrchestrator2) Execute(planID string) error {
 	o.mu.Unlock()
 
 	completed := make(map[string]bool)
+	var completedMu sync.Mutex // protects the completed map
+	// Pre-populate with already-completed subtasks (for Resume).
+	o.mu.RLock()
+	for _, st := range plan.SubTasks {
+		if st.Status == "completed" {
+			completed[st.ID] = true
+		}
+	}
+	o.mu.RUnlock()
+
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
 	var firstErr error
@@ -86,6 +116,7 @@ func (o *TaskOrchestrator2) Execute(planID string) error {
 	for {
 		var ready []int
 		o.mu.RLock()
+		completedMu.Lock()
 		for i, st := range plan.SubTasks {
 			if st.Status != "pending" {
 				continue
@@ -101,6 +132,7 @@ func (o *TaskOrchestrator2) Execute(planID string) error {
 				ready = append(ready, i)
 			}
 		}
+		completedMu.Unlock()
 		o.mu.RUnlock()
 
 		if len(ready) == 0 {
@@ -141,9 +173,12 @@ func (o *TaskOrchestrator2) Execute(planID string) error {
 				} else {
 					plan.SubTasks[i].Status = "completed"
 					plan.SubTasks[i].Result = result
+					completedMu.Lock()
 					completed[plan.SubTasks[i].ID] = true
+					completedMu.Unlock()
 				}
 				o.mu.Unlock()
+				_ = o.savePlans()
 			}()
 		}
 		wg.Wait()
@@ -151,12 +186,14 @@ func (o *TaskOrchestrator2) Execute(planID string) error {
 			o.mu.Lock()
 			plan.Status = "failed"
 			o.mu.Unlock()
+			_ = o.savePlans()
 			return firstErr
 		}
 	}
 	o.mu.Lock()
 	plan.Status = "completed"
 	o.mu.Unlock()
+	_ = o.savePlans()
 	return nil
 }
 
@@ -168,7 +205,6 @@ func (o *TaskOrchestrator2) executeSubTask(st *PlanSubTask) (string, error) {
 }
 
 // GetStatus returns a snapshot of the current state of a plan.
-// The returned value is a copy; callers may read it without holding locks.
 func (o *TaskOrchestrator2) GetStatus(planID string) (*TaskPlan, error) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -190,5 +226,104 @@ func (o *TaskOrchestrator2) Cancel(planID string) error {
 		return fmt.Errorf("计划 %s 不存在", planID)
 	}
 	plan.Status = "cancelled"
+	_ = o.savePlansLocked()
+	return nil
+}
+
+// Resume restarts execution of a plan from its last checkpoint. Only
+// subtasks that are still "pending" or were "running" (interrupted) will
+// be executed. Already "completed" subtasks are skipped.
+func (o *TaskOrchestrator2) Resume(planID string) error {
+	o.mu.Lock()
+	plan, ok := o.plans[planID]
+	if !ok {
+		o.mu.Unlock()
+		return fmt.Errorf("计划 %s 不存在", planID)
+	}
+	for i := range plan.SubTasks {
+		if plan.SubTasks[i].Status == "running" {
+			plan.SubTasks[i].Status = "pending"
+		}
+	}
+	plan.Status = "running"
+	o.mu.Unlock()
+
+	return o.Execute(planID)
+}
+
+// ListResumable returns plans that can be resumed (status == "failed" or
+// "running" with pending subtasks).
+func (o *TaskOrchestrator2) ListResumable() []*TaskPlan {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+
+	var result []*TaskPlan
+	for _, plan := range o.plans {
+		if plan.Status == "failed" || plan.Status == "running" {
+			hasPending := false
+			for _, st := range plan.SubTasks {
+				if st.Status == "pending" || st.Status == "running" {
+					hasPending = true
+					break
+				}
+			}
+			if hasPending {
+				cp := *plan
+				cp.SubTasks = append([]PlanSubTask(nil), plan.SubTasks...)
+				result = append(result, &cp)
+			}
+		}
+	}
+	return result
+}
+
+// ---------------------------------------------------------------------------
+// Plan persistence
+// ---------------------------------------------------------------------------
+
+// savePlans persists all plans to disk (acquires read lock).
+func (o *TaskOrchestrator2) savePlans() error {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.savePlansLocked()
+}
+
+// savePlansLocked persists all plans to disk. Caller must hold at least a
+// read lock on o.mu.
+func (o *TaskOrchestrator2) savePlansLocked() error {
+	if o.persistPath == "" {
+		return nil
+	}
+	dir := filepath.Dir(o.persistPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("task_orchestrator: create dir: %w", err)
+	}
+	data, err := json.MarshalIndent(o.plans, "", "  ")
+	if err != nil {
+		return fmt.Errorf("task_orchestrator: marshal: %w", err)
+	}
+	return os.WriteFile(o.persistPath, data, 0o644)
+}
+
+// loadPlans reads plans from disk. Called once at creation.
+func (o *TaskOrchestrator2) loadPlans() error {
+	if o.persistPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(o.persistPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("task_orchestrator: read: %w", err)
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	var plans map[string]*TaskPlan
+	if err := json.Unmarshal(data, &plans); err != nil {
+		return fmt.Errorf("task_orchestrator: unmarshal: %w", err)
+	}
+	o.plans = plans
 	return nil
 }

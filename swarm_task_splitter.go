@@ -146,6 +146,67 @@ func (s *TaskSplitter) callLLM(prompt string) ([]byte, error) {
 	return swarmCallLLM(s.llmConfig, prompt, 0.2, 120*time.Second)
 }
 
+// SplitViaAgent delegates task decomposition to a programming tool instance
+// (e.g. Claude, Gemini) instead of calling the LLM API directly. This lets
+// the tool analyze the actual project files and produce more accurate tasks.
+// The orchestrator creates a session with the "architect" role, sends the
+// requirements, and parses the structured output.
+func (s *TaskSplitter) SplitViaAgent(agentOutput string) ([]SubTask, error) {
+	if strings.TrimSpace(agentOutput) == "" {
+		return nil, fmt.Errorf("agent output is empty")
+	}
+
+	// Try to parse structured JSON from the agent output first.
+	jsonData := extractJSON([]byte(agentOutput))
+	var raw []struct {
+		Description   string   `json:"description"`
+		ExpectedFiles []string `json:"expected_files"`
+		Dependencies  []int    `json:"dependencies"`
+	}
+	if err := json.Unmarshal(jsonData, &raw); err == nil && len(raw) > 0 {
+		tasks := make([]SubTask, len(raw))
+		for i, r := range raw {
+			tasks[i] = SubTask{
+				Index:         i,
+				Description:   r.Description,
+				ExpectedFiles: r.ExpectedFiles,
+				Dependencies:  r.Dependencies,
+			}
+		}
+		return tasks, nil
+	}
+
+	// Fallback: if the agent output is not structured JSON, use LLM to
+	// extract tasks from the free-form text.
+	prompt := fmt.Sprintf(`以下是一个编程助手对项目需求的分析输出。请从中提取独立的开发子任务。
+
+分析输出：
+%s
+
+请返回 JSON 数组，每个元素包含：description, expected_files, dependencies。
+只返回 JSON 数组，不要其他内容。`, agentOutput)
+
+	body, err := s.callLLM(prompt)
+	if err != nil {
+		return nil, fmt.Errorf("parse agent output via LLM: %w", err)
+	}
+
+	if err := json.Unmarshal(extractJSON(body), &raw); err != nil {
+		return nil, fmt.Errorf("parse extracted tasks: %w", err)
+	}
+
+	tasks := make([]SubTask, len(raw))
+	for i, r := range raw {
+		tasks[i] = SubTask{
+			Index:         i,
+			Description:   r.Description,
+			ExpectedFiles: r.ExpectedFiles,
+			Dependencies:  r.Dependencies,
+		}
+	}
+	return tasks, nil
+}
+
 // extractJSON tries to find a JSON array in the text (handles markdown fences).
 func extractJSON(data []byte) []byte {
 	s := string(data)

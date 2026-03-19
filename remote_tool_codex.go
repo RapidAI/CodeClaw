@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 )
 
 // CodexAdapter launches the OpenAI Codex CLI in non-interactive SDK mode
@@ -44,7 +43,7 @@ func (a *CodexAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 
 	// In original (OpenAI native) mode, don't inject model or wire_api
 	// so Codex uses its own `codex auth` login and default settings.
-	isOriginal := strings.ToLower(strings.TrimSpace(spec.ModelName)) == "original"
+	isOriginal := spec.IsBuiltin
 
 	extra := map[string]string{}
 	if !isOriginal {

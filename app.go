@@ -65,7 +65,8 @@ type App struct {
 	templateManager      *SessionTemplateManager
 	contextResolver      *SessionContextResolver
 	sessionPrecheck      *SessionPrecheck
-	conversationArchiver *ConversationArchiver
+	conversationArchiver  *ConversationArchiver
+	sessionCheckpointer  *SessionCheckpointer
 	startupFeedback      *SessionStartupFeedback
 	ioRelay              *SessionIORelay
 	swarmOrchestrator    *SwarmOrchestrator
@@ -103,6 +104,7 @@ type ModelConfig struct {
 	ApiKey          string `json:"api_key"`
 	WireApi         string `json:"wire_api"`
 	IsCustom        bool   `json:"is_custom"`
+	IsBuiltin       bool   `json:"is_builtin"`
 	HasSubscription bool   `json:"has_subscription"`
 }
 type ProjectConfig struct {
@@ -440,6 +442,14 @@ func (a *App) initRemoteInfra() {
 	if a.contextBridge == nil {
 		a.contextBridge = NewContextBridge()
 	}
+	// Initialize SessionCheckpointer after contextBridge so it can use it.
+	if a.sessionCheckpointer == nil && a.memoryStore != nil {
+		a.sessionCheckpointer = NewSessionCheckpointer(a.memoryStore, a.contextBridge)
+	}
+	// Wire checkpointer into startup feedback for resume context injection.
+	if a.startupFeedback != nil && a.sessionCheckpointer != nil {
+		a.startupFeedback.SetCheckpointer(a.sessionCheckpointer)
+	}
 	// Initialize TaskOrchestrator2 (Phase 3 upgrade).
 	if a.taskOrchestrator2 == nil && a.remoteSessions != nil && a.toolSelector != nil {
 		a.taskOrchestrator2 = NewTaskOrchestrator2(a.remoteSessions, a.toolSelector, a.contextBridge)
@@ -768,7 +778,7 @@ func (a *App) buildClaudeLaunchEnv(
 	env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "64000"
 	env["MAX_THINKING_TOKENS"] = "10000"
 
-	if strings.ToLower(selectedModel.ModelName) != "original" {
+	if !selectedModel.IsBuiltin {
 		if selectedModel.ApiKey != "" {
 			env["ANTHROPIC_AUTH_TOKEN"] = selectedModel.ApiKey
 		}
@@ -816,7 +826,7 @@ func (a *App) buildClaudeLaunchEnv(
 		}
 	}
 
-	if strings.ToLower(selectedModel.ModelName) != "original" {
+	if !selectedModel.IsBuiltin {
 		a.clearClaudeConfig()
 	} else {
 		// Restore native config so Claude can use its own Anthropic auth.
@@ -851,7 +861,7 @@ func (a *App) buildCodexLaunchEnv(
 	// Original (OpenAI native) mode: don't inject API key / base URL env vars,
 	// let Codex use its own `codex auth` login token stored locally.
 	// Only clear config and inject env vars for third-party providers.
-	if strings.ToLower(selectedModel.ModelName) != "original" {
+	if !selectedModel.IsBuiltin {
 		if selectedModel.ApiKey != "" {
 			env["OPENAI_API_KEY"] = selectedModel.ApiKey
 		}
@@ -1007,7 +1017,7 @@ func (a *App) buildGeminiLaunchEnv(
 	// Original (Google native) mode: don't inject API key / base URL env vars,
 	// let Gemini CLI use its own Google OAuth login stored locally.
 	// Only inject env vars for third-party providers.
-	if strings.ToLower(selectedModel.ModelName) != "original" {
+	if !selectedModel.IsBuiltin {
 		if selectedModel.ApiKey != "" {
 			env["GEMINI_API_KEY"] = selectedModel.ApiKey
 			env["GOOGLE_API_KEY"] = selectedModel.ApiKey
@@ -1165,6 +1175,7 @@ func (a *App) buildRemoteLaunchSpec(
 		ProjectPath:  projectDir,
 		ModelName:    selectedModel.ModelName,
 		ModelID:      selectedModel.ModelId,
+		IsBuiltin:    selectedModel.IsBuiltin,
 		BinaryName:   meta.BinaryName,
 		Title:        title,
 		LaunchSource: RemoteLaunchSourceDesktop,
@@ -1559,7 +1570,7 @@ func (a *App) syncToClaudeSettings(config AppConfig, projectDir string, instance
 		return fmt.Errorf("selected model not found")
 	}
 	dir, settingsPath, legacyPath := a.getClaudeConfigPaths(projectDir, instanceID)
-	if strings.ToLower(selectedModel.ModelName) == "original" {
+	if selectedModel.IsBuiltin {
 		a.clearClaudeConfig()
 		return nil
 	}
@@ -1727,7 +1738,7 @@ func (a *App) syncToCodexSettings(config AppConfig, projectDir string, instanceI
 		return fmt.Errorf("selected codex model not found")
 	}
 	dir, authPath := a.getCodexConfigPaths(projectDir, instanceID)
-	if strings.ToLower(selectedModel.ModelName) == "original" {
+	if selectedModel.IsBuiltin {
 		a.clearCodexConfig()
 		return nil
 	}
@@ -2017,7 +2028,7 @@ func (a *App) syncToOpencodeSettings(config AppConfig, projectDir string, instan
 		return fmt.Errorf("selected opencode model not found")
 	}
 	dir, configPath := a.getOpencodeConfigPaths(projectDir, instanceID)
-	if strings.ToLower(selectedModel.ModelName) == "original" {
+	if selectedModel.IsBuiltin {
 		a.clearOpencodeConfig()
 		return nil
 	}
@@ -2128,7 +2139,7 @@ func (a *App) syncToGeminiSettings(config AppConfig, projectDir string, instance
 	var configData map[string]interface{}
 
 	// If using original (Google official)
-	if strings.ToLower(selectedModel.ModelName) == "original" {
+	if selectedModel.IsBuiltin {
 		a.log("Gemini: Using Google account authentication (Original mode)")
 		configData = map[string]interface{}{
 			"security": map[string]interface{}{
@@ -2183,7 +2194,7 @@ func (a *App) syncToIFlowSettings(config AppConfig, projectDir string, instanceI
 		return fmt.Errorf("selected iflow model not found")
 	}
 	dir, configPath := a.getIFlowConfigPaths(projectDir, instanceID)
-	if strings.ToLower(selectedModel.ModelName) == "original" {
+	if selectedModel.IsBuiltin {
 		a.clearIFlowConfig()
 		return nil
 	}
@@ -2261,7 +2272,7 @@ func (a *App) syncToKiloSettings(config AppConfig, projectDir string, instanceID
 		return fmt.Errorf("selected kilo model not found")
 	}
 	dir, configPath := a.getKiloConfigPaths(projectDir, instanceID)
-	if strings.ToLower(selectedModel.ModelName) == "original" {
+	if selectedModel.IsBuiltin {
 		a.clearKiloConfig()
 		return nil
 	}
@@ -2364,7 +2375,7 @@ func (a *App) syncToCodeBuddySettings(config AppConfig, projectPath string) erro
 		if m.ModelName != config.CodeBuddy.CurrentModel {
 			continue
 		}
-		if strings.ToLower(m.ModelName) == "original" {
+		if m.IsBuiltin {
 			continue
 		}
 		vendor := strings.ToLower(m.ModelName)
@@ -2586,7 +2597,7 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 			a.log(fmt.Sprintf("Proxy enabled: %s:%s", proxyHost, proxyPort))
 		}
 	}
-	if strings.ToLower(selectedModel.ModelName) != "original" {
+	if !selectedModel.IsBuiltin {
 		// --- OTHER PROVIDER MODE: WRITE CONFIG & SET ENV ---
 		// Only add to env map, do NOT set in main process (to avoid cross-contamination)
 		env[envKey] = selectedModel.ApiKey
@@ -2759,7 +2770,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	}
 	// Helper for default models
 	defaultClaudeModels := []ModelConfig{
-		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: ""},
+		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: "", IsBuiltin: true},
 		{ModelName: "GLM", ModelId: "glm-4.7", ModelUrl: "https://open.bigmodel.cn/api/anthropic", ApiKey: ""},
 		{ModelName: "Kimi", ModelId: "kimi-k2-thinking", ModelUrl: "https://api.kimi.com/coding", ApiKey: ""},
 		{ModelName: "Doubao", ModelId: "doubao-seed-code-preview-latest", ModelUrl: "https://ark.cn-beijing.volces.com/api/coding", ApiKey: ""},
@@ -2780,7 +2791,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Custom5", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 	}
 	defaultGeminiModels := []ModelConfig{
-		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: ""},
+		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: "", IsBuiltin: true},
 		{ModelName: "ChatFire", ModelId: "gemini-2.5-pro", ModelUrl: "https://api.chatfire.cn/v1beta/models/gemini-2.5-pro:generateContent", ApiKey: ""},
 		{ModelName: "Custom", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 		{ModelName: "Custom1", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
@@ -2790,7 +2801,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Custom5", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 	}
 	defaultCodexModels := []ModelConfig{
-		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: ""},
+		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: "", IsBuiltin: true},
 		{ModelName: "ChatFire", ModelId: "gpt-5.1-codex-mini", ModelUrl: "https://api.chatfire.cn/v1", ApiKey: "", WireApi: "responses"},
 		{ModelName: "DeepSeek", ModelId: "deepseek-chat", ModelUrl: "https://api.deepseek.com/v1", ApiKey: ""},
 		{ModelName: "GLM", ModelId: "glm-5-turbo", ModelUrl: "https://open.bigmodel.cn/api/paas/v4", ApiKey: ""},
@@ -2809,7 +2820,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Custom5", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 	}
 	defaultOpencodeModels := []ModelConfig{
-		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: ""},
+		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: "", IsBuiltin: true},
 		{ModelName: "ChatFire", ModelId: "gpt-4o", ModelUrl: "https://api.chatfire.cn/v1", ApiKey: ""},
 		{ModelName: "DeepSeek", ModelId: "deepseek-chat", ModelUrl: "https://api.deepseek.com/v1", ApiKey: ""},
 		{ModelName: "GLM", ModelId: "glm-4.7", ModelUrl: "https://open.bigmodel.cn/api/coding/paas/v4", ApiKey: ""},
@@ -2828,7 +2839,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Custom5", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 	}
 	defaultIFlowModels := []ModelConfig{
-		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: ""},
+		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: "", IsBuiltin: true},
 		{ModelName: "DeepSeek", ModelId: "deepseek-chat", ModelUrl: "https://api.deepseek.com/v1", ApiKey: ""},
 		{ModelName: "GLM", ModelId: "glm-4.7", ModelUrl: "https://open.bigmodel.cn/api/coding/paas/v4", ApiKey: ""},
 		{ModelName: "Doubao", ModelId: "doubao-seed-code-preview-latest", ModelUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", ApiKey: ""},
@@ -2843,7 +2854,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		{ModelName: "Custom1", ModelId: "", ModelUrl: "", ApiKey: "", IsCustom: true},
 	}
 	defaultKiloModels := []ModelConfig{
-		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: ""},
+		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: "", IsBuiltin: true},
 		{ModelName: "ChatFire", ModelId: "gpt-4o", ModelUrl: "https://api.chatfire.cn/v1", ApiKey: ""},
 		{ModelName: "DeepSeek", ModelId: "deepseek-chat", ModelUrl: "https://api.deepseek.com/v1", ApiKey: ""},
 		{ModelName: "GLM", ModelId: "glm-4.7", ModelUrl: "https://open.bigmodel.cn/api/coding/paas/v4", ApiKey: ""},
@@ -2864,7 +2875,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	}
 	// Cursor Agent uses OpenAI-compatible protocol, same providers as Codex
 	defaultCursorModels := []ModelConfig{
-		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: ""},
+		{ModelName: "Original", ModelId: "", ModelUrl: "", ApiKey: "", IsBuiltin: true},
 		{ModelName: "ChatFire", ModelId: "gpt-5.1-codex-mini", ModelUrl: "https://api.chatfire.cn/v1", ApiKey: "", WireApi: "responses"},
 		{ModelName: "DeepSeek", ModelId: "deepseek-chat", ModelUrl: "https://api.deepseek.com/v1", ApiKey: ""},
 		{ModelName: "GLM", ModelId: "glm-4.7", ModelUrl: "https://open.bigmodel.cn/api/coding/paas/v4", ApiKey: ""},
@@ -3269,7 +3280,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 			}
 		}
 		if !found {
-			*models = append([]ModelConfig{{ModelName: "Original", ModelUrl: "", ApiKey: ""}}, *models...)
+			*models = append([]ModelConfig{{ModelName: "Original", ModelUrl: "", ApiKey: "", IsBuiltin: true}}, *models...)
 		}
 	}
 	// Opencode does NOT use common relay providers
@@ -3358,6 +3369,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		for i := range *models {
 			m := &(*models)[i]
 			if m.ModelName == "Original" {
+				m.IsBuiltin = true
 				originalModel = m
 			} else {
 				newModels = append(newModels, *m)
@@ -3473,7 +3485,7 @@ func syncAllProviderApiKeys(a *App, oldConfig, newConfig *AppConfig) {
 		oldActive := oldTools[activeToolName]
 		if oldActive != nil {
 			for _, m := range activeTool.Models {
-				if strings.EqualFold(m.ModelName, "Original") || strings.EqualFold(m.ModelName, "Custom") || m.IsCustom {
+				if m.IsBuiltin || m.IsCustom {
 					continue
 				}
 				oldM := getProviderModel(oldActive, m.ModelName)
@@ -3495,7 +3507,7 @@ func syncAllProviderApiKeys(a *App, oldConfig, newConfig *AppConfig) {
 			continue
 		}
 		for _, m := range tool.Models {
-			if strings.EqualFold(m.ModelName, "Original") || strings.EqualFold(m.ModelName, "Custom") || m.IsCustom {
+			if m.IsBuiltin || m.IsCustom {
 				continue
 			}
 			lowerName := strings.ToLower(m.ModelName)

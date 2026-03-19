@@ -153,8 +153,8 @@ func (p *SessionPrecheck) checkModel(toolName string) (bool, string) {
 
 	// Find the active model and check for API key
 	for _, m := range toolCfg.Models {
-		if m.ModelId == toolCfg.CurrentModel || toolCfg.CurrentModel == "" {
-			if strings.TrimSpace(m.ApiKey) != "" || m.HasSubscription {
+		if m.ModelName == toolCfg.CurrentModel || toolCfg.CurrentModel == "" {
+			if isValidProvider(m) {
 				return true, ""
 			}
 			return false, "请为 " + remoteToolDisplayName(toolName) + " 的模型 " + m.ModelName + " 设置 API Key"

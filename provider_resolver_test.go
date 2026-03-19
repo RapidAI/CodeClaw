@@ -7,7 +7,7 @@ import (
 
 // helper to build a ModelConfig quickly
 func mkModel(name, apiKey string) ModelConfig {
-	return ModelConfig{ModelName: name, ApiKey: apiKey}
+	return ModelConfig{ModelName: name, ApiKey: apiKey, IsBuiltin: name == "Original"}
 }
 
 func TestProviderResolver_ExplicitValid(t *testing.T) {

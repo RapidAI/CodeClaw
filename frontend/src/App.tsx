@@ -3087,13 +3087,13 @@ ${instruction}`;
                     </div>
 
                     <div
-                        className={`sidebar-item ${navTab === 'clawnet' ? 'active' : ''}`}
-                        onClick={() => switchTool('clawnet')}
-                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'clawnet' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                        title={lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet'}
+                        className={`sidebar-item ${navTab === 'about' ? 'active' : ''}`}
+                        onClick={() => switchTool('about')}
+                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'about' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
+                        title={t("about")}
                     >
-                        <img src={clawnetIcon} alt="ClawNet" style={{ width: '22px', height: '22px', margin: 0 }} />
-                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet'}</span>
+                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>ℹ️</span>
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("about")}</span>
                     </div>
 
                     <div style={{ flex: 1 }}></div>
@@ -3108,13 +3108,13 @@ ${instruction}`;
                         <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("settings")}</span>
                     </div>
                     <div
-                        className={`sidebar-item ${navTab === 'about' ? 'active' : ''}`}
-                        onClick={() => switchTool('about')}
-                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'about' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                        title={t("about")}
+                        className={`sidebar-item ${navTab === 'clawnet' ? 'active' : ''}`}
+                        onClick={() => switchTool('clawnet')}
+                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'clawnet' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
+                        title={lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet'}
                     >
-                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>ℹ️</span>
-                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("about")}</span>
+                        <img src={clawnetIcon} alt="ClawNet" style={{ width: '22px', height: '22px', margin: 0 }} />
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet'}</span>
                     </div>
                 </div>
 
@@ -3273,7 +3273,8 @@ ${instruction}`;
                                                                             navTab === 'remote' ? (lang === 'zh-Hans' ? '远程管理' : lang === 'zh-Hant' ? '遠端管理' : 'Remote Management') :
                                                                                 navTab === 'api-store' ? t("apiStore") :
                                                                                     navTab === 'mcp' ? 'MCP' :
-                                                                                        navTab === 'settings' ? t("globalSettings") : t("about")}
+                                                                                        navTab === 'settings' ? t("globalSettings") :
+                                                                                            navTab === 'clawnet' ? (lang === 'zh-Hans' ? '虾网任务集市' : lang === 'zh-Hant' ? '蝦網任務集市' : 'ClawNet Task Board') : t("about")}
                             </span>
                             {navTab === 'projects' && (
                                 <>

@@ -11,18 +11,13 @@ func TestIsValidProvider(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "Original is valid (case-insensitive)",
-			m:    ModelConfig{ModelName: "Original"},
+			name: "IsBuiltin is valid",
+			m:    ModelConfig{ModelName: "Original", IsBuiltin: true},
 			want: true,
 		},
 		{
-			name: "original lowercase is valid",
-			m:    ModelConfig{ModelName: "original"},
-			want: true,
-		},
-		{
-			name: "ORIGINAL uppercase is valid",
-			m:    ModelConfig{ModelName: "ORIGINAL"},
+			name: "HasSubscription is valid",
+			m:    ModelConfig{ModelName: "SubProvider", HasSubscription: true},
 			want: true,
 		},
 		{
@@ -31,12 +26,12 @@ func TestIsValidProvider(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "empty ApiKey non-Original is invalid",
+			name: "empty ApiKey non-builtin is invalid",
 			m:    ModelConfig{ModelName: "DeepSeek", ApiKey: ""},
 			want: false,
 		},
 		{
-			name: "whitespace-only ApiKey non-Original is invalid",
+			name: "whitespace-only ApiKey non-builtin is invalid",
 			m:    ModelConfig{ModelName: "DeepSeek", ApiKey: "   "},
 			want: false,
 		},
@@ -60,7 +55,7 @@ func TestValidProviders(t *testing.T) {
 	tc := ToolConfig{
 		CurrentModel: "Original",
 		Models: []ModelConfig{
-			{ModelName: "Original"},
+			{ModelName: "Original", IsBuiltin: true},
 			{ModelName: "DeepSeek", ApiKey: "sk-abc"},
 			{ModelName: "EmptyKey", ApiKey: ""},
 			{ModelName: "WhitespaceKey", ApiKey: "  "},

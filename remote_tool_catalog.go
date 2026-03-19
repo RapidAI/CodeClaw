@@ -289,7 +289,7 @@ func listRemoteToolMetadataForApp(app *App) []RemoteToolMetadataView {
 // provider: either the built-in "Original" mode (which uses the tool's
 // own authentication) or a third-party provider with a configured API key.
 func isValidProvider(m ModelConfig) bool {
-	if strings.EqualFold(m.ModelName, "original") {
+	if m.IsBuiltin || m.HasSubscription {
 		return true
 	}
 	return strings.TrimSpace(m.ApiKey) != ""

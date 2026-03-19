@@ -135,7 +135,7 @@ func (a *App) CheckRemoteToolReadiness(toolName, projectDir string, useProxy boo
 	readiness.SelectedModel = spec.ModelName
 	readiness.SelectedModelID = spec.ModelID
 
-	if strings.ToLower(strings.TrimSpace(spec.ModelName)) != "original" && !toolEnvHasCredential(spec.Env) {
+	if !spec.IsBuiltin && !toolEnvHasCredential(spec.Env) {
 		readiness.Issues = append(readiness.Issues, fmt.Sprintf("%s provider API key is empty", toolLabel))
 	}
 

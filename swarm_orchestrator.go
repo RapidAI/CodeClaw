@@ -20,12 +20,16 @@ type SwarmOrchestrator struct {
 	feedbackLoop *FeedbackLoop
 	reporter     *SwarmReporter
 	notifier     SwarmNotifier
+	toolSelector *ToolSelector
+	taskVerifier *TaskVerifier
+	llmConfig    MaclawLLMConfig
 
-	mu         sync.RWMutex
-	activeRun  *SwarmRun
-	runHistory []*SwarmRun
-	maxRounds  int // default 5
-	maxAgents  int // default 5
+	mu              sync.RWMutex
+	activeRun       *SwarmRun
+	runHistory      []*SwarmRun
+	cachedInstalled []string // cached installed tool names
+	maxRounds       int      // default 5
+	maxAgents       int      // default 5
 }
 
 // NewSwarmOrchestrator creates a SwarmOrchestrator with all dependencies.
@@ -49,6 +53,9 @@ func NewSwarmOrchestrator(
 		feedbackLoop: NewFeedbackLoop(llmCfg, 5),
 		reporter:     NewSwarmReporter(),
 		notifier:     notifier,
+		toolSelector: NewToolSelector(),
+		taskVerifier: NewTaskVerifier(llmCfg),
+		llmConfig:    llmCfg,
 		maxRounds:    5,
 		maxAgents:    5,
 	}
@@ -332,4 +339,53 @@ func ValidateMaxAgents(n int) int {
 		return 10
 	}
 	return n
+}
+
+// installedToolNames returns the names of tools that are currently installed
+// and available on this machine. Used by ToolSelector for scoring bonus.
+// The result is cached for the lifetime of the orchestrator to avoid repeated
+// filesystem lookups during concurrent agent scheduling.
+func (o *SwarmOrchestrator) installedToolNames() []string {
+	o.mu.RLock()
+	if o.cachedInstalled != nil {
+		result := o.cachedInstalled
+		o.mu.RUnlock()
+		return result
+	}
+	o.mu.RUnlock()
+
+	if o.app == nil {
+		return nil
+	}
+	views := o.app.ListRemoteToolMetadata()
+	var names []string
+	for _, v := range views {
+		if v.Installed && v.CanStart {
+			names = append(names, v.Name)
+		}
+	}
+
+	o.mu.Lock()
+	o.cachedInstalled = names
+	o.mu.Unlock()
+	return names
+}
+
+// selectToolForTask picks the best tool for a given sub-task. If the run
+// specifies a fixed tool, that tool is always used. Otherwise ToolSelector
+// recommends one based on the task description and installed tools.
+func (o *SwarmOrchestrator) selectToolForTask(run *SwarmRun, task SubTask) (string, string) {
+	// If the user explicitly chose a tool for this run, respect it.
+	if run.Tool != "" {
+		return run.Tool, "用户指定工具"
+	}
+	if o.toolSelector == nil {
+		return "claude", "默认工具"
+	}
+	installed := o.installedToolNames()
+	desc := task.Description
+	if run.TechStack != "" {
+		desc += " " + run.TechStack
+	}
+	return o.toolSelector.Recommend(desc, installed)
 }

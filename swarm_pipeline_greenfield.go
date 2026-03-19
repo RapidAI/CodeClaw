@@ -25,9 +25,23 @@ func (o *SwarmOrchestrator) runGreenfield(run *SwarmRun, req SwarmRunRequest, ma
 	}
 	run.ProjectState = state
 
+	var fallbackArchDesign string
 	tasks, err := o.taskSplitter.SplitRequirements(req.Requirements, req.TechStack)
 	if err != nil {
-		return fmt.Errorf("split requirements: %w", err)
+		// Fallback: try splitting via an architect agent session.
+		log.Printf("[SwarmOrchestrator] direct LLM split failed: %v, trying agent-based split", err)
+		archOutput, archErr := o.runSingleAgent(run, RoleArchitect, 0, run.ProjectPath, PromptContext{
+			ProjectName:  run.ProjectPath,
+			TechStack:    req.TechStack,
+			Requirements: req.Requirements,
+		})
+		if archErr == nil {
+			fallbackArchDesign = archOutput
+			tasks, err = o.taskSplitter.SplitViaAgent(archOutput)
+		}
+		if err != nil {
+			return fmt.Errorf("split requirements: %w", err)
+		}
 	}
 	run.Tasks = tasks
 	o.addTimelineEvent(run, "task_split_done",
@@ -42,10 +56,17 @@ func (o *SwarmOrchestrator) runGreenfield(run *SwarmRun, req SwarmRunRequest, ma
 	// ---------------------------------------------------------------
 	o.setPhase(run, PhaseArchitecture)
 
-	archDesign, err := o.runArchitectPhase(run, req)
-	if err != nil {
-		log.Printf("[SwarmOrchestrator] architect phase failed: %v", err)
-		// Continue with empty design — developers will work without it
+	var archDesign string
+	if fallbackArchDesign != "" {
+		// Reuse the architect output from the fallback task split.
+		archDesign = fallbackArchDesign
+		o.addTimelineEvent(run, "architect_reused", "Reusing architect output from task split fallback", "")
+	} else {
+		archDesign, err = o.runArchitectPhase(run, req)
+		if err != nil {
+			log.Printf("[SwarmOrchestrator] architect phase failed: %v", err)
+			// Continue with empty design — developers will work without it
+		}
 	}
 
 	if err := o.checkPauseCancelGreenfield(run); err != nil {

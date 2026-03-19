@@ -473,6 +473,7 @@ func TestCodexAdapterBuildCommandOriginalMode(t *testing.T) {
 		ProjectPath: projectDir,
 		ModelName:   "original",
 		ModelID:     "gpt-5.2-codex",
+		IsBuiltin:   true,
 		Env:         map[string]string{"OPENAI_API_KEY": "test-key"},
 	})
 	if err != nil {

@@ -46,6 +46,7 @@ type LaunchSpec struct {
 	ProjectPath  string
 	ModelName    string
 	ModelID      string
+	IsBuiltin    bool
 	BinaryName   string
 	Title        string
 	LaunchSource RemoteLaunchSource

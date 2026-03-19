@@ -41,7 +41,7 @@ func TestStartRemoteSessionForProjectProviderField(t *testing.T) {
 	cfg.Claude = ToolConfig{
 		CurrentModel: "Original",
 		Models: []ModelConfig{
-			{ModelName: "Original", ModelId: "claude-sonnet"},
+			{ModelName: "Original", ModelId: "claude-sonnet", IsBuiltin: true},
 			{ModelName: "DeepSeek", ModelId: "deepseek-v3", ApiKey: "sk-abc"},
 			{ModelName: "EmptyKey", ModelId: "empty-model", ApiKey: ""},
 		},

@@ -64,6 +64,39 @@ func TestExtractJSON(t *testing.T) {
 	}
 }
 
+func TestSplitViaAgent_StructuredJSON(t *testing.T) {
+	ts := NewTaskSplitter(MaclawLLMConfig{})
+	agentOutput := `Based on my analysis, here are the tasks:
+` + "```json" + `
+[
+  {"description": "Create user model", "expected_files": ["models/user.go"], "dependencies": []},
+  {"description": "Add login endpoint", "expected_files": ["handlers/auth.go"], "dependencies": [0]}
+]
+` + "```"
+
+	tasks, err := ts.SplitViaAgent(agentOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+	}
+	if tasks[0].Description != "Create user model" {
+		t.Errorf("task 0 desc = %q", tasks[0].Description)
+	}
+	if len(tasks[1].Dependencies) != 1 || tasks[1].Dependencies[0] != 0 {
+		t.Errorf("task 1 deps = %v, want [0]", tasks[1].Dependencies)
+	}
+}
+
+func TestSplitViaAgent_EmptyOutput(t *testing.T) {
+	ts := NewTaskSplitter(MaclawLLMConfig{})
+	_, err := ts.SplitViaAgent("")
+	if err == nil {
+		t.Error("expected error for empty output")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Property tests
 // ---------------------------------------------------------------------------

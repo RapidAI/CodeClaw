@@ -87,7 +87,7 @@ func (a *ConversationArchiver) Archive(userID string, entries []conversationEntr
 // callLLMForSummary sends the conversation text to the configured LLM and
 // asks it to extract user preferences, decisions, and important facts.
 func (a *ConversationArchiver) callLLMForSummary(cfg MaclawLLMConfig, conversationText string) (string, error) {
-	prompt := "请从以下对话中提取关键信息，包括：用户偏好、决策结论、重要事实。" +
+	prompt := "请从以下对话中提取关键信息，包括：用户偏好、决策结论、重要事实、任务进度（做了什么、还差什么）。" +
 		"请用简洁的中文列出要点，不要包含无关信息。如果对话中没有值得记录的信息，请回复「无」。\n\n" +
 		"对话内容：\n" + conversationText
 

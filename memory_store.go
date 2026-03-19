@@ -212,23 +212,33 @@ func (s *MemoryStore) Search(category MemoryCategory, keyword string, limit int)
 }
 
 // Recall retrieves memory entries relevant to the given user message for
-// injection into the system prompt.
+// injection into the system prompt. Delegates to RecallForProject with
+// no project affinity.
+func (s *MemoryStore) Recall(userMessage string) []MemoryEntry {
+	return s.RecallForProject(userMessage, "")
+}
+
+// RecallForProject retrieves memory entries relevant to the given user
+// message, with optional project path affinity boosting.
 //
 // Rules:
 //   - Always include ALL entries with category == "user_fact"
-//   - Score remaining entries by keyword relevance (words from userMessage
-//     that appear in tags or content), then by access_count descending
+//   - Score remaining entries by keyword relevance, project affinity (+3),
+//     and time decay (-1 per week after 7 days)
+//   - Session checkpoints within 24h get a +2 recency boost
+//   - Skip entries with negative score (too old, no match)
 //   - Return at most 20 entries total
 //   - Total estimated tokens (len(content)/4 per entry) must not exceed 2000
-func (s *MemoryStore) Recall(userMessage string) []MemoryEntry {
+func (s *MemoryStore) RecallForProject(userMessage, projectPath string) []MemoryEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	const maxEntries = 20
 	const maxTokens = 2000
 
-	// Split user message into lowercase words for keyword matching.
 	words := strings.Fields(strings.ToLower(userMessage))
+	projectLower := strings.ToLower(projectPath)
+	now := time.Now()
 
 	var userFacts []MemoryEntry
 	type scored struct {
@@ -243,10 +253,32 @@ func (s *MemoryStore) Recall(userMessage string) []MemoryEntry {
 			continue
 		}
 		sc := relevanceScore(e, words)
+
+		// Project affinity: boost entries tagged with the same project.
+		if projectLower != "" {
+			for _, tag := range e.Tags {
+				if strings.ToLower(tag) == projectLower {
+					sc += 3
+					break
+				}
+			}
+		}
+
+		// Time decay: entries older than 7 days lose 1 point per week.
+		age := now.Sub(e.UpdatedAt)
+		if age > 7*24*time.Hour {
+			weeks := int(age.Hours() / (24 * 7))
+			sc -= weeks
+		}
+
+		// Session checkpoints get a recency boost.
+		if e.Category == MemCategorySessionCheckpoint && age < 24*time.Hour {
+			sc += 2
+		}
+
 		others = append(others, scored{entry: e, score: sc})
 	}
 
-	// Sort others: highest relevance first, then highest access_count.
 	sort.SliceStable(others, func(i, j int) bool {
 		if others[i].score != others[j].score {
 			return others[i].score > others[j].score
@@ -254,7 +286,6 @@ func (s *MemoryStore) Recall(userMessage string) []MemoryEntry {
 		return others[i].entry.AccessCount > others[j].entry.AccessCount
 	})
 
-	// Build result: user_facts first, then scored others.
 	var result []MemoryEntry
 	tokenBudget := maxTokens
 
@@ -273,6 +304,9 @@ func (s *MemoryStore) Recall(userMessage string) []MemoryEntry {
 	for _, s := range others {
 		if len(result) >= maxEntries {
 			break
+		}
+		if s.score < 0 {
+			continue
 		}
 		tokens := len(s.entry.Content) / 4
 		if tokens > tokenBudget {

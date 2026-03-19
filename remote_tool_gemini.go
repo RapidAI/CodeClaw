@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 )
 
 // GeminiAdapter launches the Gemini CLI (google-gemini/gemini-cli).
@@ -49,7 +48,7 @@ func (a *GeminiAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 
 	// In original (Google native) mode, don't inject model env or args
 	// so Gemini CLI uses its own Google OAuth login and default settings.
-	isOriginal := strings.ToLower(strings.TrimSpace(spec.ModelName)) == "original"
+	isOriginal := spec.IsBuiltin
 
 	env := buildOpenAICompatibleCommandEnv(spec.Env, map[string]string{})
 

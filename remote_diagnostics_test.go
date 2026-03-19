@@ -51,6 +51,7 @@ func TestCheckRemoteClaudeReadinessReadyState(t *testing.T) {
 	cfg.Claude.Models = []ModelConfig{{
 		ModelName: "Original",
 		ModelId:   "",
+		IsBuiltin: true,
 	}}
 	if err := app.SaveConfig(cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
@@ -92,7 +93,7 @@ func TestCheckRemoteClaudeReadinessMissingTool(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Claude.CurrentModel = "Original"
-	cfg.Claude.Models = []ModelConfig{{ModelName: "Original"}}
+	cfg.Claude.Models = []ModelConfig{{ModelName: "Original", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {
@@ -273,7 +274,7 @@ func TestCheckRemoteClaudeLaunchProbeRunsLaunchProbe(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Claude.CurrentModel = "Original"
-	cfg.Claude.Models = []ModelConfig{{ModelName: "Original"}}
+	cfg.Claude.Models = []ModelConfig{{ModelName: "Original", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {
@@ -343,7 +344,7 @@ func TestCheckRemoteToolReadinessSupportsCodex(t *testing.T) {
 	}
 	cfg.RemoteEnabled = true
 	cfg.Codex.CurrentModel = "Original"
-	cfg.Codex.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-5.2-codex"}}
+	cfg.Codex.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-5.2-codex", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {
@@ -396,7 +397,7 @@ func TestCheckRemoteToolLaunchProbeRunsForCodex(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Codex.CurrentModel = "Original"
-	cfg.Codex.Models = []ModelConfig{{ModelName: "Original"}}
+	cfg.Codex.Models = []ModelConfig{{ModelName: "Original", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {

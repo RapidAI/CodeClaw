@@ -3,12 +3,13 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
 
 // runMaintenance executes the Maintenance mode pipeline:
-// task_split → conflict_detect → development → merge → compile → test → document → report
+// task_split → conflict_detect → development → merge → compile → test → feedback → document → report
 func (o *SwarmOrchestrator) runMaintenance(run *SwarmRun, req SwarmRunRequest, maxAgents int) error {
 	// Phase 1: Task Split (parse task list)
 	o.setPhase(run, PhaseTaskSplit)
@@ -46,9 +47,9 @@ func (o *SwarmOrchestrator) runMaintenance(run *SwarmRun, req SwarmRunRequest, m
 
 	o.setPhase(run, PhaseCompile)
 
-	// Phase 6: Test
+	// Phase 6: Test + Feedback Loop
 	o.setPhase(run, PhaseTest)
-	if err := o.runTestPhase(run, req); err != nil {
+	if err := o.runMaintenanceTest(run, req); err != nil {
 		log.Printf("[SwarmOrchestrator] test phase: %v", err)
 	}
 
@@ -67,6 +68,76 @@ func (o *SwarmOrchestrator) runMaintenance(run *SwarmRun, req SwarmRunRequest, m
 	_ = o.worktreeMgr.RestoreProject(run.ProjectPath, run.ProjectState)
 
 	return nil
+}
+
+// runMaintenanceTest runs the test phase for maintenance mode with feedback
+// loop integration — same quality control as greenfield mode.
+func (o *SwarmOrchestrator) runMaintenanceTest(run *SwarmRun, req SwarmRunRequest) error {
+	testCmd := inferTestCommand(req.TechStack)
+
+	// Build task summary from completed agents.
+	var taskSummary []string
+	for _, agent := range run.Agents {
+		if agent.Role == RoleDeveloper && agent.Status == "completed" {
+			taskSummary = append(taskSummary, fmt.Sprintf("Task %d: %s", agent.TaskIndex, agent.Output))
+		}
+	}
+
+	branchName := fmt.Sprintf("swarm/%s/tester-0", run.ID)
+	ctx := PromptContext{
+		ProjectName: run.ProjectPath,
+		TechStack:   req.TechStack,
+		TestCommand: testCmd,
+		FeatureList: strings.Join(taskSummary, "\n"),
+	}
+
+	// Use run.Tool if set, otherwise fall back to "claude".
+	testerTool := run.Tool
+	if testerTool == "" {
+		testerTool = "claude"
+	}
+
+	agent, err := o.createAgent(run, RoleTester, 0, run.ProjectPath, branchName, testerTool, ctx)
+	if err != nil {
+		return fmt.Errorf("create tester agent: %w", err)
+	}
+
+	run.Agents = append(run.Agents, *agent)
+	agentIdx := len(run.Agents) - 1
+
+	if err := o.waitForAgent(run, agent, DefaultAgentTimeout); err != nil {
+		run.Agents[agentIdx] = *agent
+		return fmt.Errorf("tester agent failed: %w", err)
+	}
+
+	run.Agents[agentIdx] = *agent
+	_ = o.notifier.NotifyAgentComplete(run, agent)
+	o.addTimelineEvent(run, "test_done", "Tester agent completed", agent.ID)
+
+	// Parse and classify failures via FeedbackLoop (same as greenfield).
+	failures := parseTestFailures(agent.Output)
+	if len(failures) == 0 {
+		o.addTimelineEvent(run, "test_pass", "All tests passed", "")
+		return nil
+	}
+
+	o.addTimelineEvent(run, "test_failures",
+		fmt.Sprintf("Found %d test failures, classifying...", len(failures)), "")
+	_ = o.notifier.NotifyFailure(run, "test",
+		fmt.Sprintf("%d test(s) failed", len(failures)))
+
+	if o.feedbackLoop == nil {
+		return nil
+	}
+
+	classified, err := o.feedbackLoop.ClassifyFailures(failures)
+	if err != nil {
+		log.Printf("[SwarmOrchestrator] classify failures: %v", err)
+		return nil
+	}
+
+	// Handle classified failures — reuse the greenfield handler.
+	return o.handleClassifiedFailures(run, req, classified)
 }
 
 // runDevelopmentPhaseGrouped runs tasks respecting TaskGroup constraints:
@@ -99,50 +170,13 @@ func (o *SwarmOrchestrator) runDevelopmentPhaseGrouped(run *SwarmRun, tasks []Su
 }
 
 // runSingleDevTask creates a worktree and runs a single developer task.
+// Uses smart tool selection and task verification via runDeveloperAgentWithRetry.
 func (o *SwarmOrchestrator) runSingleDevTask(run *SwarmRun, task SubTask, req SwarmRunRequest) {
-	branchName := fmt.Sprintf("swarm/%s/developer-%d", run.ID, task.Index)
-	wt, err := o.worktreeMgr.CreateWorktree(run.ProjectPath, run.ID, branchName)
+	var mu sync.Mutex
+	err := o.runDeveloperAgentWithRetry(run, task, req.Tool, "", &mu)
 	if err != nil {
-		log.Printf("[SwarmOrchestrator] create worktree for task %d: %v", task.Index, err)
-		return
+		log.Printf("[SwarmOrchestrator] task %d failed: %v", task.Index, err)
 	}
-
-	agentID := fmt.Sprintf("%s-dev-%d", run.ID, task.Index)
-	agent := SwarmAgent{
-		ID:           agentID,
-		Role:         RoleDeveloper,
-		TaskIndex:    task.Index,
-		WorktreePath: wt.Path,
-		BranchName:   branchName,
-		Status:       "pending",
-	}
-
-	o.mu.Lock()
-	run.Agents = append(run.Agents, agent)
-	o.mu.Unlock()
-
-	output, err := o.runSingleAgent(run, RoleDeveloper, task.Index, wt.Path, PromptContext{
-		ProjectName: run.ProjectPath,
-		TechStack:   req.TechStack,
-		TaskDesc:    task.Description,
-	})
-
-	o.mu.Lock()
-	for i := range run.Agents {
-		if run.Agents[i].ID == agentID {
-			if err != nil {
-				run.Agents[i].Status = "failed"
-				run.Agents[i].Error = err.Error()
-			} else {
-				run.Agents[i].Status = "completed"
-				run.Agents[i].Output = output
-			}
-			now := time.Now()
-			run.Agents[i].CompletedAt = &now
-			break
-		}
-	}
-	o.mu.Unlock()
 }
 
 // runSingleAgent creates a RemoteSession for a given role, sends the task,
@@ -248,27 +282,4 @@ func (o *SwarmOrchestrator) runMergePhase(run *SwarmRun) error {
 	return nil
 }
 
-// runTestPhase creates a tester agent and handles feedback loop.
-func (o *SwarmOrchestrator) runTestPhase(run *SwarmRun, req SwarmRunRequest) error {
-	_, err := o.runSingleAgent(run, RoleTester, 0, run.ProjectPath, PromptContext{
-		ProjectName:  run.ProjectPath,
-		TechStack:    req.TechStack,
-		Requirements: req.Requirements,
-		TestCommand:  "go test ./...",
-	})
-	if err != nil {
-		return err
-	}
 
-	// If the feedback loop has remaining rounds, it can be used by the
-	// caller to drive additional fix-test cycles. The tester agent's
-	// output would need to be parsed into TestFailure structs for
-	// ClassifyFailures — for now we log that the test phase completed.
-	if o.feedbackLoop != nil && o.feedbackLoop.ShouldContinue() {
-		o.addTimelineEvent(run, "test_complete",
-			fmt.Sprintf("Test phase completed (feedback round %d/%d available)",
-				o.feedbackLoop.Round(), o.feedbackLoop.MaxRounds()), "")
-	}
-
-	return nil
-}

@@ -8,7 +8,8 @@ import (
 // SessionStartupFeedback monitors session startup progress and pushes
 // status updates to the caller via a ProgressCallback.
 type SessionStartupFeedback struct {
-	manager *RemoteSessionManager
+	manager      *RemoteSessionManager
+	checkpointer *SessionCheckpointer
 }
 
 // NewSessionStartupFeedback creates a new SessionStartupFeedback instance.
@@ -16,9 +17,15 @@ func NewSessionStartupFeedback(manager *RemoteSessionManager) *SessionStartupFee
 	return &SessionStartupFeedback{manager: manager}
 }
 
+// SetCheckpointer attaches a SessionCheckpointer for resume context injection.
+func (f *SessionStartupFeedback) SetCheckpointer(cp *SessionCheckpointer) {
+	f.checkpointer = cp
+}
+
 // WatchStartup monitors the startup of a session in a background goroutine.
 // Every 3 seconds it checks the session status and pushes a progress message.
-// When the session reaches "running" status, a success notification is sent.
+// When the session reaches "running" status, a success notification is sent
+// and any prior session checkpoint is injected as resume context.
 // After 60 seconds without reaching "running", a timeout warning is sent.
 func (f *SessionStartupFeedback) WatchStartup(sessionID string, callback ProgressCallback) {
 	go f.watchLoop(sessionID, callback)
@@ -54,6 +61,19 @@ func (f *SessionStartupFeedback) watchLoop(sessionID string, callback ProgressCa
 
 			if status == SessionRunning {
 				callback(fmt.Sprintf("✅ 会话已就绪 (ID: %s, 工具: %s)", session.ID, session.Tool))
+
+				// Inject resume context from previous session checkpoint.
+				if f.checkpointer != nil && f.manager != nil {
+					session.mu.RLock()
+					projectPath := session.ProjectPath
+					session.mu.RUnlock()
+
+					if resumePrompt := f.checkpointer.BuildResumePrompt(projectPath); resumePrompt != "" {
+						if err := f.manager.WriteInput(sessionID, resumePrompt); err == nil {
+							callback("📋 已加载上次会话进度，已自动注入上下文")
+						}
+					}
+				}
 				return
 			}
 

@@ -219,7 +219,8 @@ func (o *SwarmOrchestrator) runDeveloperAgents(
 }
 
 // runDeveloperAgentWithRetry creates a developer agent, waits for it, and
-// retries up to MaxAgentRetries times on error.
+// retries up to MaxAgentRetries times on error. Uses ToolSelector to pick
+// the best tool for the task, and TaskVerifier to validate the output.
 func (o *SwarmOrchestrator) runDeveloperAgentWithRetry(
 	run *SwarmRun,
 	task SubTask,
@@ -233,6 +234,15 @@ func (o *SwarmOrchestrator) runDeveloperAgentWithRetry(
 	if err != nil {
 		log.Printf("[SwarmScheduler] create worktree for task %d: %v", task.Index, err)
 		return fmt.Errorf("create worktree: %w", err)
+	}
+
+	// Smart tool selection: if no fixed tool, pick the best one for this task.
+	agentTool := tool
+	if agentTool == "" {
+		selected, reason := o.selectToolForTask(run, task)
+		agentTool = selected
+		o.addTimelineEvent(run, "tool_selected",
+			fmt.Sprintf("Task %d → %s (%s)", task.Index, selected, reason), "")
 	}
 
 	ctx := PromptContext{
@@ -250,7 +260,7 @@ func (o *SwarmOrchestrator) runDeveloperAgentWithRetry(
 			return fmt.Errorf("run cancelled")
 		}
 
-		agent, err = o.createAgent(run, RoleDeveloper, task.Index, wt.Path, branchName, tool, ctx)
+		agent, err = o.createAgent(run, RoleDeveloper, task.Index, wt.Path, branchName, agentTool, ctx)
 		if err != nil {
 			lastErr = err
 			log.Printf("[SwarmScheduler] create agent attempt %d for task %d failed: %v",
@@ -283,7 +293,31 @@ func (o *SwarmOrchestrator) runDeveloperAgentWithRetry(
 		mu.Unlock()
 
 		if waitErr == nil {
-			// Agent completed successfully.
+			// Agent completed — verify output against task description.
+			if verdict := o.verifyAgentOutput(run, agent, task); verdict != nil && !verdict.Pass {
+				o.addTimelineEvent(run, "task_verify_fail",
+					fmt.Sprintf("Task %d 验收未通过 (score=%d): %s — 缺少: %s",
+						task.Index, verdict.Score, verdict.Reason, verdict.Missing), agent.ID)
+				_ = o.notifier.NotifyFailure(run, "task_verify",
+					fmt.Sprintf("Task %d 验收未通过: %s", task.Index, verdict.Reason))
+
+				// If we have retries left and score is very low, retry with a different approach.
+				if verdict.Score < 30 && attempt < MaxAgentRetries {
+					lastErr = fmt.Errorf("task verification failed: %s", verdict.Reason)
+					log.Printf("[SwarmScheduler] task %d verification failed (score=%d), retrying",
+						task.Index, verdict.Score)
+					o.addTimelineEvent(run, "agent_retry",
+						fmt.Sprintf("Retrying task %d due to low verification score", task.Index), agent.ID)
+					continue
+				}
+				// Score >= 30 or no retries left: accept partial result.
+				o.addTimelineEvent(run, "task_verify_partial",
+					fmt.Sprintf("Task %d 部分完成 (score=%d)，继续流程", task.Index, verdict.Score), agent.ID)
+			} else if verdict != nil {
+				o.addTimelineEvent(run, "task_verify_pass",
+					fmt.Sprintf("Task %d 验收通过 (score=%d)", task.Index, verdict.Score), agent.ID)
+			}
+
 			_ = o.notifier.NotifyAgentComplete(run, agent)
 			return nil
 		}
@@ -312,4 +346,18 @@ func (o *SwarmOrchestrator) runDeveloperAgentWithRetry(
 				task.Index, agent.RetryCount+1, lastErr))
 	}
 	return lastErr
+}
+
+// verifyAgentOutput uses the TaskVerifier to check if the agent's output
+// matches the task description. Returns nil if no verifier is configured.
+func (o *SwarmOrchestrator) verifyAgentOutput(run *SwarmRun, agent *SwarmAgent, task SubTask) *TaskVerdict {
+	if o.taskVerifier == nil || agent.Output == "" {
+		return nil
+	}
+	verdict, err := o.taskVerifier.Verify(task.Description, agent.Output)
+	if err != nil {
+		log.Printf("[SwarmScheduler] task verification error for task %d: %v", task.Index, err)
+		return nil
+	}
+	return verdict
 }

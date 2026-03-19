@@ -707,7 +707,7 @@ func TestToolListProviders_WithValidProviders(t *testing.T) {
 	cfg.Claude = ToolConfig{
 		CurrentModel: "Original",
 		Models: []ModelConfig{
-			{ModelName: "Original", ModelId: "orig-id", ApiKey: ""},
+			{ModelName: "Original", ModelId: "orig-id", ApiKey: "", IsBuiltin: true},
 			{ModelName: "DeepSeek", ModelId: "deepseek-chat", ApiKey: "sk-test-key"},
 			{ModelName: "EmptyKey", ModelId: "empty-id", ApiKey: ""},
 		},
@@ -799,7 +799,7 @@ func TestToolCreateSession_NoProviderUsesDefault(t *testing.T) {
 	cfg.Claude = ToolConfig{
 		CurrentModel: "Original",
 		Models: []ModelConfig{
-			{ModelName: "Original", ModelId: "orig-id", ApiKey: ""},
+			{ModelName: "Original", ModelId: "orig-id", ApiKey: "", IsBuiltin: true},
 			{ModelName: "DeepSeek", ModelId: "ds-id", ApiKey: "sk-test"},
 		},
 	}
@@ -846,7 +846,7 @@ func TestToolCreateSession_DefaultUnavailableFallbackHint(t *testing.T) {
 		CurrentModel: "BadDefault",
 		Models: []ModelConfig{
 			{ModelName: "BadDefault", ModelId: "bad-id", ApiKey: ""},
-			{ModelName: "Original", ModelId: "orig-id", ApiKey: ""},
+			{ModelName: "Original", ModelId: "orig-id", ApiKey: "", IsBuiltin: true},
 			{ModelName: "DeepSeek", ModelId: "ds-id", ApiKey: "sk-test"},
 		},
 	}
@@ -900,7 +900,7 @@ func TestToolCreateSession_UserSpecifiedProviderUsed(t *testing.T) {
 	cfg.Claude = ToolConfig{
 		CurrentModel: "Original",
 		Models: []ModelConfig{
-			{ModelName: "Original", ModelId: "orig-id", ApiKey: ""},
+			{ModelName: "Original", ModelId: "orig-id", ApiKey: "", IsBuiltin: true},
 			{ModelName: "DeepSeek", ModelId: "ds-id", ApiKey: "sk-test"},
 		},
 	}
@@ -974,7 +974,7 @@ func TestToolCreateSession_ProjectIDResolvesSuccessfully(t *testing.T) {
 	cfg.Claude = ToolConfig{
 		CurrentModel: "Original",
 		Models: []ModelConfig{
-			{ModelName: "Original", ModelId: "orig-id", ApiKey: ""},
+			{ModelName: "Original", ModelId: "orig-id", ApiKey: "", IsBuiltin: true},
 		},
 	}
 	if err := app.SaveConfig(cfg); err != nil {
@@ -1046,7 +1046,7 @@ func TestToolCreateSession_ProjectIDPriorityOverProjectPath(t *testing.T) {
 	cfg.Claude = ToolConfig{
 		CurrentModel: "Original",
 		Models: []ModelConfig{
-			{ModelName: "Original", ModelId: "orig-id", ApiKey: ""},
+			{ModelName: "Original", ModelId: "orig-id", ApiKey: "", IsBuiltin: true},
 		},
 	}
 	if err := app.SaveConfig(cfg); err != nil {

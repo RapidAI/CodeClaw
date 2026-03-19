@@ -1209,6 +1209,13 @@ func (m *RemoteSessionManager) runExitLoop(s *RemoteSession) {
 			_ = m.app.experienceExtractor.Extract(s)
 		}()
 	}
+	// Save session checkpoint to memory store so the next session on the
+	// same project can resume where this one left off.
+	if m.app.sessionCheckpointer != nil {
+		go func() {
+			_ = m.app.sessionCheckpointer.SaveCheckpoint(s)
+		}()
+	}
 	if s.workspaceRelease != nil {
 		s.workspaceRelease()
 		s.workspaceRelease = nil

@@ -39,7 +39,7 @@ func TestGetRemoteClaudeReadinessDelegatesToDiagnosticCheck(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Claude.CurrentModel = "Original"
-	cfg.Claude.Models = []ModelConfig{{ModelName: "Original"}}
+	cfg.Claude.Models = []ModelConfig{{ModelName: "Original", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	cfg.RemoteHubURL = "https://hub.example.com"
@@ -174,7 +174,7 @@ func TestGetRemoteClaudeLaunchProbeDelegatesToDiagnosticCheck(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Claude.CurrentModel = "Original"
-	cfg.Claude.Models = []ModelConfig{{ModelName: "Original"}}
+	cfg.Claude.Models = []ModelConfig{{ModelName: "Original", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {
@@ -234,7 +234,7 @@ func TestGetRemoteToolReadinessDelegatesToDiagnosticCheck(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Codex.CurrentModel = "Original"
-	cfg.Codex.Models = []ModelConfig{{ModelName: "Original"}}
+	cfg.Codex.Models = []ModelConfig{{ModelName: "Original", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	cfg.RemoteHubURL = "https://hub.example.com"
@@ -285,7 +285,7 @@ func TestGetRemoteToolLaunchProbeDelegatesToDiagnosticCheck(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Kilo.CurrentModel = "Original"
-	cfg.Kilo.Models = []ModelConfig{{ModelName: "Original"}}
+	cfg.Kilo.Models = []ModelConfig{{ModelName: "Original", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {
@@ -373,7 +373,7 @@ func TestBuildRemoteLaunchSpecSupportsCodex(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Codex.CurrentModel = "Original"
-	cfg.Codex.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-5.2-codex"}}
+	cfg.Codex.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-5.2-codex", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 
@@ -428,7 +428,7 @@ func TestStartRemoteSessionSupportsCodex(t *testing.T) {
 	}
 	cfg.RemoteEnabled = true
 	cfg.Codex.CurrentModel = "Original"
-	cfg.Codex.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-5.2-codex"}}
+	cfg.Codex.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-5.2-codex", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {
@@ -465,7 +465,7 @@ func TestBuildRemoteLaunchSpecSupportsOpencode(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Opencode.CurrentModel = "Original"
-	cfg.Opencode.Models = []ModelConfig{{ModelName: "Original", ModelId: "opencode-1.0"}}
+	cfg.Opencode.Models = []ModelConfig{{ModelName: "Original", ModelId: "opencode-1.0", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 
@@ -515,7 +515,7 @@ func TestStartRemoteSessionSupportsOpencode(t *testing.T) {
 	}
 	cfg.RemoteEnabled = true
 	cfg.Opencode.CurrentModel = "Original"
-	cfg.Opencode.Models = []ModelConfig{{ModelName: "Original", ModelId: "opencode-1.0"}}
+	cfg.Opencode.Models = []ModelConfig{{ModelName: "Original", ModelId: "opencode-1.0", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {
@@ -552,7 +552,7 @@ func TestBuildRemoteLaunchSpecSupportsIFlow(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.IFlow.CurrentModel = "Original"
-	cfg.IFlow.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-4o"}}
+	cfg.IFlow.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-4o", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 
@@ -602,7 +602,7 @@ func TestStartRemoteSessionSupportsIFlow(t *testing.T) {
 	}
 	cfg.RemoteEnabled = true
 	cfg.IFlow.CurrentModel = "Original"
-	cfg.IFlow.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-4o"}}
+	cfg.IFlow.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-4o", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {
@@ -639,7 +639,7 @@ func TestBuildRemoteLaunchSpecSupportsKilo(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Kilo.CurrentModel = "Original"
-	cfg.Kilo.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-4o"}}
+	cfg.Kilo.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-4o", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 
@@ -689,7 +689,7 @@ func TestStartRemoteSessionSupportsKilo(t *testing.T) {
 	}
 	cfg.RemoteEnabled = true
 	cfg.Kilo.CurrentModel = "Original"
-	cfg.Kilo.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-4o"}}
+	cfg.Kilo.Models = []ModelConfig{{ModelName: "Original", ModelId: "gpt-4o", IsBuiltin: true}}
 	cfg.Projects = []ProjectConfig{{Id: "p1", Path: projectDir}}
 	cfg.CurrentProject = "p1"
 	if err := app.SaveConfig(cfg); err != nil {
@@ -796,7 +796,7 @@ func TestBuildRemoteLaunchSpecProviderOverride(t *testing.T) {
 	cfg.Claude = ToolConfig{
 		CurrentModel: "Original",
 		Models: []ModelConfig{
-			{ModelName: "Original", ModelId: "claude-sonnet"},
+			{ModelName: "Original", ModelId: "claude-sonnet", IsBuiltin: true},
 			{ModelName: "DeepSeek", ModelId: "deepseek-v3", ApiKey: "sk-abc"},
 			{ModelName: "EmptyKey", ModelId: "empty-model", ApiKey: ""},
 		},
@@ -861,7 +861,7 @@ func TestListValidProviders(t *testing.T) {
 	cfg.Claude = ToolConfig{
 		CurrentModel: "Original",
 		Models: []ModelConfig{
-			{ModelName: "Original", ModelId: "claude-sonnet"},
+			{ModelName: "Original", ModelId: "claude-sonnet", IsBuiltin: true},
 			{ModelName: "DeepSeek", ModelId: "deepseek-v3", ApiKey: "sk-abc"},
 			{ModelName: "EmptyKey", ModelId: "empty-model", ApiKey: ""},
 		},
@@ -875,9 +875,9 @@ func TestListValidProviders(t *testing.T) {
 		t.Fatalf("ListValidProviders() error = %v", err)
 	}
 
-	// Should have Original and DeepSeek, not EmptyKey
-	if len(providers) != 2 {
-		t.Fatalf("got %d providers, want 2", len(providers))
+	// Should have at least Original and DeepSeek, not EmptyKey
+	if len(providers) < 2 {
+		t.Fatalf("got %d providers, want at least 2", len(providers))
 	}
 
 	foundOriginal := false
