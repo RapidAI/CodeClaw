@@ -1296,11 +1296,25 @@ func (h *IMMessageHandler) runAgentLoop(userID, systemPrompt string, history []c
 		}
 	}
 
-	// Immediate acknowledgment: when debug is off, send a brief receipt so
-	// the user knows their request was received and is being processed.
+	// Delayed acknowledgment: when debug is off, schedule a brief receipt
+	// after a short grace period. If the agent loop finishes quickly (e.g.
+	// simple greetings), the receipt is suppressed — the user sees only the
+	// final card, avoiding the redundant "收到，正在处理中" message.
+	const ackDelay = 3 * time.Second
+	ackDone := make(chan struct{})
 	if !isDebug() {
-		sendProgress("📨 收到，正在处理中，稍后发你结果…")
+		ackTimer := time.NewTimer(ackDelay)
+		go func() {
+			select {
+			case <-ackTimer.C:
+				sendProgress("📨 收到，正在处理中，稍后发你结果…")
+			case <-ackDone:
+				ackTimer.Stop()
+			}
+		}()
 	}
+	// Ensure the delayed ack goroutine is cancelled when the loop returns.
+	defer close(ackDone)
 
 	cfg := h.app.GetMaclawLLMConfig()
 	maxIter := h.app.GetMaclawAgentMaxIterations()
