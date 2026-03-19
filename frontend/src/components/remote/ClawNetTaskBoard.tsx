@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
     ClawNetListTasks, ClawNetGetCredits,
-    ClawNetBidOnTask, ClawNetSubmitTaskResult, ClawNetApproveTask,
-    ClawNetRejectTask, ClawNetCancelTask, ClawNetMatchTasks,
+    ClawNetSubmitTaskResult, ClawNetApproveTask,
+    ClawNetRejectTask, ClawNetMatchTasks,
     ClawNetCreateTask, ClawNetBrowseNetworkTasks, ClawNetPublishTasksToHub,
     ClawNetManualPickTask,
 } from "../../../wailsjs/go/main/App";
@@ -306,8 +306,21 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
 
             {/* Task cards – 2 per row */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
-                {tasks.map((task) => {
+                {tasks.map((rawTask) => {
+                    // Wails may serialize Go struct fields with uppercase keys when nested in map[string]interface{}.
+                    // Normalize field access to handle both cases (e.g. Status vs status).
+                    const task: ClawNetTask = {
+                        id: rawTask.id || (rawTask as any).ID || "",
+                        title: rawTask.title || (rawTask as any).Title || "",
+                        description: rawTask.description || (rawTask as any).Description,
+                        status: rawTask.status || (rawTask as any).Status || "",
+                        reward: rawTask.reward ?? (rawTask as any).Reward ?? 0,
+                        creator: rawTask.creator || (rawTask as any).Creator,
+                        assignee: rawTask.assignee || (rawTask as any).Assignee,
+                        created_at: rawTask.created_at || (rawTask as any).CreatedAt || (rawTask as any).created_at,
+                    };
                     const normalizedStatus = (task.status || "").toLowerCase();
+                    const isTerminal = normalizedStatus === "approved" || normalizedStatus === "rejected" || normalizedStatus === "cancelled";
                     const sc = STATUS_COLORS[normalizedStatus] || STATUS_COLORS.open;
                     return (
                         <div key={task.id} style={{
@@ -335,35 +348,12 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
                                 </div>
                             )}
 
-                            {/* Row 2: reward + actions */}
+                            {/* Row 2: reward + actions (right-aligned) */}
                             <div style={{ display: "flex", alignItems: "center", gap: "4px", marginTop: "auto" }}>
                                 <span style={{ fontSize: "0.7rem", fontWeight: 600, color: "#b45309" }}>
                                     🐚 {task.reward}
                                 </span>
                                 <span style={{ flex: 1 }} />
-                                {normalizedStatus === "open" && (
-                                    <button
-                                        style={{
-                                            ...smallBtn(!!actionBusy || manualPickId === task.id),
-                                            color: manualPickId === task.id ? "#ca8a04" : "#fff",
-                                            background: manualPickId === task.id ? "#fefce8" : "#6366f1",
-                                            border: manualPickId === task.id ? "1px solid #ca8a04" : "1px solid #6366f1",
-                                            padding: "3px 10px",
-                                            fontSize: "0.68rem",
-                                            fontWeight: 600,
-                                        }}
-                                        disabled={!!actionBusy || !!manualPickId}
-                                        onClick={() => handleManualPick(task.id)}
-                                    >
-                                        {manualPickId === task.id ? (zh ? "执行中..." : "Running...") : (zh ? "🤖 接单" : "🤖 Pick")}
-                                    </button>
-                                )}
-                                {normalizedStatus === "open" && (
-                                    <button style={smallBtn(!!actionBusy || !!manualPickId)} disabled={!!actionBusy || !!manualPickId}
-                                        onClick={() => doAction("bid-" + task.id, () => ClawNetBidOnTask(task.id, 0, zh ? "我可以做" : "I can do this"))}>
-                                        {zh ? "竞标" : "Bid"}
-                                    </button>
-                                )}
                                 {normalizedStatus === "assigned" && (
                                     <button style={smallBtn(!!actionBusy || !!manualPickId)} disabled={!!actionBusy || !!manualPickId}
                                         onClick={() => doAction("submit-" + task.id, () => ClawNetSubmitTaskResult(task.id, ""))}>
@@ -382,10 +372,24 @@ export function ClawNetTaskBoard({ lang, clawNetRunning }: Props) {
                                         </button>
                                     </>
                                 )}
-                                {(normalizedStatus === "open" || normalizedStatus === "assigned") && (
-                                    <button style={smallBtn(!!actionBusy || !!manualPickId)} disabled={!!actionBusy || !!manualPickId}
-                                        onClick={() => doAction("cancel-" + task.id, () => ClawNetCancelTask(task.id))}>
-                                        ✗
+                                {/* 接单按钮 – 始终显示在右下角（终态任务除外） */}
+                                {!isTerminal && (
+                                    <button
+                                        style={{
+                                            background: manualPickId === task.id ? "#fefce8" : "#6366f1",
+                                            color: manualPickId === task.id ? "#ca8a04" : "#fff",
+                                            border: manualPickId === task.id ? "1px solid #ca8a04" : "1px solid #6366f1",
+                                            borderRadius: "5px",
+                                            padding: "3px 10px",
+                                            fontSize: "0.68rem",
+                                            fontWeight: 600,
+                                            cursor: (!!actionBusy || !!manualPickId) ? "not-allowed" : "pointer",
+                                            opacity: (!!actionBusy || !!manualPickId) && manualPickId !== task.id ? 0.5 : 1,
+                                        }}
+                                        disabled={!!actionBusy || !!manualPickId}
+                                        onClick={() => handleManualPick(task.id)}
+                                    >
+                                        {manualPickId === task.id ? (zh ? "执行中..." : "Running...") : (zh ? "🤖 接单" : "🤖 Pick")}
                                     </button>
                                 )}
                             </div>
