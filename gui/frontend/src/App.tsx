@@ -3203,7 +3203,7 @@ ${instruction}`;
 
                     <div
                         className={`sidebar-item ${navTab === 'skills' ? 'active' : ''}`}
-                        onClick={() => switchTool('skills')}
+                        onClick={() => { setShowAIPanel(false); switchTool('skills'); }}
                         style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'skills' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                         title={t("skills")}
                     >
@@ -3212,7 +3212,7 @@ ${instruction}`;
                     </div>
                     <div
                         className={`sidebar-item ${navTab === 'mcp' ? 'active' : ''}`}
-                        onClick={() => switchTool('mcp')}
+                        onClick={() => { setShowAIPanel(false); switchTool('mcp'); }}
                         style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'mcp' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                         title="MCP"
                     >
