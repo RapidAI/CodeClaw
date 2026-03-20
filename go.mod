@@ -19,6 +19,7 @@ require (
 
 require (
 	github.com/VantageDataChat/GoPDF2 v0.0.0-20260212145938-73f35b60835e // indirect
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/charmbracelet/bubbles v1.0.0 // indirect

@@ -16,6 +16,21 @@ type SessionItem struct {
 	Status string // running, stopped, error
 }
 
+// SessionCreateMsg 请求创建新会话。
+type SessionCreateMsg struct{}
+
+// SessionKillMsg 请求终止选中的会话。
+type SessionKillMsg struct {
+	ID string
+}
+
+// SessionOpenMsg 请求打开会话详情。
+type SessionOpenMsg struct {
+	ID   string
+	Tool string
+	Title string
+}
+
 // SessionListModel 会话列表视图。
 type SessionListModel struct {
 	sessions []SessionItem
@@ -55,7 +70,17 @@ func (m SessionListModel) Update(msg tea.Msg) (SessionListModel, tea.Cmd) {
 			}
 		case "enter":
 			if m.cursor < len(m.sessions) {
-				// TODO: 打开会话详情
+				s := m.sessions[m.cursor]
+				return m, func() tea.Msg {
+					return SessionOpenMsg{ID: s.ID, Tool: s.Tool, Title: s.Title}
+				}
+			}
+		case "n", "c":
+			return m, func() tea.Msg { return SessionCreateMsg{} }
+		case "d", "x":
+			if m.cursor < len(m.sessions) {
+				id := m.sessions[m.cursor].ID
+				return m, func() tea.Msg { return SessionKillMsg{ID: id} }
 			}
 		}
 	}

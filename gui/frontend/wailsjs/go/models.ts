@@ -155,6 +155,9 @@ export namespace main {
 	    clawnet_enabled: boolean;
 	    skill_hub_urls: any[];
 	    maclaw_debug_tool_calls: boolean;
+	    qqbot_enabled: boolean;
+	    qqbot_app_id: string;
+	    qqbot_app_secret: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -226,6 +229,9 @@ export namespace main {
 	        this.clawnet_enabled = source["clawnet_enabled"];
 	        this.skill_hub_urls = source["skill_hub_urls"];
 	        this.maclaw_debug_tool_calls = source["maclaw_debug_tool_calls"];
+	        this.qqbot_enabled = source["qqbot_enabled"];
+	        this.qqbot_app_id = source["qqbot_app_id"];
+	        this.qqbot_app_secret = source["qqbot_app_secret"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

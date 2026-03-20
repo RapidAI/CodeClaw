@@ -129,7 +129,7 @@ func EntryResolveHandler(service *entry.Service) http.HandlerFunc {
 	}
 }
 
-func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryService *entry.Service, mailer *mail.Service, skillStore *skill.SkillStore, gossipRepo store.GossipRepository, gossipCache *GossipCache) http.Handler {
+func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryService *entry.Service, mailer *mail.Service, skillStore *skill.SkillStore, gossipRepo store.GossipRepository, gossipCache *GossipCache, smHandlers *SkillMarketHandlers) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", HealthHandler("MaClaw-hubcenter"))
 	mux.HandleFunc("GET /api/admin/status", AdminStatusHandler(adminService))
@@ -186,5 +186,18 @@ func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryS
 	mux.HandleFunc("DELETE /api/admin/gossip/comments", RequireAdmin(adminService, AdminDeleteGossipCommentHandler(gossipRepo, gossipCache)))
 	registerAdminStaticRoutes(mux, "./web/admin", "/admin")
 	registerStaticRoutes(mux, "./web/skillhub", "/skillhub")
+	// SkillMarket API
+	if smHandlers != nil {
+		mux.HandleFunc("POST /api/v1/skills/submit", smHandlers.SubmitSkill)
+		mux.HandleFunc("GET /api/v1/skills/submissions/{id}", smHandlers.GetSubmissionStatus)
+		mux.HandleFunc("POST /api/v1/account/ensure", smHandlers.EnsureAccount)
+		mux.HandleFunc("GET /api/v1/account/{email}", smHandlers.GetAccount)
+		mux.HandleFunc("POST /api/v1/account/verify", smHandlers.VerifyAccount)
+		mux.HandleFunc("GET /api/v1/credits/balance", smHandlers.GetCreditsBalance)
+		mux.HandleFunc("GET /api/v1/credits/transactions", smHandlers.GetCreditsTransactions)
+		mux.HandleFunc("POST /api/v1/credits/topup", smHandlers.TopUpCredits)
+		mux.HandleFunc("POST /api/v1/credits/withdraw", smHandlers.WithdrawCredits)
+		mux.HandleFunc("GET /api/v1/crypto/pubkey", smHandlers.GetPublicKey)
+	}
 	return mux
 }

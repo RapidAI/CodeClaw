@@ -85,7 +85,11 @@ func (r *ToolRegistry) Get(name string) (*RegisteredTool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	t, ok := r.tools[name]
-	return t, ok
+	if !ok {
+		return nil, false
+	}
+	cp := *t
+	return &cp, true
 }
 
 func (r *ToolRegistry) List() []RegisteredTool {

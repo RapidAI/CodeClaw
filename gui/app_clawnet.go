@@ -273,6 +273,43 @@ func (a *App) ClawNetEnsureDaemonWithDownload() map[string]interface{} {
 	return map[string]interface{}{"ok": true}
 }
 
+// ClawNetManualUpdate checks for a new version of the clawnet binary,
+// downloads it if available, and restarts the daemon.
+// Returns {ok, updated, message, error}.
+func (a *App) ClawNetManualUpdate() map[string]interface{} {
+	c := a.initClawNet()
+	a.log("ClawNet: manual update triggered")
+
+	// Run `clawnet update` via SelfUpdate.
+	err := c.SelfUpdate()
+	if err != nil {
+		a.log(fmt.Sprintf("ClawNet: manual update failed: %v", err))
+		return map[string]interface{}{"ok": false, "error": err.Error()}
+	}
+
+	a.log("ClawNet: update applied, restarting daemon...")
+
+	// Stop the current daemon.
+	c.StopDaemon()
+
+	// Restart with progress events.
+	emitter := func(stage string, pct int, msg string) {
+		a.emitEvent("clawnet-install-progress", map[string]interface{}{
+			"stage":   stage,
+			"percent": pct,
+			"message": msg,
+		})
+	}
+	if restartErr := c.EnsureDaemonWithProgress(emitter); restartErr != nil {
+		a.log(fmt.Sprintf("ClawNet: restart after update failed: %v", restartErr))
+		return map[string]interface{}{"ok": false, "updated": true, "error": restartErr.Error()}
+	}
+
+	c.StartAutoUpdate(func(msg string) { a.log(msg) })
+	a.log("ClawNet: manual update completed, daemon restarted")
+	return map[string]interface{}{"ok": true, "updated": true}
+}
+
 // ClawNetGetBinaryPath returns the resolved clawnet binary path (for diagnostics).
 func (a *App) ClawNetGetBinaryPath() string {
 	c := a.initClawNet()

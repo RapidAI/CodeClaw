@@ -571,6 +571,23 @@ func (s *IdentityService) LookupUserByEmail(ctx context.Context, email string) (
 	return s.users.GetByEmail(ctx, email)
 }
 
+// LookupUserByMobile finds a user by mobile number. It first looks up the
+// enrollment record to get the email, then resolves the user from the users table.
+func (s *IdentityService) LookupUserByMobile(ctx context.Context, mobile string) (*store.User, error) {
+	mobile = strings.TrimSpace(mobile)
+	if mobile == "" {
+		return nil, fmt.Errorf("mobile is required")
+	}
+	enrollment, err := s.enrollments.GetByMobile(ctx, mobile)
+	if err != nil {
+		return nil, err
+	}
+	if enrollment == nil {
+		return nil, nil
+	}
+	return s.users.GetByEmail(ctx, enrollment.Email)
+}
+
 func (s *IdentityService) IsEmailBlocked(ctx context.Context, email string) (bool, error) {
 	email = normalizeEmail(email)
 	if email == "" {

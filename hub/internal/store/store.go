@@ -161,6 +161,7 @@ type EnrollmentRepository interface {
 	Approve(ctx context.Context, id string, updatedAt time.Time) error
 	Reject(ctx context.Context, id string, updatedAt time.Time) error
 	UpdateMobile(ctx context.Context, id string, mobile string) error
+	GetByMobile(ctx context.Context, mobile string) (*UserEnrollment, error)
 }
 
 type EmailBlocklistRepository interface {

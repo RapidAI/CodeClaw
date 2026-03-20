@@ -12,12 +12,16 @@ import (
 const (
 	TabSessions = iota
 	TabTools
+	TabSchedule
+	TabMemory
+	TabAudit
+	TabClawNet
 	TabConfig
 	TabCount
 )
 
 // TabNames 各 Tab 的显示名称。
-var TabNames = [TabCount]string{"会话", "工具", "配置"}
+var TabNames = [TabCount]string{"会话", "工具", "定时", "记忆", "审计", "ClawNet", "配置"}
 
 // RootModel 是 TUI 的根 Model，管理 Tab 切换和子视图。
 type RootModel struct {
@@ -26,10 +30,17 @@ type RootModel struct {
 	tab    int
 
 	// 子视图
-	Sessions  SessionListModel
-	Tools     ToolStatusModel
-	Config    ConfigModel
-	StatusBar StatusBarModel
+	Sessions      SessionListModel
+	SessionDetail *SessionDetailModel  // nil = 不显示详情
+	SessionCreate *SessionCreateModel  // nil = 不显示创建表单
+	Tools         ToolStatusModel
+	Schedule      ScheduleModel
+	Memory        MemoryModel
+	Audit         AuditModel
+	ClawNet       ClawNetModel
+	Config        ConfigModel
+	StatusBar     StatusBarModel
+	Help          HelpModel
 }
 
 // NewRootModel 创建根 Model。
@@ -38,8 +49,13 @@ func NewRootModel() RootModel {
 		tab:       TabSessions,
 		Sessions:  NewSessionListModel(),
 		Tools:     NewToolStatusModel(),
+		Schedule:  NewScheduleModel(),
+		Memory:    NewMemoryModel(),
+		Audit:     NewAuditModel(),
+		ClawNet:   NewClawNetModel(),
 		Config:    NewConfigModel(),
 		StatusBar: NewStatusBarModel(),
+		Help:      NewHelpModel(),
 	}
 }
 
@@ -54,8 +70,80 @@ func (m RootModel) Update(msg tea.Msg) (RootModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.SessionDetail != nil {
+			d := *m.SessionDetail
+			d, _ = d.Update(msg)
+			m.SessionDetail = &d
+		}
+		if m.SessionCreate != nil {
+			c := *m.SessionCreate
+			c, _ = c.Update(msg)
+			m.SessionCreate = &c
+		}
+	case SessionOpenMsg:
+		detail := NewSessionDetailModel(msg.ID, msg.Tool, msg.Title)
+		m.SessionDetail = &detail
+		return m, nil
+	case SessionCreateMsg:
+		// 收集可用工具名称
+		var toolNames []string
+		for _, t := range m.Tools.tools {
+			if t.Available {
+				toolNames = append(toolNames, t.Name)
+			}
+		}
+		if len(toolNames) == 0 {
+			toolNames = []string{"(无可用工具)"}
+		}
+		create := NewSessionCreateModel(toolNames)
+		m.SessionCreate = &create
+		return m, nil
+	case SessionCreateSubmitMsg:
+		m.SessionCreate = nil
+		m.StatusBar.SetMessage(fmt.Sprintf("创建会话: tool=%s project=%s", msg.Tool, msg.Project))
+		return m, nil
 	case tea.KeyMsg:
+		// 帮助面板优先
+		if m.Help.IsVisible() {
+			var cmd tea.Cmd
+			m.Help, cmd = m.Help.Update(msg)
+			return m, cmd
+		}
+		// 创建会话表单
+		if m.SessionCreate != nil {
+			if msg.String() == "esc" {
+				m.SessionCreate = nil
+				return m, nil
+			}
+			var cmd tea.Cmd
+			c := *m.SessionCreate
+			c, cmd = c.Update(msg)
+			m.SessionCreate = &c
+			return m, cmd
+		}
+		// 会话详情模式下，Esc 返回列表
+		if m.SessionDetail != nil {
+			if msg.String() == "esc" {
+				m.SessionDetail = nil
+				return m, nil
+			}
+			var cmd tea.Cmd
+			d := *m.SessionDetail
+			d, cmd = d.Update(msg)
+			m.SessionDetail = &d
+			return m, cmd
+		}
+		// 编辑模式下不处理 Tab 切换
+		if m.tab == TabConfig && m.Config.IsEditing() {
+			break
+		}
+		if m.tab == TabAudit && m.Audit.IsFiltering() {
+			break
+		}
 		switch msg.String() {
+		case "?":
+			m.Help.Toggle()
+			return m, nil
 		case "tab", "right":
 			m.tab = (m.tab + 1) % TabCount
 			return m, nil
@@ -72,6 +160,14 @@ func (m RootModel) Update(msg tea.Msg) (RootModel, tea.Cmd) {
 		m.Sessions, cmd = m.Sessions.Update(msg)
 	case TabTools:
 		m.Tools, cmd = m.Tools.Update(msg)
+	case TabSchedule:
+		m.Schedule, cmd = m.Schedule.Update(msg)
+	case TabMemory:
+		m.Memory, cmd = m.Memory.Update(msg)
+	case TabAudit:
+		m.Audit, cmd = m.Audit.Update(msg)
+	case TabClawNet:
+		m.ClawNet, cmd = m.ClawNet.Update(msg)
 	case TabConfig:
 		m.Config, cmd = m.Config.Update(msg)
 	}
@@ -97,15 +193,35 @@ func (m RootModel) View() string {
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
+
 	content := ""
-	switch m.tab {
-	case TabSessions:
-		content = m.Sessions.View()
-	case TabTools:
-		content = m.Tools.View()
-	case TabConfig:
-		content = m.Config.View()
+
+	// Overlay 优先级: Help > SessionCreate > SessionDetail > 正常 Tab
+	if m.Help.IsVisible() {
+		content = m.Help.View()
+	} else if m.SessionCreate != nil {
+		content = m.SessionCreate.View()
+	} else if m.tab == TabSessions && m.SessionDetail != nil {
+		content = m.SessionDetail.View()
+	} else {
+		switch m.tab {
+		case TabSessions:
+			content = m.Sessions.View()
+		case TabTools:
+			content = m.Tools.View()
+		case TabSchedule:
+			content = m.Schedule.View()
+		case TabMemory:
+			content = m.Memory.View()
+		case TabAudit:
+			content = m.Audit.View()
+		case TabClawNet:
+			content = m.ClawNet.View()
+		case TabConfig:
+			content = m.Config.View()
+		}
 	}
+
 	contentStyle := lipgloss.NewStyle().
 		Width(m.width).
 		Height(contentHeight)

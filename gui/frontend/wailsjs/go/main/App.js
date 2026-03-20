@@ -579,6 +579,10 @@ export function ClawNetEnsureDaemonWithDownload() {
   return window['go']['main']['App']['ClawNetEnsureDaemonWithDownload']();
 }
 
+export function ClawNetManualUpdate() {
+  return window['go']['main']['App']['ClawNetManualUpdate']();
+}
+
 export function ClawNetListTasks(arg1) {
   return window['go']['main']['App']['ClawNetListTasks'](arg1);
 }

@@ -12,36 +12,7 @@ import (
 	"time"
 )
 
-// AuditAction represents the type of auditable action.
-type AuditAction string
-
-const (
-	AuditActionHubSkillInstall AuditAction = "hub_skill_install"
-	AuditActionHubSkillUpdate  AuditAction = "hub_skill_update"
-	AuditActionHubSkillReject  AuditAction = "hub_skill_reject"
-)
-
-// AuditEntry represents a single audit log record for a tool invocation.
-type AuditEntry struct {
-	Timestamp    time.Time              `json:"timestamp"`
-	UserID       string                 `json:"user_id"`
-	SessionID    string                 `json:"session_id"`
-	Action       AuditAction            `json:"action,omitempty"`
-	ToolName     string                 `json:"tool_name"`
-	Arguments    map[string]interface{} `json:"arguments"`
-	RiskLevel    RiskLevel              `json:"risk_level"`
-	PolicyAction PolicyAction           `json:"policy_action"`
-	Result       string                 `json:"result"`
-}
-
-// AuditFilter defines criteria for querying audit log entries.
-type AuditFilter struct {
-	StartTime  *time.Time
-	EndTime    *time.Time
-	Action     AuditAction
-	ToolName   string
-	RiskLevels []RiskLevel
-}
+// AuditAction, AuditEntry, AuditFilter — see corelib_aliases.go
 
 // AuditLog manages audit log files with date-based splitting, size-based
 // rotation, and 30-day retention.

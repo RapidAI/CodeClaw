@@ -20,6 +20,7 @@ import {
     ClawNetAutoPickerConfigure,
     ClawNetAutoPickerTriggerNow,
     ClawNetGetDaemonInfo,
+    ClawNetManualUpdate,
 } from "../../../wailsjs/go/main/App";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
 import { colors, radius } from "./styles";
@@ -132,6 +133,9 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
     const [triggerMsg, setTriggerMsg] = useState("");
     // Daemon info
     const [daemonInfo, setDaemonInfo] = useState<any>(null);
+    // Manual update
+    const [updating, setUpdating] = useState(false);
+    const [updateMsg, setUpdateMsg] = useState("");
     const mountedRef = useRef(true);
     useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
@@ -311,6 +315,30 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
         }
     };
 
+    const handleManualUpdate = async () => {
+        setUpdating(true);
+        setUpdateMsg(zh ? "⏳ 正在检查更新..." : "⏳ Checking for updates...");
+        try {
+            const res = await ClawNetManualUpdate();
+            if (!mountedRef.current) return;
+            if (res.ok) {
+                setUpdateMsg(zh ? "✅ 更新完成，服务已重启" : "✅ Updated and restarted");
+                await refreshStatus();
+            } else if (res.updated) {
+                // Updated but restart failed
+                setUpdateMsg(zh ? `⚠️ 已更新，但重启失败: ${res.error}` : `⚠️ Updated, but restart failed: ${res.error}`);
+            } else {
+                setUpdateMsg(`❌ ${res.error || (zh ? "更新失败" : "Update failed")}`);
+            }
+        } catch (e) {
+            if (!mountedRef.current) return;
+            setUpdateMsg(`❌ ${e}`);
+        } finally {
+            if (mountedRef.current) setUpdating(false);
+            setTimeout(() => { if (mountedRef.current) setUpdateMsg(""); }, 6000);
+        }
+    };
+
     const handleExportKey = async () => {
         setKeyBusy(true);
         setKeyMsg("");
@@ -455,10 +483,19 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
 
             {/* Enable/Disable toggle */}
             <div style={{ ...card, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "0.78rem", color: colors.textSecondary }}>
-                    <input type="checkbox" checked={enabled} onChange={(e) => handleToggle(e.target.checked)} disabled={busy} />
-                    <span>{zh ? "启用虾网" : "Enable ClawNet"}</span>
-                </label>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "0.78rem", color: colors.textSecondary }}>
+                        <input type="checkbox" checked={enabled} onChange={(e) => handleToggle(e.target.checked)} disabled={busy} />
+                        <span>{zh ? "启用虾网" : "Enable ClawNet"}</span>
+                    </label>
+                    <button
+                        onClick={handleManualUpdate}
+                        disabled={updating || busy}
+                        style={actionBtn(updating || busy)}
+                    >
+                        {updating ? (zh ? "更新中..." : "Updating...") : (zh ? "手动更新" : "Update")}
+                    </button>
+                </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                     <span style={{
                         display: "inline-block", width: "8px", height: "8px", borderRadius: "50%",
@@ -469,6 +506,18 @@ export function ClawNetPanel({ config, saveRemoteConfigField, lang, onRunningCha
                     </span>
                 </div>
             </div>
+
+            {updateMsg && (
+                <div style={{
+                    fontSize: "0.72rem", marginBottom: "8px", padding: "4px 10px",
+                    color: updateMsg.startsWith("✅") ? colors.success
+                        : updateMsg.startsWith("⏳") ? colors.primary
+                        : updateMsg.startsWith("⚠️") ? colors.warning
+                        : colors.danger,
+                }}>
+                    {updateMsg}
+                </div>
+            )}
 
             {error && (
                 <div style={{

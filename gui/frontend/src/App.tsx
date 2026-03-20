@@ -16,7 +16,7 @@ import lobsterHalf from './assets/images/lobster_half.svg';
 import globeOnline from './assets/images/globe_online.svg';
 import globeOffline from './assets/images/globe_offline.svg';
 import clawnetIcon from './assets/images/clawnet.svg';
-import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, PingSkillHub, ValidateSkillHub, ClawNetIsRunning, ClawNetEnsureDaemonWithDownload } from "../wailsjs/go/main/App";
+import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ClipboardGetText, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, PingSkillHub, ValidateSkillHub, ClawNetIsRunning, ClawNetEnsureDaemonWithDownload, GetQQBotStatus, RestartQQBot } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
 import ReactMarkdown from 'react-markdown';
@@ -1365,7 +1365,8 @@ function App() {
     const [status, setStatus] = useState("");
     const [activeTab, setActiveTab] = useState(0);
     const [tabStartIndex, setTabStartIndex] = useState(0);
-    const [settingsTab, setSettingsTab] = useState<'general' | 'display' | 'remote' | 'skills' | 'mcp' | 'llm' | 'skillhub' | 'role' | 'memory' | 'scheduler' | 'clawnet' | 'security' | 'system'>('general');
+    const [settingsTab, setSettingsTab] = useState<'general' | 'display' | 'remote' | 'skills' | 'mcp' | 'llm' | 'skillhub' | 'role' | 'memory' | 'scheduler' | 'clawnet' | 'security' | 'im' | 'system'>('general');
+    const [qqBotStatus, setQQBotStatus] = useState<string>('disconnected');
     const [installLocation, setInstallLocation] = useState<'user' | 'project'>('user');
     const [installProject, setInstallProject] = useState<string>("");
     const [isBatchInstalling, setIsBatchInstalling] = useState(false);
@@ -1985,6 +1986,13 @@ function App() {
         EventsOn("config-changed", handleConfigChange);
         EventsOn("config-updated", handleConfigChange);
 
+        // QQ Bot status listener
+        EventsOn("qqbot-status-changed", (status: string) => {
+            setQQBotStatus(status);
+        });
+        // Fetch initial QQ Bot status
+        GetQQBotStatus().then(setQQBotStatus).catch(() => {});
+
         // Listen for background tool installation events
         EventsOn("tool-checking", (toolName: string) => {
             setBackgroundInstallStatus(lang === 'zh-Hans' ? `检查 ${toolName}...` : `Checking ${toolName}...`);
@@ -2039,6 +2047,7 @@ function App() {
             EventsOff("download-progress");
             EventsOff("config-changed");
             EventsOff("config-updated");
+            EventsOff("qqbot-status-changed");
             EventsOff("tool-checking");
             EventsOff("tool-installing");
             EventsOff("tool-updating");
@@ -3062,6 +3071,11 @@ ${instruction}`;
             id: 'clawnet' as const,
             label: lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet',
             desc: lang === 'zh-Hans' ? 'ClawNet P2P 去中心化 Agent 网络' : lang === 'zh-Hant' ? 'ClawNet P2P 去中心化 Agent 網路' : 'ClawNet decentralized P2P agent network',
+        },
+        {
+            id: 'im' as const,
+            label: 'IM',
+            desc: lang === 'zh-Hans' ? '配置 QQ 机器人等即时通讯接入' : lang === 'zh-Hant' ? '配置 QQ 機器人等即時通訊接入' : 'Configure QQ Bot and other IM integrations',
         },
         {
             id: 'security' as const,
@@ -4141,6 +4155,101 @@ ${instruction}`;
                                     lang={lang}
                                     onRunningChange={setClawNetRunning}
                                 />
+                            </div>
+
+                            <div className="settings-panel" style={{ display: settingsTab === 'im' ? 'block' : 'none' }}>
+                                <div className="form-group" style={{ marginTop: '0', borderTop: 'none', paddingTop: '0' }}>
+                                    <h4 style={{ fontSize: '0.8rem', color: '#6366f1', marginBottom: '6px', marginTop: 0, textTransform: 'uppercase', letterSpacing: '0.025em' }}>
+                                        {lang === 'zh-Hans' ? 'QQ 机器人' : lang === 'zh-Hant' ? 'QQ 機器人' : 'QQ Bot'}
+                                    </h4>
+                                    <p style={{ fontSize: '0.72rem', color: '#888', marginBottom: '12px', marginTop: 0 }}>
+                                        {lang === 'zh-Hans'
+                                            ? '配置你自己的 QQ 机器人，通过 QQ 与 MaClaw Agent 对话。'
+                                            : lang === 'zh-Hant'
+                                            ? '配置你自己的 QQ 機器人，透過 QQ 與 MaClaw Agent 對話。'
+                                            : 'Configure your own QQ Bot to chat with MaClaw Agent via QQ.'}
+                                    </p>
+
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.78rem' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={config?.qqbot_enabled || false}
+                                                onChange={(e) => saveRemoteConfigField('qqbot_enabled', e.target.checked)}
+                                            />
+                                            {lang === 'zh-Hans' ? '启用 QQ 机器人' : lang === 'zh-Hant' ? '啟用 QQ 機器人' : 'Enable QQ Bot'}
+                                        </label>
+                                        {config?.qqbot_enabled && (
+                                            <>
+                                                <span style={{
+                                                    fontSize: '0.7rem',
+                                                    padding: '2px 8px',
+                                                    borderRadius: '10px',
+                                                    background: qqBotStatus === 'connected' ? '#dcfce7' : qqBotStatus === 'connecting' || qqBotStatus === 'reconnecting' ? '#fef9c3' : '#fee2e2',
+                                                    color: qqBotStatus === 'connected' ? '#166534' : qqBotStatus === 'connecting' || qqBotStatus === 'reconnecting' ? '#854d0e' : '#991b1b',
+                                                }}>
+                                                    {qqBotStatus === 'connected' ? '● 已连接' : qqBotStatus === 'connecting' ? '◌ 连接中...' : qqBotStatus === 'reconnecting' ? '◌ 重连中...' : qqBotStatus === 'error' ? '✕ 错误' : '○ 未连接'}
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    style={{
+                                                        fontSize: '0.68rem',
+                                                        padding: '2px 8px',
+                                                        borderRadius: '4px',
+                                                        border: '1px solid #ddd',
+                                                        background: 'transparent',
+                                                        color: '#555',
+                                                        cursor: 'pointer',
+                                                    }}
+                                                    onClick={() => RestartQQBot().then(setQQBotStatus)}
+                                                >
+                                                    {lang === 'zh-Hans' ? '重启' : 'Restart'}
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px', maxWidth: '420px' }}>
+                                        <div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                                <label style={{ fontSize: '0.75rem', color: '#555' }}>App ID</label>
+                                                <button
+                                                    type="button"
+                                                    style={{
+                                                        fontSize: '0.68rem',
+                                                        padding: '1px 8px',
+                                                        borderRadius: '4px',
+                                                        border: '1px solid #6366f1',
+                                                        background: 'transparent',
+                                                        color: '#6366f1',
+                                                        cursor: 'pointer',
+                                                        whiteSpace: 'nowrap',
+                                                    }}
+                                                    onClick={() => BrowserOpenURL('https://q.qq.com/qqbot/openclaw/login.html')}
+                                                >
+                                                    {lang === 'zh-Hans' ? '获取 AppID' : lang === 'zh-Hant' ? '取得 AppID' : 'Get AppID'}
+                                                </button>
+                                            </div>
+                                            <input
+                                                type="text"
+                                                value={config?.qqbot_app_id || ''}
+                                                onChange={(e) => saveRemoteConfigField('qqbot_app_id', e.target.value)}
+                                                placeholder="e.g. 102012345"
+                                                style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #ddd', fontSize: '0.78rem' }}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={{ fontSize: '0.75rem', color: '#555', display: 'block', marginBottom: '4px' }}>App Secret</label>
+                                            <input
+                                                type="password"
+                                                value={config?.qqbot_app_secret || ''}
+                                                onChange={(e) => saveRemoteConfigField('qqbot_app_secret', e.target.value)}
+                                                placeholder="••••••••"
+                                                style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #ddd', fontSize: '0.78rem' }}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
                             <div className="settings-panel" style={{ display: settingsTab === 'security' ? 'block' : 'none' }}>

@@ -21,4 +21,4 @@ var trayTranslations = map[string]map[string]string{
 	},
 }
 
-const RequiredNodeVersion = "24.13.0"
+// RequiredNodeVersion — see corelib_aliases.go

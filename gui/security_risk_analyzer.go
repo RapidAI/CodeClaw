@@ -8,16 +8,7 @@ import (
 	"sync"
 )
 
-// RiskPattern defines a regex-based risk detection rule for the SecurityFirewall.
-type RiskPattern struct {
-	Name        string    `json:"name"`
-	Category    string    `json:"category"`
-	ToolMatch   string    `json:"tool_match"`
-	ParamMatch  string    `json:"param_match"`
-	ParamKey    string    `json:"param_key"`
-	Level       RiskLevel `json:"level"`
-	Description string    `json:"description"`
-}
+// RiskPattern — see corelib_aliases.go
 
 // SecurityCallContext provides context for risk assessment in the firewall.
 type SecurityCallContext struct {

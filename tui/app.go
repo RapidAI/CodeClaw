@@ -72,13 +72,24 @@ func (a *TUIApp) initKernel() tea.Msg {
 func (a *TUIApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// 编辑模式下不响应全局退出快捷键
+		configEditing := a.root.ActiveTab() == views.TabConfig && a.root.Config.IsEditing()
+		auditFiltering := a.root.ActiveTab() == views.TabAudit && a.root.Audit.IsFiltering()
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			if a.kernel != nil {
 				ctx := context.Background()
 				_ = a.kernel.Shutdown(ctx)
 			}
 			return a, tea.Quit
+		case "q":
+			if !configEditing && !auditFiltering {
+				if a.kernel != nil {
+					ctx := context.Background()
+					_ = a.kernel.Shutdown(ctx)
+				}
+				return a, tea.Quit
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -93,10 +104,16 @@ func (a *TUIApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.root.StatusBar.SetHubStatus("disconnected")
 			a.root.Sessions.SetSessions(nil) // 清除 loading 状态
 			a.root.Tools.SetTools(nil)
+			a.root.Audit.SetEntries(nil)
+			a.root.ClawNet.SetPeers(nil)
 		}
 
 	case kernelEventMsg:
 		a.root.StatusBar.SetMessage(fmt.Sprintf("[%s] %v", msg.eventType, msg.data))
+
+	case views.ConfigSaveMsg:
+		// TODO: 接入 config.Manager 持久化
+		a.root.StatusBar.SetMessage(fmt.Sprintf("已保存: %s = %s", msg.Key, msg.Value))
 	}
 
 	// 委托给 root model

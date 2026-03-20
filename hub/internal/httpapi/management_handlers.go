@@ -6,6 +6,7 @@ import (
 
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
 	"github.com/RapidAI/CodeClaw/hub/internal/center"
+	"github.com/RapidAI/CodeClaw/hub/internal/store"
 )
 
 type ManualBindRequest struct {
@@ -13,7 +14,8 @@ type ManualBindRequest struct {
 }
 
 type LookupUserRequest struct {
-	Email string `json:"email"`
+	Email  string `json:"email"`
+	Mobile string `json:"mobile"`
 }
 
 type BlockEmailRequest struct {
@@ -115,20 +117,32 @@ func RemoveBlockedEmailHandler(identity *auth.IdentityService) http.HandlerFunc 
 func LookupUserHandler(identity *auth.IdentityService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		email := r.URL.Query().Get("email")
-		if email == "" {
+		mobile := r.URL.Query().Get("mobile")
+		if email == "" && mobile == "" {
 			var req LookupUserRequest
 			if r.Method != http.MethodGet {
 				if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
 					email = req.Email
+					mobile = req.Mobile
 				}
 			}
 		}
-		if email == "" {
-			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "Email is required")
+
+		var (
+			user *store.User
+			err  error
+		)
+
+		switch {
+		case mobile != "":
+			user, err = identity.LookupUserByMobile(r.Context(), mobile)
+		case email != "":
+			user, err = identity.LookupUserByEmail(r.Context(), email)
+		default:
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "Email or mobile is required")
 			return
 		}
 
-		user, err := identity.LookupUserByEmail(r.Context(), email)
 		if err != nil {
 			if err == auth.ErrInvalidEmail {
 				writeError(w, http.StatusBadRequest, "INVALID_EMAIL", err.Error())

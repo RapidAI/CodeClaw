@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/RapidAI/CodeClaw/corelib"
 )
 
 // ---------------------------------------------------------------------------
@@ -258,20 +260,8 @@ func estimateBytesToTokens(data []byte) int {
 	return (len(data)*10 + 24) / 25 // equivalent to len/2.5, rounded up
 }
 
-// defaultContextTokens is the fallback context limit when no explicit
-// context_length is configured on the LLM provider.
-const defaultContextTokens = 128_000
-
-// EffectiveContextTokens returns the usable context window in tokens.
-// It uses the configured ContextLength, falling back to defaultContextTokens.
-// A safety margin of 20% is reserved for the model's output.
-func (c MaclawLLMConfig) EffectiveContextTokens() int {
-	limit := c.ContextLength
-	if limit <= 0 {
-		limit = defaultContextTokens
-	}
-	return limit * 80 / 100 // reserve 20% for output
-}
+// defaultContextTokens is re-exported from corelib for local use.
+const defaultContextTokens = corelib.DefaultContextTokens
 
 // msgRole extracts the "role" field from a conversation message regardless
 // of whether it's map[string]string or map[string]interface{}.
@@ -617,9 +607,7 @@ func stripThinkingTags(s string) string {
 const toolsCacheTTL = 5 * time.Second
 
 // ProgressCallback is called by the agent loop to send intermediate progress
-// updates to the user via IM while the agent is still working. This prevents
-// timeout on long-running tasks (e.g. file search, large builds).
-type ProgressCallback func(text string)
+// ProgressCallback — see corelib_aliases.go
 
 // IMMessageHandler processes IM messages using the local LLM Agent.
 // It accesses mcpRegistry and skillExecutor via h.app at call time

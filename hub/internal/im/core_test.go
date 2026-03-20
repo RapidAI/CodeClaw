@@ -225,7 +225,7 @@ func TestHandleMessage_IdentityFailure(t *testing.T) {
 	if len(plugin.sentTexts) == 0 {
 		t.Fatal("expected error response")
 	}
-	if !containsStr(plugin.sentTexts[0], "身份验证失败") {
+	if !containsStr(plugin.sentTexts[0], "尚未绑定账号") {
 		t.Fatalf("unexpected response: %s", plugin.sentTexts[0])
 	}
 }

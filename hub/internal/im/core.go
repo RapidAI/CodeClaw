@@ -191,9 +191,11 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 	if err != nil {
 		a.sendResponse(ctx, plugin, target, &GenericResponse{
 			StatusCode: 403,
-			StatusIcon: "🔒",
-			Title:      "身份验证失败",
-			Body:       fmt.Sprintf("无法识别您的身份，请先完成绑定。\n错误: %s", err.Error()),
+			StatusIcon: "👋",
+			Title:      "尚未绑定账号",
+			Body: "您还没有绑定 Hub 账号，无法使用机器人功能。\n\n" +
+				"绑定方法很简单：直接在此对话中发送您的 Hub 注册邮箱地址（例如 you@example.com），" +
+				"系统会向该邮箱发送验证码，回复验证码即可完成绑定。",
 		})
 		return
 	}

@@ -24,7 +24,7 @@ type SessionView struct {
 // RunSession 执行 session 子命令。
 func RunSession(args []string, hubURL, token string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: maclaw-tui session <list|start|attach|kill>")
+		return NewUsageError("usage: maclaw-tui session <list|start|attach|kill>")
 	}
 
 	client := NewHubClient(hubURL, token)
@@ -43,7 +43,7 @@ func RunSession(args []string, hubURL, token string) error {
 	case "kill":
 		return sessionKill(client, args[1:])
 	default:
-		return fmt.Errorf("unknown session action: %s", args[0])
+		return NewUsageError("unknown session action: %s", args[0])
 	}
 }
 
@@ -63,9 +63,7 @@ func sessionList(client *HubClient, args []string) error {
 	}
 
 	if *jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(sessions)
+		return PrintJSON(sessions)
 	}
 
 	if len(sessions) == 0 {
@@ -114,6 +112,10 @@ func sessionStart(client *HubClient, args []string) error {
 	}
 
 	if *jsonOut {
+		var raw interface{}
+		if json.Unmarshal(data, &raw) == nil {
+			return PrintJSON(raw)
+		}
 		fmt.Println(string(data))
 		return nil
 	}
@@ -130,10 +132,14 @@ func sessionStart(client *HubClient, args []string) error {
 }
 
 func sessionAttach(client *HubClient, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: session attach <session-id>")
+	fs := flag.NewFlagSet("session attach", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "JSON 格式输出（仅输出事件流为 JSON lines）")
+	fs.Parse(args)
+
+	if fs.NArg() == 0 {
+		return NewUsageError("usage: session attach <session-id>")
 	}
-	sessionID := args[0]
+	sessionID := fs.Arg(0)
 
 	payload, _ := json.Marshal(map[string]string{"session_id": sessionID})
 	env := Envelope{Type: "cli.attach_session", RequestID: requestID(), Payload: payload}
@@ -149,7 +155,9 @@ func sessionAttach(client *HubClient, args []string) error {
 		return fmt.Errorf("attach failed: %s", string(resp.Payload))
 	}
 
-	fmt.Printf("Attached to session %s. Press Ctrl+C to detach.\n", sessionID)
+	if !*jsonOut {
+		fmt.Printf("Attached to session %s. Press Ctrl+C to detach.\n", sessionID)
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
@@ -189,23 +197,43 @@ func sessionAttach(client *HubClient, args []string) error {
 
 	select {
 	case <-sigCh:
-		fmt.Println("\nDetaching (session continues running)...")
+		if !*jsonOut {
+			fmt.Println("\nDetaching (session continues running)...")
+		}
 	case <-doneCh:
-		fmt.Println("Session connection closed.")
+		if !*jsonOut {
+			fmt.Println("Session connection closed.")
+		}
 	}
 	return nil
 }
 
 func sessionKill(client *HubClient, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: session kill <session-id>")
-	}
-	sessionID := args[0]
+	fs := flag.NewFlagSet("session kill", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "JSON 格式输出")
+	fs.Parse(args)
 
-	_, err := client.Request("cli.kill_session", map[string]string{"session_id": sessionID})
+	if fs.NArg() == 0 {
+		return NewUsageError("usage: session kill <session-id>")
+	}
+	sessionID := fs.Arg(0)
+
+	data, err := client.Request("cli.kill_session", map[string]string{"session_id": sessionID})
 	if err != nil {
 		return err
 	}
+
+	if *jsonOut {
+		result := map[string]string{"session_id": sessionID, "status": "terminated"}
+		if data != nil {
+			var parsed map[string]interface{}
+			if json.Unmarshal(data, &parsed) == nil {
+				return PrintJSON(parsed)
+			}
+		}
+		return PrintJSON(result)
+	}
+
 	fmt.Printf("Session %s terminated.\n", sessionID)
 	return nil
 }

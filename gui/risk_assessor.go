@@ -5,25 +5,11 @@ import (
 	"strings"
 )
 
-// RiskLevel represents the assessed risk level of a tool invocation.
-type RiskLevel string
-
-const (
-	RiskLow      RiskLevel = "low"
-	RiskMedium   RiskLevel = "medium"
-	RiskHigh     RiskLevel = "high"
-	RiskCritical RiskLevel = "critical"
-)
-
-// riskLevelOrder maps each RiskLevel to a numeric value for comparison.
-var riskLevelOrder = map[RiskLevel]int{
-	RiskLow:      0,
-	RiskMedium:   1,
-	RiskHigh:     2,
-	RiskCritical: 3,
-}
+// RiskLevel, RiskAssessment,
+// riskLevelOrder, RiskLow/Medium/High/Critical — see corelib_aliases.go
 
 // RiskContext contains contextual information for risk assessment.
+// Kept in gui/ because it uses the gui-local PermissionMode type.
 type RiskContext struct {
 	ToolName       string
 	Arguments      map[string]interface{}
@@ -33,15 +19,11 @@ type RiskContext struct {
 	CallCount      int // consecutive call count for the same tool in the same session
 }
 
-// RiskAssessment is the result of a risk evaluation.
-type RiskAssessment struct {
-	Level   RiskLevel
-	Reason  string
-	Factors []string // factors that influenced the assessment
-}
-
 // RiskAssessor performs intent-level risk assessment on tool invocations.
+// Kept in gui/ because it has gui-specific methods (AssessSkill takes *NLSkillEntry).
 type RiskAssessor struct{}
+
+// PermissionMode is gui-local (not in corelib/security).
 
 // dangerousKeywords are parameter substrings that immediately trigger critical risk.
 var dangerousKeywords = []string{"rm -rf", "DROP TABLE", "format", "sudo"}

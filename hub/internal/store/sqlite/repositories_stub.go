@@ -417,6 +417,27 @@ func (r *enrollmentRepo) UpdateMobile(ctx context.Context, id string, mobile str
 	return err
 }
 
+func (r *enrollmentRepo) GetByMobile(ctx context.Context, mobile string) (*store.UserEnrollment, error) {
+	row := r.readDB.QueryRowContext(
+		ctx,
+		`SELECT id, email, mobile, status, note, created_at, updated_at
+		 FROM user_enrollments WHERE mobile = ?
+		 ORDER BY created_at DESC LIMIT 1`,
+		mobile,
+	)
+	var item store.UserEnrollment
+	var createdAt, updatedAt string
+	if err := row.Scan(&item.ID, &item.Email, &item.Mobile, &item.Status, &item.Note, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	item.CreatedAt = mustParseTime(createdAt)
+	item.UpdatedAt = mustParseTime(updatedAt)
+	return &item, nil
+}
+
 func (r *emailBlockRepo) Create(ctx context.Context, item *store.EmailBlockItem) error {
 	_, err := r.db.ExecContext(
 		ctx,

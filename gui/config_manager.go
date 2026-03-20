@@ -7,35 +7,7 @@ import (
 	"strings"
 )
 
-// ConfigSection describes a group of related configuration keys.
-type ConfigSection struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Keys        []ConfigKeySchema `json:"keys"`
-}
-
-// ConfigKeySchema describes a single configuration key within a section.
-type ConfigKeySchema struct {
-	Key         string   `json:"key"`
-	Description string   `json:"description"`
-	Type        string   `json:"type"`                    // string/bool/int/enum/list
-	Default     string   `json:"default,omitempty"`
-	ValidValues []string `json:"valid_values,omitempty"`  // for enum type
-}
-
-// ConfigChange represents a single configuration modification.
-type ConfigChange struct {
-	Section string `json:"section"`
-	Key     string `json:"key"`
-	Value   string `json:"value"`
-}
-
-// ImportReport summarises the result of a configuration import.
-type ImportReport struct {
-	Applied  int      `json:"applied"`
-	Skipped  int      `json:"skipped"`
-	Warnings []string `json:"warnings"`
-}
+// ConfigSection, ConfigKeySchema, ConfigChange, ImportReport — see corelib_aliases.go
 
 // ConfigManager provides structured read/write access to AppConfig.
 type ConfigManager struct {

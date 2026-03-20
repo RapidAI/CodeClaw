@@ -288,6 +288,8 @@ export function ClawNetInstallBinary():Promise<any>;
 
 export function ClawNetEnsureDaemonWithDownload():Promise<any>;
 
+export function ClawNetManualUpdate():Promise<any>;
+
 export function ClawNetListTasks(arg1:string):Promise<any>;
 
 // ClawNet extended bindings

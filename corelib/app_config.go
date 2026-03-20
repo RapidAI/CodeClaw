@@ -78,4 +78,8 @@ type AppConfig struct {
 	// Security
 	SecurityPolicyMode   string `json:"security_policy_mode,omitempty"`
 	MaclawDebugToolCalls bool   `json:"maclaw_debug_tool_calls,omitempty"`
+	// IM — per-user QQ Bot (client-side gateway)
+	QQBotEnabled   bool   `json:"qqbot_enabled,omitempty"`
+	QQBotAppID     string `json:"qqbot_app_id,omitempty"`
+	QQBotAppSecret string `json:"qqbot_app_secret,omitempty"`
 }

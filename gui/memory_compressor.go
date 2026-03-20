@@ -21,17 +21,7 @@ type MemoryBackupInfo struct {
 	EntryCount int    `json:"entry_count"`
 }
 
-// CompressResult holds the outcome of a compression run.
-type CompressResult struct {
-	BackupName      string `json:"backup_name"`
-	TotalEntries    int    `json:"total_entries"`
-	DedupCount      int    `json:"dedup_count"`
-	MergedCount     int    `json:"merged_count"`
-	CompressedCount int    `json:"compressed_count"`
-	SkippedCount    int    `json:"skipped_count"`
-	ErrorCount      int    `json:"error_count"`
-	SavedChars      int    `json:"saved_chars"`
-}
+// CompressResult — see corelib_aliases.go
 
 // MemoryCompressorStatus is returned by the status query binding.
 type MemoryCompressorStatus struct {

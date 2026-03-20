@@ -13,25 +13,7 @@ import (
 	"time"
 )
 
-// MCPServerSource identifies how a server was registered.
-type MCPServerSource string
-
-const (
-	MCPSourceManual  MCPServerSource = "manual"
-	MCPSourceMDNS    MCPServerSource = "mdns"
-	MCPSourceProject MCPServerSource = "project"
-)
-
-// MCPServerEntry is a locally-registered MCP Server persisted in AppConfig.
-type MCPServerEntry struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	EndpointURL string          `json:"endpoint_url"`
-	AuthType    string          `json:"auth_type"`   // "none", "api_key", "bearer"
-	AuthSecret  string          `json:"auth_secret"`
-	CreatedAt   string          `json:"created_at"`
-	Source      MCPServerSource `json:"source"`
-}
+// MCPServerSource, MCPServerEntry — see corelib_aliases.go
 
 // MCPToolView is a tool exposed by an MCP Server.
 type MCPToolView struct {
@@ -529,16 +511,7 @@ func (a *App) CheckMCPServerHealth(serverID string) error {
 
 // ─── Local (stdio) MCP Server support ───────────────────────────────────────
 
-// LocalMCPServerEntry represents a local MCP server launched via command (e.g. npx).
-type LocalMCPServerEntry struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	Command string            `json:"command"`           // e.g. "npx"
-	Args    []string          `json:"args,omitempty"`    // e.g. ["-y", "@modelcontextprotocol/server-brave-search"]
-	Env     map[string]string `json:"env,omitempty"`     // e.g. {"BRAVE_API_KEY": "xxx"}
-	Disabled bool             `json:"disabled,omitempty"`
-	CreatedAt string          `json:"created_at"`
-}
+// LocalMCPServerEntry — see corelib_aliases.go
 
 // loadLocalServers reads local MCP server entries from config.
 func (r *MCPRegistry) loadLocalServers() []LocalMCPServerEntry {

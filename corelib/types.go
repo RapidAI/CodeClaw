@@ -3,6 +3,10 @@ package corelib
 // RequiredNodeVersion 是项目要求的最低 Node.js 版本。
 const RequiredNodeVersion = "24.13.0"
 
+// DefaultContextTokens is the fallback context limit when no explicit
+// context_length is configured on the LLM provider.
+const DefaultContextTokens = 128_000
+
 // ModelConfig 描述一个 LLM 模型的配置。
 type ModelConfig struct {
 	ModelName       string `json:"model_name"`
@@ -139,6 +143,17 @@ type MaclawLLMConfig struct {
 	Model         string `json:"model"`
 	Protocol      string `json:"protocol,omitempty"`
 	ContextLength int    `json:"context_length,omitempty"`
+}
+
+// EffectiveContextTokens returns the usable context window in tokens.
+// It uses the configured ContextLength, falling back to DefaultContextTokens.
+// A safety margin of 20% is reserved for the model's output.
+func (c MaclawLLMConfig) EffectiveContextTokens() int {
+	limit := c.ContextLength
+	if limit <= 0 {
+		limit = DefaultContextTokens
+	}
+	return limit * 80 / 100 // reserve 20% for output
 }
 
 // SkillHubEntry 描述一个 SkillHUB 注册端点。

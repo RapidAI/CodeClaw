@@ -82,6 +82,7 @@ type App struct {
 	taskOrchestrator2    *TaskOrchestrator2
 	autoTaskPicker       *ClawNetAutoTaskPicker
 	autoPickerOnce       sync.Once
+	qqBotGateway         *qqBotGatewayManager
 }
 
 var OnConfigChanged func(AppConfig)
@@ -97,153 +98,7 @@ var ShowNotification func(title, message string, iconFlag uint32)
 // Set by platform-specific tray setup code.
 var FlashAndBeep func()
 
-type ModelConfig struct {
-	ModelName       string `json:"model_name"`
-	ModelId         string `json:"model_id"`
-	ModelUrl        string `json:"model_url"`
-	ApiKey          string `json:"api_key"`
-	WireApi         string `json:"wire_api"`
-	IsCustom        bool   `json:"is_custom"`
-	IsBuiltin       bool   `json:"is_builtin"`
-	HasSubscription bool   `json:"has_subscription"`
-}
-type ProjectConfig struct {
-	Id            string `json:"id"`
-	Name          string `json:"name"`
-	Path          string `json:"path"`
-	YoloMode      bool   `json:"yolo_mode"`
-	AdminMode     bool   `json:"admin_mode"`
-	PythonProject bool   `json:"python_project"` // Whether this is a Python project
-	PythonEnv     string `json:"python_env"`     // Selected Python/Anaconda environment
-	TeamMode      bool   `json:"team_mode"`      // Claude Code Agent Teams mode
-	// Proxy settings (project-specific)
-	UseProxy      bool   `json:"use_proxy"`
-	ProxyHost     string `json:"proxy_host"`
-	ProxyPort     string `json:"proxy_port"`
-	ProxyUsername string `json:"proxy_username"`
-	ProxyPassword string `json:"proxy_password"`
-}
-type PythonEnvironment struct {
-	Name string `json:"name"` // Environment name (e.g.", "base", "myenv")
-	Path string `json:"path"` // Full path to the environment
-	Type string `json:"type"` // "conda", "venv", or "system"
-}
-type ToolConfig struct {
-	CurrentModel string        `json:"current_model"`
-	Models       []ModelConfig `json:"models"`
-}
-type CodeBuddyModel struct {
-	Id               string `json:"id"`
-	Name             string `json:"name"`
-	Vendor           string `json:"vendor"`
-	ApiKey           string `json:"apiKey"`
-	MaxInputTokens   int    `json:"maxInputTokens"`
-	MaxOutputTokens  int    `json:"maxOutputTokens"`
-	Url              string `json:"url"`
-	SupportsToolCall bool   `json:"supportsToolCall"`
-	SupportsImages   bool   `json:"supportsImages"`
-}
-type CodeBuddyFileConfig struct {
-	Models          []CodeBuddyModel `json:"Models"`
-	AvailableModels []string         `json:"availableModels"`
-}
-type AppConfig struct {
-	Claude               ToolConfig      `json:"claude"`
-	Gemini               ToolConfig      `json:"gemini"`
-	Codex                ToolConfig      `json:"codex"`
-	Opencode             ToolConfig      `json:"opencode"`
-	CodeBuddy            ToolConfig      `json:"codebuddy"`
-	IFlow                ToolConfig      `json:"iflow"`
-	Kilo                 ToolConfig      `json:"kilo"`
-	Cursor               ToolConfig      `json:"cursor"`
-	Projects             []ProjectConfig `json:"projects"`
-	CurrentProject       string          `json:"current_project"` // ID of the current project
-	ActiveTool           string          `json:"active_tool"`     // "claude", "gemini", or "codex"
-	HideStartupPopup     bool            `json:"hide_startup_popup"`
-	HideMaclawLLMPopup   bool            `json:"hide_maclaw_llm_popup"`
-	ShowGemini           bool            `json:"show_gemini"`
-	ShowCodex            bool            `json:"show_codex"`
-	ShowOpenCode         bool            `json:"show_opencode"`
-	ShowCodeBuddy        bool            `json:"show_codebuddy"`
-	ShowIFlow            bool            `json:"show_iflow"`
-	ShowKilo             bool            `json:"show_kilo"`
-	ShowCursor           bool            `json:"show_cursor"`
-	Language             string          `json:"language"`
-	PowerOptimization    bool            `json:"power_optimization"`
-	ScreenDimTimeoutMin  int             `json:"screen_dim_timeout_min"` // Minutes of inactivity before dimming display (0=disabled)
-	CheckUpdateOnStartup bool            `json:"check_update_on_startup"`
-	// Environment check settings
-	PauseEnvCheck    bool   `json:"pause_env_check"`     // Whether to skip environment checks
-	EnvCheckDone     bool   `json:"env_check_done"`      // Whether the first environment check has been completed
-	EnvCheckInterval int    `json:"env_check_interval"`  // Days between environment check reminders (2-30)
-	LastEnvCheckTime string `json:"last_env_check_time"` // Last environment check time (RFC3339 format)
-	// Proxy settings (global default)
-	DefaultProxyHost     string `json:"default_proxy_host"`
-	DefaultProxyPort     string `json:"default_proxy_port"`
-	DefaultProxyUsername string `json:"default_proxy_username"`
-	DefaultProxyPassword string `json:"default_proxy_password"`
-	// Terminal settings (Windows only)
-	UseWindowsTerminal bool   `json:"use_windows_terminal"` // Use Windows Terminal instead of cmd.exe
-	RemoteEnabled      bool   `json:"remote_enabled"`
-	RemoteHubURL       string `json:"remote_hub_url"`
-	RemoteHubCenterURL string `json:"remote_hubcenter_url"`
-	RemoteEmail        string `json:"remote_email"`
-	RemoteMobile       string `json:"remote_mobile"`
-	RemoteSN           string `json:"remote_sn"`
-	RemoteUserID       string `json:"remote_user_id"`
-	RemoteMachineID    string `json:"remote_machine_id"`
-	RemoteMachineToken string `json:"remote_machine_token"`
-	RemoteHeartbeatSec int    `json:"remote_heartbeat_sec"`
-	RemoteClientID     string `json:"remote_client_id"`
-	DefaultLaunchMode  string `json:"default_launch_mode"` // "local" or "remote", default launch mode for tool area
-	// MaClaw LLM configuration — used by the desktop agent for intent analysis
-	MaclawLLMUrl             string              `json:"maclaw_llm_url"`
-	MaclawLLMKey             string              `json:"maclaw_llm_key"`
-	MaclawLLMModel           string              `json:"maclaw_llm_model"`
-	MaclawLLMProtocol        string              `json:"maclaw_llm_protocol,omitempty"` // "openai" (default) or "anthropic"
-	MaclawLLMContextLength   int                 `json:"maclaw_llm_context_length,omitempty"` // max context tokens
-	MaclawLLMProviders       []MaclawLLMProvider `json:"maclaw_llm_providers,omitempty"`
-	MaclawLLMCurrentProvider string              `json:"maclaw_llm_current_provider,omitempty"`
-	MaclawAgentMaxIterations int                 `json:"maclaw_agent_max_iterations,omitempty"` // 0/absent=default(12), >0=fixed limit, -1=unlimited
-	// MaClaw Role configuration — customizable agent persona
-	MaclawRoleName        string `json:"maclaw_role_name,omitempty"`        // Agent display name, default "MaClaw"
-	MaclawRoleDescription string `json:"maclaw_role_description,omitempty"` // Agent role description
-	// Client-side MCP Server registry (Agent Passthrough architecture)
-	MCPServers []MCPServerEntry `json:"mcp_servers,omitempty"`
-	// Local (stdio) MCP Server configurations (npx / command-based)
-	LocalMCPServers []LocalMCPServerEntry `json:"local_mcp_servers,omitempty"`
-	// Client-side NL Skill definitions (Agent Passthrough architecture)
-	NLSkills []NLSkillEntry `json:"nl_skills,omitempty"`
-	// SkillHUB registry URLs for searching and downloading skill packages
-	SkillHubURLs []SkillHubEntry `json:"skill_hub_urls,omitempty"`
-	// Memory auto-compression service (runs periodically in background)
-	MemoryAutoCompress bool `json:"memory_auto_compress,omitempty"`
-	// ClawNet P2P network — disabled by default for new installs
-	ClawNetEnabled            bool    `json:"clawnet_enabled"`
-	ClawNetAutoPickerEnabled  bool    `json:"clawnet_auto_picker_enabled,omitempty"`
-	ClawNetAutoPickerPollMin  int     `json:"clawnet_auto_picker_poll_min,omitempty"`
-	ClawNetAutoPickerMinReward float64 `json:"clawnet_auto_picker_min_reward,omitempty"`
-	// Security policy mode: "relaxed", "standard" (default), "strict"
-	SecurityPolicyMode string `json:"security_policy_mode,omitempty"`
-	// MaClaw Debug: when true, intermediate tool-call progress is sent to user;
-	// when false (default), only errors and final results are shown.
-	MaclawDebugToolCalls bool `json:"maclaw_debug_tool_calls,omitempty"`
-}
-
-// SkillHubEntry represents a single SkillHUB registry endpoint.
-// Type 字段标识 Hub 的 API 类型，用于选择正确的适配器。
-type SkillHubEntry struct {
-	Label string `json:"label"`
-	URL   string `json:"url"`
-	Type  string `json:"type,omitempty"` // "standard", "clawhub", "clawhub_mirror", ""(auto-detect)
-}
-type Skill struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Type        string `json:"type"`      // "address" or "zip"
-	Value       string `json:"value"`     // Address string or zip filename
-	Installed   bool   `json:"installed"` // Whether this skill is already installed
-}
+// AppConfig, SkillHubEntry, Skill — see corelib_aliases.go
 
 // NewApp creates a new App application struct
 func NewApp() *App {
@@ -614,6 +469,10 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 		})
 	}
 	_ = hubClient.Connect()
+
+	// Start QQ Bot gateway if configured (runs on client side).
+	a.ensureQQBotGateway()
+
 	return hubClient
 }
 
@@ -716,6 +575,9 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.autoTaskPicker != nil {
 		a.autoTaskPicker.Stop()
+	}
+	if a.qqBotGateway != nil {
+		a.qqBotGateway.Stop()
 	}
 	a.platformShutdown()
 }
@@ -1240,6 +1102,10 @@ func (a *App) startConfigWatcher() {
 					if err == nil {
 						a.refreshPowerOptimizationStateFromConfig(config)
 						a.emitEvent("config-updated", config)
+						// Re-sync QQ Bot gateway on config change
+						if a.qqBotGateway != nil {
+							a.qqBotGateway.SyncFromConfig()
+						}
 					}
 				}
 			case err, ok := <-a.watcher.Errors:

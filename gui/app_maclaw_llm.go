@@ -11,25 +11,7 @@ import (
 	"time"
 )
 
-// MaclawLLMProvider represents a single LLM provider entry for MaClaw.
-type MaclawLLMProvider struct {
-	Name          string `json:"name"`
-	URL           string `json:"url"`
-	Key           string `json:"key"`
-	Model         string `json:"model"`
-	Protocol      string `json:"protocol,omitempty"`       // "openai" (default) or "anthropic"
-	ContextLength int    `json:"context_length,omitempty"` // max context tokens (0 = use default 128k)
-	IsCustom      bool   `json:"is_custom,omitempty"`
-}
-
-// MaclawLLMConfig is the LLM configuration for the MaClaw desktop agent.
-type MaclawLLMConfig struct {
-	URL           string `json:"url"`
-	Key           string `json:"key"`
-	Model         string `json:"model"`
-	Protocol      string `json:"protocol,omitempty"`       // "openai" (default) or "anthropic"
-	ContextLength int    `json:"context_length,omitempty"` // max context tokens (0 = use default)
-}
+// MaclawLLMProvider, MaclawLLMConfig — see corelib_aliases.go
 
 // defaultMaclawLLMProviders returns the built-in provider list.
 func defaultMaclawLLMProviders() []MaclawLLMProvider {
@@ -315,8 +297,7 @@ func (a *App) testAnthropicLLM(url, key, model string) (string, error) {
 	return "", fmt.Errorf("no text response from model")
 }
 
-// maxAgentIterationsCap is the hard safety ceiling for agent loops.
-const maxAgentIterationsCap = 300
+// maxAgentIterationsCap — see corelib_aliases.go
 
 // GetMaclawAgentMaxIterations returns the configured max agent iterations.
 //   - positive value: use that as the limit

@@ -10,25 +10,7 @@ import (
 	"sync"
 )
 
-// PolicyAction represents the action a policy rule dictates for a tool invocation.
-type PolicyAction string
-
-const (
-	PolicyAllow PolicyAction = "allow"
-	PolicyDeny  PolicyAction = "deny"
-	PolicyAsk   PolicyAction = "ask"
-	PolicyAudit PolicyAction = "audit"
-)
-
-// PolicyRule defines a single policy rule for evaluating tool invocations.
-type PolicyRule struct {
-	Name        string       `json:"name"`
-	Priority    int          `json:"priority"`     // lower number = higher priority
-	ToolPattern string       `json:"tool_pattern"` // glob pattern for tool name matching
-	ArgsPattern string       `json:"args_pattern"` // regex pattern for argument matching
-	RiskLevels  []RiskLevel  `json:"risk_levels"`  // risk levels this rule applies to
-	Action      PolicyAction `json:"action"`
-}
+// PolicyAction, PolicyRule — see corelib_aliases.go
 
 // PolicyEngine evaluates tool invocations against a set of ordered policy rules.
 type PolicyEngine struct {

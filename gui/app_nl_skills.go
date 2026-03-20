@@ -18,32 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// NLSkillEntry is a locally-persisted Skill definition in AppConfig.
-type NLSkillEntry struct {
-	Name          string        `json:"name"`
-	Description   string        `json:"description"`
-	Triggers      []string      `json:"triggers"`
-	Steps         []NLSkillStep `json:"steps"`
-	Status        string        `json:"status"` // "active", "disabled"
-	CreatedAt     string        `json:"created_at"`
-	Source        string        `json:"source"`         // "manual" | "learned" | "hub" | "crafted"
-	SourceProject string        `json:"source_project"` // originating project path
-	HubSkillID    string        `json:"hub_skill_id,omitempty"`
-	HubVersion    string        `json:"hub_version,omitempty"`
-	TrustLevel    string        `json:"trust_level,omitempty"`
-	// Usage tracking fields for skill quality assessment.
-	UsageCount   int    `json:"usage_count"`              // total execution count
-	SuccessCount int    `json:"success_count"`            // successful execution count
-	LastUsedAt   string `json:"last_used_at,omitempty"`   // RFC3339 timestamp of last execution
-	LastError    string `json:"last_error,omitempty"`     // last execution error message
-}
-
-// NLSkillStep represents a single action within an NL Skill.
-type NLSkillStep struct {
-	Action  string                 `json:"action"`
-	Params  map[string]interface{} `json:"params"`
-	OnError string                 `json:"on_error"` // "stop" (default), "continue"
-}
+// NLSkillEntry, NLSkillStep — see corelib_aliases.go
 
 // NLSkillDefinition is the Wails-facing view of a Skill.
 type NLSkillDefinition struct {

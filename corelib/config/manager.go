@@ -137,6 +137,8 @@ func (m *Manager) GetConfig(section string) (string, error) {
 		return m.formatGeneralConfig(cfg), nil
 	case "power":
 		return m.formatPowerConfig(cfg), nil
+	case "qqbot":
+		return m.formatQQBotConfig(cfg), nil
 	default:
 		return "", fmt.Errorf("unknown config section: %s", section)
 	}
@@ -158,6 +160,7 @@ func (m *Manager) configOverview(cfg corelib.AppConfig) string {
 	b.WriteString(fmt.Sprintf("Claude 当前模型: %s\n", cfg.Claude.CurrentModel))
 	b.WriteString(fmt.Sprintf("Gemini 当前模型: %s\n", cfg.Gemini.CurrentModel))
 	b.WriteString(fmt.Sprintf("Codex 当前模型: %s\n", cfg.Codex.CurrentModel))
+	b.WriteString(fmt.Sprintf("QQ Bot: %v\n", cfg.QQBotEnabled))
 	return b.String()
 }
 
@@ -574,6 +577,8 @@ func (m *Manager) applyChange(cfg *corelib.AppConfig, section, key, value string
 		return m.applyGeneralChange(cfg, k, value)
 	case "power":
 		return m.applyPowerChange(cfg, k, value)
+	case "qqbot":
+		return m.applyQQBotChange(cfg, k, value)
 	}
 	return "", fmt.Errorf("unknown section %q", section)
 }
@@ -763,6 +768,33 @@ func (m *Manager) applyPowerChange(cfg *corelib.AppConfig, key, value string) (s
 	return "", fmt.Errorf("unsupported power key %q", key)
 }
 
+func (m *Manager) formatQQBotConfig(cfg corelib.AppConfig) string {
+	var b strings.Builder
+	b.WriteString("[QQ Bot]\n")
+	b.WriteString(fmt.Sprintf("  qqbot_enabled    = %v\n", cfg.QQBotEnabled))
+	b.WriteString(fmt.Sprintf("  qqbot_app_id     = %s\n", cfg.QQBotAppID))
+	b.WriteString(fmt.Sprintf("  qqbot_app_secret = %s\n", maskSensitive(cfg.QQBotAppSecret)))
+	return b.String()
+}
+
+func (m *Manager) applyQQBotChange(cfg *corelib.AppConfig, key, value string) (string, error) {
+	switch key {
+	case "qqbot_enabled":
+		old := fmt.Sprintf("%v", cfg.QQBotEnabled)
+		cfg.QQBotEnabled = strings.EqualFold(value, "true")
+		return old, nil
+	case "qqbot_app_id":
+		old := cfg.QQBotAppID
+		cfg.QQBotAppID = value
+		return old, nil
+	case "qqbot_app_secret":
+		old := cfg.QQBotAppSecret
+		cfg.QQBotAppSecret = value
+		return maskIfSensitive("qqbot_app_secret", old), nil
+	}
+	return "", fmt.Errorf("unsupported qqbot key %q", key)
+}
+
 // ---------------------------------------------------------------------------
 // initSchema initialises the full configuration schema.
 // ---------------------------------------------------------------------------
@@ -855,6 +887,15 @@ func (m *Manager) initSchema() {
 			Keys: []ConfigKeySchema{
 				{Key: "power_optimization", Description: "是否启用防锁屏（远程任务运行时阻止系统锁屏）", Type: "bool", Default: "false"},
 				{Key: "screen_dim_timeout_min", Description: "无操作多少分钟后熄屏节能（0=禁用）", Type: "int", Default: "3"},
+			},
+		},
+		{
+			Name:        "qqbot",
+			Description: "QQ 机器人（客户端侧 WebSocket 网关）",
+			Keys: []ConfigKeySchema{
+				{Key: "qqbot_enabled", Description: "是否启用 QQ 机器人", Type: "bool", Default: "false"},
+				{Key: "qqbot_app_id", Description: "QQ 机器人 AppID", Type: "string"},
+				{Key: "qqbot_app_secret", Description: "QQ 机器人 AppSecret", Type: "string"},
 			},
 		},
 	}

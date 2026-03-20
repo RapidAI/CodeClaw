@@ -16,6 +16,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var version = "dev"
+
 // HubCLIClient handles WebSocket connection to the Hub for CLI operations.
 type HubCLIClient struct {
 	hubURL string
@@ -349,6 +351,7 @@ Commands:
   session kill <session-id>   Kill a session
 
 Flags:
+  --version                   Show version
 `)
 	flag.PrintDefaults()
 }
@@ -356,8 +359,14 @@ Flags:
 func main() {
 	hubURL := flag.String("hub-url", "http://localhost:9099", "Hub server URL")
 	token := flag.String("token", "", "Authentication token (required)")
+	showVersion := flag.Bool("version", false, "Show version")
 	flag.Usage = usage
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("maclaw-tool %s\n", version)
+		return
+	}
 
 	if *token == "" {
 		fmt.Fprintln(os.Stderr, "Error: --token is required")
