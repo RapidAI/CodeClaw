@@ -13,7 +13,7 @@ import (
 // RunMemory 执行 memory 子命令。
 func RunMemory(args []string, dataDir string) error {
 	if len(args) == 0 {
-		return NewUsageError("usage: maclaw-tui memory <list|search|save|delete|compress|backup>")
+		return NewUsageError("usage: maclaw-tui memory <list|search|save|delete|compress|backup|auto-compress>")
 	}
 	switch args[0] {
 	case "list":
@@ -28,6 +28,8 @@ func RunMemory(args []string, dataDir string) error {
 		return memoryCompress(dataDir, args[1:])
 	case "backup":
 		return memoryBackup(dataDir, args[1:])
+	case "auto-compress":
+		return memoryAutoCompress(dataDir, args[1:])
 	default:
 		return NewUsageError("unknown memory action: %s", args[0])
 	}
@@ -299,4 +301,48 @@ func memoryBackupDelete(dataDir string, args []string) error {
 	}
 	fmt.Printf("Backup %s deleted.\n", name)
 	return nil
+}
+
+func memoryAutoCompress(dataDir string, args []string) error {
+	if len(args) == 0 {
+		return NewUsageError("usage: maclaw-tui memory auto-compress <on|off|status>")
+	}
+	store := NewFileConfigStore(dataDir)
+	switch args[0] {
+	case "on":
+		cfg, err := store.LoadConfig()
+		if err != nil {
+			return err
+		}
+		cfg.MemoryAutoCompress = true
+		if err := store.SaveConfig(cfg); err != nil {
+			return err
+		}
+		fmt.Println("自动压缩已开启。")
+		return nil
+	case "off":
+		cfg, err := store.LoadConfig()
+		if err != nil {
+			return err
+		}
+		cfg.MemoryAutoCompress = false
+		if err := store.SaveConfig(cfg); err != nil {
+			return err
+		}
+		fmt.Println("自动压缩已关闭。")
+		return nil
+	case "status":
+		cfg, err := store.LoadConfig()
+		if err != nil {
+			return err
+		}
+		if cfg.MemoryAutoCompress {
+			fmt.Println("自动压缩: 开启")
+		} else {
+			fmt.Println("自动压缩: 关闭")
+		}
+		return nil
+	default:
+		return NewUsageError("usage: maclaw-tui memory auto-compress <on|off|status>")
+	}
 }

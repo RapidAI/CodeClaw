@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"path/filepath"
+	"time"
 
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/auth"
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/config"
@@ -68,18 +69,65 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		return nil, err
 	}
 
+	ratingSvc := skillmarket.NewRatingService(smStore)
+	trialMgr := skillmarket.NewTrialManager(smStore, skillStore, ratingSvc)
+	searchSvc, err := skillmarket.NewSearchService(smStore, skillStore)
+	if err != nil {
+		return nil, err
+	}
+	leaderboardSvc := skillmarket.NewLeaderboardService(skillStore)
+
+	// API Key pool: 使用 RSA 私钥的原始字节作为加密密钥种子
+	apiKeySvc, err := skillmarket.NewAPIKeyPoolService(smStore, rsaPrivKey.D.Bytes())
+	if err != nil {
+		return nil, err
+	}
+
+	// 通知服务
+	notifSvc, err := skillmarket.NewNotificationService(smStore, mailer)
+	if err != nil {
+		return nil, err
+	}
+
+	// 退款服务
+	refundSvc := skillmarket.NewRefundService(smStore, creditsSvc, mailer)
+
+	// 频率限制
+	tierSvc := skillmarket.NewTierService(smStore)
+	rateLimiter := skillmarket.NewRateLimiter(smStore, tierSvc)
+
 	smHandlers := httpapi.NewSkillMarketHandlers(httpapi.SkillMarketConfig{
-		Store:      smStore,
-		UserSvc:    userSvc,
-		CreditsSvc: creditsSvc,
-		Processor:  processor,
-		RSAPrivKey: rsaPrivKey,
-		PendingDir: pendingDir,
-		DataDir:    dataDir,
+		Store:          smStore,
+		SkillStore:     skillStore,
+		UserSvc:        userSvc,
+		CreditsSvc:     creditsSvc,
+		Processor:      processor,
+		RatingSvc:      ratingSvc,
+		TrialMgr:       trialMgr,
+		SearchSvc:      searchSvc,
+		LeaderboardSvc: leaderboardSvc,
+		APIKeySvc:      apiKeySvc,
+		RefundSvc:      refundSvc,
+		RateLimiter:    rateLimiter,
+		RSAPrivKey:     rsaPrivKey,
+		PendingDir:     pendingDir,
+		DataDir:        dataDir,
 	})
 
 	// 启动异步处理器后台 goroutine
 	go processor.Run(context.Background())
+
+	// 启动通知服务后台 goroutine（与试用期到期扫描复用）
+	go func() {
+		ctx := context.Background()
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			<-ticker.C
+			_ = notifSvc.ProcessPendingNotifications(ctx)
+			trialMgr.ProcessExpiredTrials(ctx)
+		}
+	}()
 
 	router := httpapi.NewRouter(adminService, hubService, entryService, mailer, skillStore, st.Gossip, gossipCache, smHandlers)
 

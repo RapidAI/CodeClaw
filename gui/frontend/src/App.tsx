@@ -4175,7 +4175,7 @@ ${instruction}`;
                                             <input
                                                 type="checkbox"
                                                 checked={config?.qqbot_enabled || false}
-                                                onChange={(e) => saveRemoteConfigField('qqbot_enabled', e.target.checked)}
+                                                onChange={(e) => saveRemoteConfigField({ qqbot_enabled: e.target.checked } as any)}
                                             />
                                             {lang === 'zh-Hans' ? '启用 QQ 机器人' : lang === 'zh-Hant' ? '啟用 QQ 機器人' : 'Enable QQ Bot'}
                                         </label>
@@ -4233,7 +4233,7 @@ ${instruction}`;
                                             <input
                                                 type="text"
                                                 value={config?.qqbot_app_id || ''}
-                                                onChange={(e) => saveRemoteConfigField('qqbot_app_id', e.target.value)}
+                                                onChange={(e) => saveRemoteConfigField({ qqbot_app_id: e.target.value } as any)}
                                                 placeholder="e.g. 102012345"
                                                 style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #ddd', fontSize: '0.78rem' }}
                                             />
@@ -4243,7 +4243,7 @@ ${instruction}`;
                                             <input
                                                 type="password"
                                                 value={config?.qqbot_app_secret || ''}
-                                                onChange={(e) => saveRemoteConfigField('qqbot_app_secret', e.target.value)}
+                                                onChange={(e) => saveRemoteConfigField({ qqbot_app_secret: e.target.value } as any)}
                                                 placeholder="••••••••"
                                                 style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #ddd', fontSize: '0.78rem' }}
                                             />

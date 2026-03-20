@@ -71,3 +71,42 @@ type PurchaseRecord struct {
 	Status           string    `json:"status"` // active, refunded
 	CreatedAt        time.Time `json:"created_at"`
 }
+
+// ── Rating ───────────────────────────────────────────────────────────────
+
+// Rating 记录单个用户对 Skill 的评分（以 email 去重）。
+type Rating struct {
+	SkillID   string    `json:"skill_id"`
+	Email     string    `json:"email"`
+	Score     int       `json:"score"` // -2 ~ +2
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// RatingStats 是 Skill 的评分统计。
+type RatingStats struct {
+	SkillID      string  `json:"skill_id"`
+	UniqueRaters int     `json:"unique_raters"`
+	AverageScore float64 `json:"average_score"`
+	TotalScore   int     `json:"total_score"`
+}
+
+// ── Admin Config ─────────────────────────────────────────────────────────
+
+// AdminConfig 存储管理员可配置参数。
+type AdminConfig struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// ── Uploader Tier ────────────────────────────────────────────────────────
+
+// UploaderTier 记录上传者的信誉等级。
+type UploaderTier struct {
+	UserID         string  `json:"user_id"`
+	Tier           int     `json:"tier"` // 1-4
+	PublishedCount int     `json:"published_count"`
+	AvgRating      float64 `json:"avg_rating"`
+	TotalDownloads int     `json:"total_downloads"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}

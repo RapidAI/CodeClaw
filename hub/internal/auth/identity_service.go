@@ -573,15 +573,36 @@ func (s *IdentityService) LookupUserByEmail(ctx context.Context, email string) (
 
 // LookupUserByMobile finds a user by mobile number. It first looks up the
 // enrollment record to get the email, then resolves the user from the users table.
+// It tries exact match first, then with +86 prefix for Chinese numbers.
 func (s *IdentityService) LookupUserByMobile(ctx context.Context, mobile string) (*store.User, error) {
 	mobile = strings.TrimSpace(mobile)
+	mobile = strings.ReplaceAll(mobile, " ", "")
+	mobile = strings.ReplaceAll(mobile, "-", "")
 	if mobile == "" {
 		return nil, fmt.Errorf("mobile is required")
 	}
+
+	// Try exact match first.
 	enrollment, err := s.enrollments.GetByMobile(ctx, mobile)
 	if err != nil {
 		return nil, err
 	}
+
+	// If not found and looks like a bare Chinese number, try with +86 prefix.
+	if enrollment == nil && len(mobile) == 11 && mobile[0] == '1' {
+		enrollment, err = s.enrollments.GetByMobile(ctx, "+86"+mobile)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Also try stripping +86 if the input has it but DB stores bare number.
+	if enrollment == nil && strings.HasPrefix(mobile, "+86") && len(mobile) == 14 {
+		enrollment, err = s.enrollments.GetByMobile(ctx, mobile[3:])
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if enrollment == nil {
 		return nil, nil
 	}

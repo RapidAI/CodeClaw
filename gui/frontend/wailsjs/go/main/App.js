@@ -842,3 +842,12 @@ export function ImportAgentSkillDir(arg1) {
 export function ExportAgentSkillDir(arg1, arg2) {
   return window['go']['main']['App']['ExportAgentSkillDir'](arg1, arg2);
 }
+
+// QQ Bot gateway bindings
+export function GetQQBotStatus() {
+  return window['go']['main']['App']['GetQQBotStatus']();
+}
+
+export function RestartQQBot() {
+  return window['go']['main']['App']['RestartQQBot']();
+}

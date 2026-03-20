@@ -75,15 +75,19 @@ const (
 )
 
 type conversationEntry struct {
-	Role       string      `json:"role"`
-	Content    interface{} `json:"content"`
-	ToolCalls  interface{} `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Role             string      `json:"role"`
+	Content          interface{} `json:"content"`
+	ReasoningContent string      `json:"reasoning_content,omitempty"`
+	ToolCalls        interface{} `json:"tool_calls,omitempty"`
+	ToolCallID       string      `json:"tool_call_id,omitempty"`
 }
 
 // toMessage converts a conversationEntry to a map suitable for the LLM API.
 func (e conversationEntry) toMessage() interface{} {
 	m := map[string]interface{}{"role": e.Role, "content": e.Content}
+	if e.ReasoningContent != "" {
+		m["reasoning_content"] = e.ReasoningContent
+	}
 	if e.ToolCalls != nil {
 		m["tool_calls"] = e.ToolCalls
 	}
@@ -492,17 +496,28 @@ func truncateAssistantContent(msgs []interface{}, budget int) []interface{} {
 		if role != "assistant" {
 			continue
 		}
-		content, _ := mm["content"].(string)
+		cp := make(map[string]interface{}, len(mm))
+		for k, v := range mm {
+			cp[k] = v
+		}
+		// Truncate reasoning_content first (it can be very long with
+		// thinking-mode models like Kimi) since it's less critical than
+		// the actual content for subsequent reasoning.
+		if rc, _ := cp["reasoning_content"].(string); len(rc) > 200 {
+			runes := []rune(rc)
+			if len(runes) > 200 {
+				cp["reasoning_content"] = string(runes[:100]) + "\n…(reasoning truncated)…\n" + string(runes[len(runes)-50:])
+			}
+		}
+		content, _ := cp["content"].(string)
 		if len(content) <= 200 {
+			result[i] = cp
 			continue
 		}
 		runes := []rune(content)
 		if len(runes) <= 200 {
+			result[i] = cp
 			continue
-		}
-		cp := make(map[string]interface{}, len(mm))
-		for k, v := range mm {
-			cp[k] = v
 		}
 		cp["content"] = string(runes[:100]) + "\n…(截断)…\n" + string(runes[len(runes)-50:])
 		result[i] = cp
@@ -976,14 +991,13 @@ func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProg
 		loopCtx.HTTPClient = httpClient
 
 		var systemPrompt string
+		history := h.memory.load(msg.UserID)
+		history = h.compactHistory(history, httpClient)
 		if h.memoryStore != nil {
-			systemPrompt = h.buildSystemPromptWithMemory(msg.Text)
+			systemPrompt = h.buildSystemPromptWithMemory(msg.Text, len(history) == 0)
 		} else {
 			systemPrompt = h.buildSystemPrompt()
 		}
-
-		history := h.memory.load(msg.UserID)
-		history = h.compactHistory(history, httpClient)
 
 		result := h.runAgentLoop(loopCtx, msg.UserID, systemPrompt, history, msg.Text, onProgress, msg.MinIterations, msg.Platform)
 
@@ -1001,7 +1015,7 @@ func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProg
 	history = h.compactHistory(history, httpClient)
 	var systemPrompt string
 	if h.memoryStore != nil {
-		systemPrompt = h.buildSystemPromptWithMemory(msg.Text)
+		systemPrompt = h.buildSystemPromptWithMemory(msg.Text, len(history) == 0)
 	} else {
 		systemPrompt = h.buildSystemPrompt()
 	}
@@ -1146,9 +1160,10 @@ type llmChoice struct {
 }
 
 type llmMessage struct {
-	Role      string        `json:"role"`
-	Content   string        `json:"content"`
-	ToolCalls []llmToolCall `json:"tool_calls,omitempty"`
+	Role             string        `json:"role"`
+	Content          string        `json:"content"`
+	ReasoningContent string        `json:"reasoning_content,omitempty"`
+	ToolCalls        []llmToolCall `json:"tool_calls,omitempty"`
 }
 
 type llmToolCall struct {
@@ -1673,12 +1688,15 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 			"role":    "assistant",
 			"content": choice.Message.Content,
 		}
+		if choice.Message.ReasoningContent != "" {
+			assistantMsg["reasoning_content"] = choice.Message.ReasoningContent
+		}
 		if len(choice.Message.ToolCalls) > 0 {
 			assistantMsg["tool_calls"] = choice.Message.ToolCalls
 		}
 		conversation = append(conversation, assistantMsg)
 
-		historyEntry := conversationEntry{Role: "assistant", Content: choice.Message.Content}
+		historyEntry := conversationEntry{Role: "assistant", Content: choice.Message.Content, ReasoningContent: choice.Message.ReasoningContent}
 		if len(choice.Message.ToolCalls) > 0 {
 			historyEntry.ToolCalls = choice.Message.ToolCalls
 		}
@@ -1857,12 +1875,15 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 				"role":    "assistant",
 				"content": bc.Message.Content,
 			}
+			if bc.Message.ReasoningContent != "" {
+				assistantMsg["reasoning_content"] = bc.Message.ReasoningContent
+			}
 			if len(bc.Message.ToolCalls) > 0 {
 				assistantMsg["tool_calls"] = bc.Message.ToolCalls
 			}
 			conversation = append(conversation, assistantMsg)
 			history = append(history, conversationEntry{
-				Role: "assistant", Content: bc.Message.Content, ToolCalls: bc.Message.ToolCalls,
+				Role: "assistant", Content: bc.Message.Content, ReasoningContent: bc.Message.ReasoningContent, ToolCalls: bc.Message.ToolCalls,
 			})
 
 			// Execute any tool calls from the bonus round.
@@ -2173,86 +2194,56 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 	b.WriteString("- 用户表达退出意图时，提醒发送 /exit\n")
 	b.WriteString("\n请用中文回复，关键技术术语保留英文。回复要简洁实用。")
 
-	// Inject long-term memory section if memoryStore is available.
-	h.appendMemorySection(&b, "")
+	// Inject lightweight memory section: user_fact summary + tool hint.
+	h.appendMemorySection(&b, false)
 
 	return b.String()
 }
 
-// buildSystemPromptWithMemory builds the system prompt with memory recall
-// tailored to the user's current message for better relevance.
-func (h *IMMessageHandler) buildSystemPromptWithMemory(userMessage string) string {
-	var b strings.Builder
+// buildSystemPromptWithMemory builds the system prompt with the lightweight
+// memory section (user_fact summary + dynamic recall hint). The isFirstTurn
+// flag controls whether the full memory management guide is included.
+func (h *IMMessageHandler) buildSystemPromptWithMemory(userMessage string, isFirstTurn bool) string {
+	// Build the base prompt without memory (strip the default non-first-turn section).
 	base := h.buildSystemPrompt()
-	b.WriteString(base)
-
-	// If buildSystemPrompt already appended a generic memory section (with
-	// empty query), we don't double-append. Instead, we replace it by
-	// rebuilding without the generic section. However, since
-	// buildSystemPrompt always calls appendMemorySection(""), we need to
-	// strip that and re-append with the real user message.
-	//
-	// Simpler approach: buildSystemPrompt already appended with empty query.
-	// If userMessage is non-empty, we do a targeted recall and append an
-	// additional "## 相关记忆补充" section with any extra entries the
-	// targeted recall found that the generic one missed.
-	//
-	// Actually, the cleanest approach: just return the base prompt as-is
-	// when userMessage is empty, and when non-empty, strip the generic
-	// memory section and re-append with the targeted query.
-
-	// For simplicity and correctness: the base prompt already has the
-	// generic memory section. When we have a real user message, we rebuild
-	// the memory section with better relevance.
-	if userMessage != "" && h.memoryStore != nil {
-		// Find and strip the existing memory section appended by buildSystemPrompt.
-		result := b.String()
-		if idx := strings.Index(result, "\n## 用户记忆\n"); idx >= 0 {
-			result = result[:idx]
-		}
-		// Re-build with targeted recall.
-		var b2 strings.Builder
-		b2.WriteString(result)
-		h.appendMemorySection(&b2, userMessage)
-		return b2.String()
+	if !isFirstTurn {
+		return base
 	}
-
+	// First turn: strip the default memory section and re-append with guide.
+	if idx := strings.Index(base, "\n## 用户记忆\n"); idx >= 0 {
+		base = base[:idx]
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	h.appendMemorySection(&b, true)
 	return b.String()
 }
 
-// appendMemorySection appends the "## 用户记忆" section to the builder using
-// recalled memories. Pass an empty userMessage for a generic recall, or the
-// actual user message for relevance-ranked recall.
-func (h *IMMessageHandler) appendMemorySection(b *strings.Builder, userMessage string) {
+// appendMemorySection appends a lightweight "## 用户记忆" section containing:
+//   - A compressed one-line summary of user_fact entries (always present)
+//   - A hint that other memories can be recalled via memory(action: recall)
+//   - Full memory management guide only on first turn (isFirstTurn=true)
+//
+// Non-user_fact memories are NO LONGER injected here. The LLM retrieves
+// them on demand via the memory(action: recall) tool.
+func (h *IMMessageHandler) appendMemorySection(b *strings.Builder, isFirstTurn bool) {
 	if h.memoryStore == nil {
 		return
 	}
 
-	memories := h.memoryStore.Recall(userMessage)
-	if len(memories) == 0 {
-		return
-	}
+	summary := h.memoryStore.UserFactSummary(400)
 
 	b.WriteString("\n## 用户记忆\n")
-	b.WriteString("以下是关于用户的长期记忆，请在回复中参考这些信息：\n")
-	for _, m := range memories {
-		b.WriteString(fmt.Sprintf("- [%s] %s\n", string(m.Category), m.Content))
+	if summary != "" {
+		b.WriteString(fmt.Sprintf("用户信息: %s\n", summary))
 	}
+	b.WriteString("其他记忆（偏好、项目知识、指令等）可通过 memory(action: recall, query: \"检索关键词\") 按需召回。\n")
 
-	// Touch access counts for recalled memories.
-	ids := make([]string, len(memories))
-	for i, m := range memories {
-		ids[i] = m.ID
+	if isFirstTurn {
+		b.WriteString("\n## 记忆管理指引\n")
+		b.WriteString("识别到有价值的信息时，主动调用 memory(action: save) 保存：\n")
+		b.WriteString("- 用户信息 → user_fact | 偏好 → preference | 项目知识 → project_knowledge | 指令 → instruction\n")
 	}
-	h.memoryStore.TouchAccess(ids)
-
-	b.WriteString("\n## 记忆管理指引\n")
-	b.WriteString("当你在对话中识别到以下信息时，请主动调用 memory 工具（action: save）保存：\n")
-	b.WriteString("- 用户的个人信息（姓名、称呼、角色等）→ category: user_fact\n")
-	b.WriteString("- 用户的偏好（喜欢的工具、编码风格、语言偏好等）→ category: preference\n")
-	b.WriteString("- 项目相关知识（架构决策、技术栈、约定等）→ category: project_knowledge\n")
-	b.WriteString("- 用户的指令或规则（\"以后都用XX\"、\"不要做YY\"等）→ category: instruction\n")
-	b.WriteString("无需每次都询问用户是否保存，识别到有价值的信息时直接保存即可。\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -2380,11 +2371,12 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 				"target": map[string]string{"type": "string", "description": "要打开的文件路径、目录路径或 URL（如 C:\\Users\\test\\doc.pdf、https://example.com、mailto:test@example.com）"},
 			}, []string{"target"}),
 		// --- 长期记忆工具（合并） ---
-		toolDef("memory", "管理长期记忆（action: save/list/delete）",
+		toolDef("memory", "管理长期记忆（action: recall/save/list/delete）。recall 按需检索相关记忆，save 保存新记忆。",
 			map[string]interface{}{
-				"action":   map[string]string{"type": "string", "description": "操作: save(保存)/list(列出或搜索)/delete(删除)"},
+				"action":   map[string]string{"type": "string", "description": "操作: recall(按需召回)/save(保存)/list(列出或搜索)/delete(删除)"},
+				"query":    map[string]string{"type": "string", "description": "检索关键词（recall 时必填，由你提炼的精准检索词，非用户原始消息）"},
 				"content":  map[string]string{"type": "string", "description": "记忆内容（save 时必填）"},
-				"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction（save 时必填，list 时可选过滤）"},
+				"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction（save 时必填，recall/list 时可选过滤）"},
 				"tags": map[string]interface{}{
 					"type":        "array",
 					"description": "关联标签（save 时可选）",
@@ -3823,7 +3815,7 @@ func (h *IMMessageHandler) toolOpen(args map[string]interface{}) string {
 // Memory Tools
 // ---------------------------------------------------------------------------
 
-// toolMemory merges save/list/delete memory operations into a single tool.
+// toolMemory merges save/list/delete/recall memory operations into a single tool.
 func (h *IMMessageHandler) toolMemory(args map[string]interface{}) string {
 	if h.memoryStore == nil {
 		return "长期记忆未初始化"
@@ -3831,6 +3823,34 @@ func (h *IMMessageHandler) toolMemory(args map[string]interface{}) string {
 
 	action := stringVal(args, "action")
 	switch action {
+	case "recall":
+		query := stringVal(args, "query")
+		if query == "" {
+			return "缺少 query 参数"
+		}
+		category := MemoryCategory(stringVal(args, "category"))
+		// Resolve current project path for affinity boosting.
+		var projectPath string
+		if h.contextResolver != nil {
+			projectPath, _ = h.contextResolver.ResolveProject()
+		}
+		entries := h.memoryStore.RecallDynamic(query, category, projectPath)
+		if len(entries) == 0 {
+			return "没有找到相关记忆。"
+		}
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("召回 %d 条相关记忆:\n", len(entries)))
+		for _, e := range entries {
+			b.WriteString(fmt.Sprintf("- [%s] %s\n", string(e.Category), e.Content))
+		}
+		// Touch access counts.
+		ids := make([]string, len(entries))
+		for i, e := range entries {
+			ids[i] = e.ID
+		}
+		h.memoryStore.TouchAccess(ids)
+		return b.String()
+
 	case "save":
 		content := stringVal(args, "content")
 		if content == "" {
@@ -3893,7 +3913,7 @@ func (h *IMMessageHandler) toolMemory(args map[string]interface{}) string {
 		return fmt.Sprintf("已删除记忆: %s", id)
 
 	default:
-		return "action 参数无效，可选值: save, list, delete"
+		return "action 参数无效，可选值: recall, save, list, delete"
 	}
 }
 

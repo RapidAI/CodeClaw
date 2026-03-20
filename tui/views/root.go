@@ -17,11 +17,12 @@ const (
 	TabAudit
 	TabClawNet
 	TabConfig
+	TabChat
 	TabCount
 )
 
 // TabNames 各 Tab 的显示名称。
-var TabNames = [TabCount]string{"会话", "工具", "定时", "记忆", "审计", "ClawNet", "配置"}
+var TabNames = [TabCount]string{"会话", "工具", "定时", "记忆", "审计", "ClawNet", "配置", "助手"}
 
 // RootModel 是 TUI 的根 Model，管理 Tab 切换和子视图。
 type RootModel struct {
@@ -39,6 +40,7 @@ type RootModel struct {
 	Audit         AuditModel
 	ClawNet       ClawNetModel
 	Config        ConfigModel
+	Chat          ChatModel
 	StatusBar     StatusBarModel
 	Help          HelpModel
 }
@@ -54,6 +56,7 @@ func NewRootModel() RootModel {
 		Audit:     NewAuditModel(),
 		ClawNet:   NewClawNetModel(),
 		Config:    NewConfigModel(),
+		Chat:      NewChatModel(),
 		StatusBar: NewStatusBarModel(),
 		Help:      NewHelpModel(),
 	}
@@ -140,6 +143,9 @@ func (m RootModel) Update(msg tea.Msg) (RootModel, tea.Cmd) {
 		if m.tab == TabAudit && m.Audit.IsFiltering() {
 			break
 		}
+		if m.tab == TabChat && m.Chat.IsInputFocused() {
+			break
+		}
 		switch msg.String() {
 		case "?":
 			m.Help.Toggle()
@@ -170,6 +176,8 @@ func (m RootModel) Update(msg tea.Msg) (RootModel, tea.Cmd) {
 		m.ClawNet, cmd = m.ClawNet.Update(msg)
 	case TabConfig:
 		m.Config, cmd = m.Config.Update(msg)
+	case TabChat:
+		m.Chat, cmd = m.Chat.Update(msg)
 	}
 
 	// 状态栏始终更新
@@ -219,6 +227,8 @@ func (m RootModel) View() string {
 			content = m.ClawNet.View()
 		case TabConfig:
 			content = m.Config.View()
+		case TabChat:
+			content = m.Chat.View()
 		}
 	}
 

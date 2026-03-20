@@ -86,6 +86,30 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_sm_purchase_buyer_skill ON sm_purchase_records(buyer_id, skill_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_sm_purchase_seller ON sm_purchase_records(seller_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_sm_purchase_pending_key ON sm_purchase_records(key_status) WHERE key_status = 'pending_key';`,
+		// ── Ratings ──
+		`CREATE TABLE IF NOT EXISTS sm_ratings (
+			skill_id   TEXT NOT NULL,
+			email      TEXT NOT NULL,
+			score      INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (skill_id, email)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_sm_ratings_skill ON sm_ratings(skill_id);`,
+		// ── Admin Config ──
+		`CREATE TABLE IF NOT EXISTS sm_admin_config (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL DEFAULT ''
+		);`,
+		// ── Uploader Tiers ──
+		`CREATE TABLE IF NOT EXISTS sm_uploader_tiers (
+			user_id          TEXT PRIMARY KEY,
+			tier             INTEGER NOT NULL DEFAULT 1,
+			published_count  INTEGER NOT NULL DEFAULT 0,
+			avg_rating       REAL NOT NULL DEFAULT 0,
+			total_downloads  INTEGER NOT NULL DEFAULT 0,
+			updated_at       TEXT NOT NULL
+		);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -96,6 +120,12 @@ func (s *Store) migrate() error {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────
+
+// DB 返回写数据库连接。
+func (s *Store) DB() *sql.DB { return s.db }
+
+// ReadDB 返回读数据库连接。
+func (s *Store) ReadDB() *sql.DB { return s.readDB }
 
 func parseTime(v string) time.Time {
 	if v == "" {

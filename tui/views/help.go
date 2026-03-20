@@ -96,6 +96,13 @@ func (m HelpModel) View() string {
 			{"g/G", "首/尾"},
 			{"Esc", "返回列表"},
 		}},
+		{"AI 助手", []struct{ key, desc string }{
+			{"i", "开始输入"},
+			{"Enter", "发送消息"},
+			{"Esc", "退出输入"},
+			{"c", "清除历史"},
+			{"↑↓", "滚动消息"},
+		}},
 	}
 
 	for _, sec := range sections {

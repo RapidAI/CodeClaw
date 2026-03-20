@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -347,9 +348,100 @@ func (s *MemoryStore) TouchAccess(ids []string) {
 	}
 }
 
-// relevanceScore counts how many words from the query appear in the entry's
-// tags or content. Used by Recall to rank non-user_fact entries.
-func relevanceScore(e MemoryEntry, words []string) int {
+// UserFactSummary returns a compressed one-line summary of all user_fact
+// entries. The summary is capped at maxRunes runes to keep system prompt
+// overhead predictable (~200 tokens). Original entries are NOT modified.
+func (s *MemoryStore) UserFactSummary(maxRunes int) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if maxRunes <= 0 {
+		maxRunes = 400 // ~200 tokens for CJK
+	}
+
+	var parts []string
+	for _, e := range s.entries {
+		if e.Category == MemCategoryUserFact {
+			parts = append(parts, strings.TrimSpace(e.Content))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+
+	summary := strings.Join(parts, " | ")
+	runes := []rune(summary)
+	if len(runes) > maxRunes {
+		summary = string(runes[:maxRunes]) + "…"
+	}
+	return summary
+}
+
+// ---------------------------------------------------------------------------
+// Memory Stream scoring (inspired by Stanford "Generative Agents")
+//
+//   Score = w1·Recency + w2·Importance + w3·Relevance
+//
+// Recency:    exponential decay based on hours since last update.
+// Importance: category weight + log(1 + accessCount).
+// Relevance:  keyword match count (content + tags) with project affinity boost.
+// ---------------------------------------------------------------------------
+
+const (
+	msDecay       = 0.005 // recency decay rate per hour
+	msWRecency    = 1.0
+	msWImportance = 1.0
+	msWRelevance  = 1.0
+)
+
+// categoryImportanceWeight returns a base importance weight for each category.
+// Higher means the category is inherently more important.
+func categoryImportanceWeight(c MemoryCategory) float64 {
+	switch c {
+	case MemCategoryInstruction:
+		return 3.0 // explicit user rules — highest
+	case MemCategoryPreference:
+		return 2.0
+	case MemCategoryProjectKnowledge:
+		return 2.0
+	case MemCategorySessionCheckpoint:
+		return 1.5
+	case MemCategoryConversationSummary:
+		return 1.0
+	default:
+		return 1.0
+	}
+}
+
+// memoryStreamScore computes the three-dimensional score for a memory entry.
+func memoryStreamScore(e MemoryEntry, words []string, projectLower string, now time.Time) float64 {
+	// --- Recency ---
+	hours := now.Sub(e.UpdatedAt).Hours()
+	if hours < 0 {
+		hours = 0
+	}
+	recency := math.Exp(-msDecay * hours)
+
+	// --- Importance ---
+	importance := categoryImportanceWeight(e.Category) + math.Log1p(float64(e.AccessCount))
+
+	// --- Relevance ---
+	relevance := float64(keywordMatchCount(e, words))
+	if projectLower != "" {
+		for _, tag := range e.Tags {
+			if strings.ToLower(tag) == projectLower {
+				relevance += 3.0
+				break
+			}
+		}
+	}
+
+	return msWRecency*recency + msWImportance*importance + msWRelevance*relevance
+}
+
+// keywordMatchCount counts how many query words appear in the entry's
+// content or tags. Used as the Relevance component.
+func keywordMatchCount(e MemoryEntry, words []string) int {
 	score := 0
 	contentLower := strings.ToLower(e.Content)
 	tagsLower := make([]string, len(e.Tags))
@@ -366,11 +458,69 @@ func relevanceScore(e MemoryEntry, words []string) int {
 		for _, tag := range tagsLower {
 			if strings.Contains(tag, w) {
 				score++
-				break // count each word once per tag match
+				break
 			}
 		}
 	}
 	return score
+}
+
+// RecallDynamic retrieves memory entries matching the given query, excluding
+// user_fact entries (which are injected separately as a compressed summary).
+// It uses the Memory Stream scoring algorithm (Recency + Importance + Relevance)
+// and supports optional category filtering with a token budget.
+func (s *MemoryStore) RecallDynamic(query string, category MemoryCategory, projectPath string) []MemoryEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	const maxEntries = 15
+	const maxTokens = 1500
+
+	words := strings.Fields(strings.ToLower(query))
+	projectLower := strings.ToLower(projectPath)
+	now := time.Now()
+
+	type scored struct {
+		entry MemoryEntry
+		score float64
+	}
+	var candidates []scored
+
+	for _, e := range s.entries {
+		if e.Category == MemCategoryUserFact {
+			continue
+		}
+		if category != "" && e.Category != category {
+			continue
+		}
+		sc := memoryStreamScore(e, words, projectLower, now)
+		candidates = append(candidates, scored{entry: e, score: sc})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	var result []MemoryEntry
+	tokenBudget := maxTokens
+	for _, sc := range candidates {
+		if len(result) >= maxEntries {
+			break
+		}
+		tokens := len(sc.entry.Content) / 4
+		if tokens > tokenBudget {
+			continue
+		}
+		tokenBudget -= tokens
+		result = append(result, sc.entry)
+	}
+	return result
+}
+
+// relevanceScore is kept for backward compatibility with RecallForProject.
+// It counts how many words from the query appear in the entry's content/tags.
+func relevanceScore(e MemoryEntry, words []string) int {
+	return keywordMatchCount(e, words)
 }
 
 // evictLRU removes entries that exceed maxItems. It evicts entries with the

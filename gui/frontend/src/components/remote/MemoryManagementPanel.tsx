@@ -377,40 +377,50 @@ function TimeMachineTab({ t, isZh, onDataChanged }: TimeMachineProps) {
         try {
             const next = !autoEnabled;
             await SetAutoCompress(next);
-            setAutoEnabled(next);
-            if (next) {
-                clearTimeout(autoRefreshTimer.current);
-                autoRefreshTimer.current = setTimeout(async () => { await loadBackups(); await loadStatus(); onDataChanged(); }, 2000);
-            }
-        } catch (e) { setError(String(e)); }
-        setToggling(false);
+            setTimeout(() => {
+                setAutoEnabled(next);
+                setToggling(false);
+                if (next) {
+                    clearTimeout(autoRefreshTimer.current);
+                    autoRefreshTimer.current = setTimeout(async () => { await loadBackups(); await loadStatus(); onDataChanged(); }, 2000);
+                }
+            }, 0);
+        } catch (e) { setTimeout(() => { setError(String(e)); setToggling(false); }, 0); }
     };
 
     const handleCompress = async () => {
         setCompressing(true); setError(""); setCompressResult(null);
         try {
             const result = await CompressMemories();
-            setCompressResult(result as CompressResult);
-            await loadBackups();
-            onDataChanged();
-        } catch (e) { setError(String(e)); }
-        setCompressing(false);
+            // Wails Go→JS bridge may resolve outside React's scheduling batch,
+            // so wrap state updates in setTimeout to guarantee a re-render.
+            setTimeout(() => {
+                setCompressResult(result as CompressResult);
+                setCompressing(false);
+                loadBackups();
+                onDataChanged();
+            }, 0);
+        } catch (e) {
+            setTimeout(() => { setError(String(e)); setCompressing(false); }, 0);
+        }
     };
 
     const handleRestore = async (name: string) => {
         setError("");
         try {
             await RestoreMemoryBackup(name);
-            setRestoreTarget(null);
-            await loadBackups();
-            onDataChanged();
-        } catch (e) { setError(String(e)); }
+            setTimeout(() => {
+                setRestoreTarget(null);
+                loadBackups();
+                onDataChanged();
+            }, 0);
+        } catch (e) { setTimeout(() => setError(String(e)), 0); }
     };
 
     const handleDeleteBackup = async (name: string) => {
         setError("");
-        try { await DeleteMemoryBackup(name); setDeleteTarget(null); await loadBackups(); }
-        catch (e) { setError(String(e)); }
+        try { await DeleteMemoryBackup(name); setTimeout(() => { setDeleteTarget(null); loadBackups(); }, 0); }
+        catch (e) { setTimeout(() => setError(String(e)), 0); }
     };
 
     return (

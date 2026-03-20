@@ -372,3 +372,8 @@ export function ContinueBackgroundLoop(arg1:string, arg2:number):Promise<void>;
 export function ImportAgentSkillDir(arg1:string):Promise<string>;
 
 export function ExportAgentSkillDir(arg1:string, arg2:string):Promise<void>;
+
+// QQ Bot gateway bindings
+export function GetQQBotStatus():Promise<string>;
+
+export function RestartQQBot():Promise<string>;

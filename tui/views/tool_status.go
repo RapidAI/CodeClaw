@@ -37,6 +37,9 @@ func (m *ToolStatusModel) SetTools(tools []ToolInfo) {
 // Init 实现 tea.Model。
 func (m ToolStatusModel) Init() tea.Cmd { return nil }
 
+// ToolRefreshMsg 请求刷新工具状态。
+type ToolRefreshMsg struct{}
+
 // Update 处理键盘事件。
 func (m ToolStatusModel) Update(msg tea.Msg) (ToolStatusModel, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -50,6 +53,8 @@ func (m ToolStatusModel) Update(msg tea.Msg) (ToolStatusModel, tea.Cmd) {
 			if m.cursor < len(m.tools)-1 {
 				m.cursor++
 			}
+		case "r":
+			return m, func() tea.Msg { return ToolRefreshMsg{} }
 		}
 	}
 	return m, nil

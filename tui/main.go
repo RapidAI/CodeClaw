@@ -54,6 +54,16 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(exitCodeForError(err))
 		}
+	case "llm":
+		if err := commands.RunLLM(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(exitCodeForError(err))
+		}
+	case "system":
+		if err := commands.RunSystem(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(exitCodeForError(err))
+		}
 	case "--version", "-v":
 		fmt.Printf("maclaw-tui %s\n", version)
 	case "--help", "-h":
@@ -86,8 +96,10 @@ Commands:
   audit         审计日志查询（list）
   policy        安全策略查看（list）
   clawnet       ClawNet P2P 网络（status/peers/tasks/credits）
-  tool          工具管理（recommend）
-  skill         技能管理（list）
+  tool          工具管理（recommend/status）
+  skill         技能管理（list/add/delete/backup/restore/import/export）
+  llm           LLM 管理（test/ping/providers/status/set-provider）
+  system        系统信息（info/python-envs）
 
 Flags:
   --no-tui      批处理模式（无交互 UI）

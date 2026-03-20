@@ -282,12 +282,13 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 		func(args map[string]interface{}) string { return h.toolOpen(args) })
 
 	// --- Long-term memory (unified) ---
-	reg("memory", "管理长期记忆（action: save/list/delete）",
-		ToolCategoryBuiltin, []string{"memory", "save", "remember", "list", "search", "delete"},
+	reg("memory", "管理长期记忆（action: recall/save/list/delete）。recall 按需检索相关记忆，save 保存新记忆。",
+		ToolCategoryBuiltin, []string{"memory", "save", "remember", "list", "search", "delete", "recall"},
 		map[string]interface{}{
-			"action":   map[string]string{"type": "string", "description": "操作: save(保存)/list(列出或搜索)/delete(删除)"},
+			"action":   map[string]string{"type": "string", "description": "操作: recall(按需召回)/save(保存)/list(列出或搜索)/delete(删除)"},
+			"query":    map[string]string{"type": "string", "description": "检索关键词（recall 时必填，由你提炼的精准检索词，非用户原始消息）"},
 			"content":  map[string]string{"type": "string", "description": "记忆内容（save 时必填）"},
-			"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction（save 时必填，list 时可选过滤）"},
+			"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction（save 时必填，recall/list 时可选过滤）"},
 			"tags": map[string]interface{}{
 				"type":        "array",
 				"description": "关联标签（save 时可选）",

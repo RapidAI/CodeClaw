@@ -1,0 +1,417 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: MaClaw
+  GO_VERSION: '1.25.0'
+  NODE_VERSION: '20'
+
+jobs:
+  # ============================================================
+  # Windows: GUI (amd64/arm64) + TUI + maclaw-tool + NSIS installer
+  # ============================================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      - name: Extract version from wails.json
+        shell: pwsh
+        run: |
+          $cfg = Get-Content wails.json -Raw | ConvertFrom-Json
+          $version = $cfg.info.productVersion
+          echo "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Build frontend
+        shell: pwsh
+        run: |
+          cd gui/frontend
+          npm ci --cache ./.npm_cache
+          npm run build
+
+      - name: Install goversioninfo
+        shell: pwsh
+        run: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+
+      - name: Generate Windows resources & build GUI
+        shell: pwsh
+        run: |
+          $cfg = Get-Content wails.json -Raw | ConvertFrom-Json
+          # Prepare manifest
+          $manifest = Get-Content build/windows/wails.exe.manifest -Raw
+          $manifest = $manifest.Replace('{{.Name}}', $cfg.name).Replace('{{.Info.ProductVersion}}', $env:VERSION)
+          [System.IO.File]::WriteAllText("build/windows/wails.exe.manifest.tmp", $manifest, [System.Text.UTF8Encoding]::new($false))
+          # Prepare versioninfo.json
+          $parts = $env:VERSION.Split('.')
+          $versionInfo = @{
+            FixedFileInfo = @{
+              FileVersion    = @{ Major=[int]$parts[0]; Minor=[int]$parts[1]; Patch=[int]$parts[2]; Build=[int]$parts[3] }
+              ProductVersion = @{ Major=[int]$parts[0]; Minor=[int]$parts[1]; Patch=[int]$parts[2]; Build=[int]$parts[3] }
+            }
+            StringFileInfo = @{
+              CompanyName     = $cfg.info.companyName
+              FileDescription = $cfg.info.productName
+              FileVersion     = $env:VERSION
+              ProductName     = $cfg.info.productName
+              ProductVersion  = $env:VERSION
+              LegalCopyright  = $cfg.info.copyright
+            }
+            VarFileInfo = @{ Translation = @{ LangID='0409'; CharsetID='04B0' } }
+          } | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText("build/windows/versioninfo.json.tmp", $versionInfo, [System.Text.UTF8Encoding]::new($false))
+
+          $goversioninfo = Join-Path $env:GOPATH "bin/goversioninfo.exe"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          # --- amd64 ---
+          & $goversioninfo -64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest.tmp -o gui/resource_windows_amd64.syso build/windows/versioninfo.json.tmp
+          $env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+          go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "dist/${env:APP_NAME}_amd64.exe" ./gui/
+          Remove-Item gui/resource_windows_amd64.syso
+
+          # --- arm64 ---
+          & $goversioninfo -64 -arm -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest.tmp -o gui/resource_windows_arm64.syso build/windows/versioninfo.json.tmp
+          $env:GOARCH='arm64'
+          go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "dist/${env:APP_NAME}_arm64.exe" ./gui/
+          Remove-Item gui/resource_windows_arm64.syso
+
+          Remove-Item build/windows/wails.exe.manifest.tmp, build/windows/versioninfo.json.tmp
+
+      - name: Build TUI & maclaw-tool
+        shell: pwsh
+        run: |
+          $ldflags = "-s -w -X main.version=$env:VERSION"
+          foreach ($arch in @('amd64','arm64')) {
+            $env:GOOS='windows'; $env:GOARCH=$arch; $env:CGO_ENABLED='0'
+            go build -ldflags $ldflags -o "dist/maclaw-tui_${arch}.exe" ./tui/
+            go build -ldflags $ldflags -o "dist/maclaw-tool_${arch}.exe" ./cmd/maclaw-tool/
+          }
+
+      - name: Create NSIS installer
+        shell: pwsh
+        run: |
+          $cfg = Get-Content wails.json -Raw | ConvertFrom-Json
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          $root = (Get-Location).Path
+          & $nsis /DINFO_PROJECTNAME="$env:APP_NAME" `
+                  /DPRODUCT_EXECUTABLE="${env:APP_NAME}.exe" `
+                  /DINFO_PRODUCTNAME="$($cfg.info.productName)" `
+                  /DINFO_COMPANYNAME="$($cfg.info.companyName)" `
+                  /DINFO_COPYRIGHT="$($cfg.info.copyright)" `
+                  /DINFO_PRODUCTVERSION="$env:VERSION" `
+                  /DARG_WAILS_AMD64_BINARY="$root\dist\${env:APP_NAME}_amd64.exe" `
+                  /DARG_WAILS_ARM64_BINARY="$root\dist\${env:APP_NAME}_arm64.exe" `
+                  build/windows/installer/multiarch.nsi
+
+      - name: Create portable zip
+        shell: pwsh
+        run: |
+          Copy-Item "dist/${env:APP_NAME}_amd64.exe" "dist/${env:APP_NAME}.exe"
+          Copy-Item "dist/maclaw-tui_amd64.exe" "dist/maclaw-tui.exe"
+          Copy-Item "dist/maclaw-tool_amd64.exe" "dist/maclaw-tool.exe"
+          Compress-Archive -Path "dist/${env:APP_NAME}.exe","dist/maclaw-tui.exe","dist/maclaw-tool.exe" `
+            -DestinationPath "dist/${env:APP_NAME}-Windows-Portable.zip" -Force
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            dist/${{ env.APP_NAME }}-Setup.exe
+            dist/${{ env.APP_NAME }}-Windows-Portable.zip
+            dist/${{ env.APP_NAME }}_amd64.exe
+            dist/${{ env.APP_NAME }}_arm64.exe
+            dist/maclaw-tui_amd64.exe
+            dist/maclaw-tui_arm64.exe
+            dist/maclaw-tool_amd64.exe
+            dist/maclaw-tool_arm64.exe
+
+
+  # ============================================================
+  # macOS: GUI universal binary + PKG + TUI/tool (darwin)
+  # ============================================================
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      - name: Extract version from wails.json
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('wails.json'))['info']['productVersion'])")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Build frontend
+        run: |
+          cd gui/frontend
+          npm ci --cache ./.npm_cache
+          npm run build
+
+      - name: Build macOS GUI binaries
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
+        run: |
+          mkdir -p dist build/bin
+          # amd64
+          CGO_ENABLED=1 CGO_LDFLAGS="-weak_framework UniformTypeIdentifiers" \
+            GOOS=darwin GOARCH=amd64 \
+            go build -tags desktop,production -o build/bin/${APP_NAME}_amd64 ./gui/
+          # arm64
+          CGO_ENABLED=1 CGO_LDFLAGS="-weak_framework UniformTypeIdentifiers" \
+            GOOS=darwin GOARCH=arm64 \
+            go build -tags desktop,production -o build/bin/${APP_NAME}_arm64 ./gui/
+
+      - name: Build TUI & maclaw-tool (darwin)
+        run: |
+          LDFLAGS="-s -w -X main.version=${VERSION}"
+          for ARCH in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=darwin GOARCH=$ARCH \
+              go build -ldflags "$LDFLAGS" -o "dist/maclaw-tui_${ARCH}_darwin" ./tui/
+            CGO_ENABLED=0 GOOS=darwin GOARCH=$ARCH \
+              go build -ldflags "$LDFLAGS" -o "dist/maclaw-tool_${ARCH}_darwin" ./cmd/maclaw-tool/
+          done
+
+      - name: Generate .icns
+        run: |
+          if [ -f build/appicon.png ]; then
+            ICONSET=build/appicon.iconset
+            mkdir -p "$ICONSET"
+            for sz in 16 32 64 128 256 512 1024; do
+              sips -z $sz $sz build/appicon.png --out "$ICONSET/icon_${sz}x${sz}.png" > /dev/null
+            done
+            # Retina variants
+            cp "$ICONSET/icon_32x32.png"   "$ICONSET/icon_16x16@2x.png"
+            cp "$ICONSET/icon_64x64.png"   "$ICONSET/icon_32x32@2x.png"
+            cp "$ICONSET/icon_256x256.png" "$ICONSET/icon_128x128@2x.png"
+            cp "$ICONSET/icon_512x512.png" "$ICONSET/icon_256x256@2x.png"
+            cp "$ICONSET/icon_1024x1024.png" "$ICONSET/icon_512x512@2x.png"
+            rm -f "$ICONSET/icon_64x64.png" "$ICONSET/icon_1024x1024.png"
+            iconutil -c icns "$ICONSET" -o build/AppIcon.icns
+            rm -rf "$ICONSET"
+          fi
+
+      - name: Create App Bundles & Universal Binary
+        run: |
+          IDENTIFIER="com.wails.MaClaw"
+          for ARCH in amd64 arm64; do
+            BUNDLE="dist/${APP_NAME}_${ARCH}.app"
+            mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+            cp "build/bin/${APP_NAME}_${ARCH}" "$BUNDLE/Contents/MacOS/${APP_NAME}"
+            chmod +x "$BUNDLE/Contents/MacOS/${APP_NAME}"
+            [ -f build/AppIcon.icns ] && cp build/AppIcon.icns "$BUNDLE/Contents/Resources/"
+            cat > "$BUNDLE/Contents/Info.plist" <<PEOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleName</key><string>${APP_NAME}</string>
+            <key>CFBundleExecutable</key><string>${APP_NAME}</string>
+            <key>CFBundleIdentifier</key><string>${IDENTIFIER}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
+            <key>LSMinimumSystemVersion</key><string>10.15.0</string>
+            <key>NSHighResolutionCapable</key><string>true</string>
+          </dict></plist>
+          PEOF
+            # Strip leading whitespace from plist (heredoc indentation artifact)
+            sed -i '' 's/^[[:space:]]*//' "$BUNDLE/Contents/Info.plist"
+          done
+          # Universal
+          UBUNDLE="dist/${APP_NAME}.app"
+          mkdir -p "$UBUNDLE/Contents/MacOS" "$UBUNDLE/Contents/Resources"
+          lipo -create "build/bin/${APP_NAME}_amd64" "build/bin/${APP_NAME}_arm64" \
+            -output "$UBUNDLE/Contents/MacOS/${APP_NAME}"
+          cp "dist/${APP_NAME}_arm64.app/Contents/Info.plist" "$UBUNDLE/Contents/Info.plist"
+          cp -R "dist/${APP_NAME}_arm64.app/Contents/Resources/" "$UBUNDLE/Contents/Resources/"
+
+      - name: Create PKGs
+        run: |
+          IDENTIFIER="com.wails.MaClaw"
+          for ARCH in amd64 arm64 universal; do
+            if [ "$ARCH" = "universal" ]; then
+              BUNDLE="dist/${APP_NAME}.app"
+              PKG_NAME="${APP_NAME}-Universal.pkg"
+              SCRIPTS_DIR="build/scripts_arm64"
+            else
+              BUNDLE="dist/${APP_NAME}_${ARCH}.app"
+              PKG_NAME="${APP_NAME}-${ARCH}.pkg"
+              [ "$ARCH" = "arm64" ] && SCRIPTS_DIR="build/scripts_arm64" || SCRIPTS_DIR="build/scripts_x64"
+            fi
+            TEMP_ROOT="build/pkg_root_${ARCH}"
+            rm -rf "$TEMP_ROOT"
+            mkdir -p "$TEMP_ROOT/Applications"
+            cp -R "$BUNDLE" "$TEMP_ROOT/Applications/${APP_NAME}.app"
+            chmod +x "$SCRIPTS_DIR/preinstall" "$SCRIPTS_DIR/postinstall"
+            pkgbuild --root "$TEMP_ROOT" --identifier "$IDENTIFIER" --version "$VERSION" \
+              --install-location "/" --scripts "$SCRIPTS_DIR" "dist/${PKG_NAME}"
+            rm -rf "$TEMP_ROOT"
+          done
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: |
+            dist/${{ env.APP_NAME }}-Universal.pkg
+            dist/${{ env.APP_NAME }}-amd64.pkg
+            dist/${{ env.APP_NAME }}-arm64.pkg
+            dist/maclaw-tui_amd64_darwin
+            dist/maclaw-tui_arm64_darwin
+            dist/maclaw-tool_amd64_darwin
+            dist/maclaw-tool_arm64_darwin
+
+
+  # ============================================================
+  # Linux: GUI (amd64, CGO native) + TUI/tool + AppImage
+  # ============================================================
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          # Try 4.0 first (Ubuntu 22.04), fall back to 4.1 (Ubuntu 24.04+)
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev 2>/dev/null \
+            || sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Extract version from wails.json
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('wails.json'))['info']['productVersion'])")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Build frontend
+        run: |
+          cd gui/frontend
+          npm ci --cache ./.npm_cache
+          npm run build
+
+      - name: Build Linux GUI (amd64)
+        run: |
+          mkdir -p dist build/bin
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+            go build -tags desktop,production -o "build/bin/${APP_NAME}_amd64_linux" ./gui/
+
+      - name: Build TUI & maclaw-tool (linux)
+        run: |
+          LDFLAGS="-s -w -X main.version=${VERSION}"
+          for ARCH in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH \
+              go build -ldflags "$LDFLAGS" -o "dist/maclaw-tui_${ARCH}_linux" ./tui/
+            CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH \
+              go build -ldflags "$LDFLAGS" -o "dist/maclaw-tool_${ARCH}_linux" ./cmd/maclaw-tool/
+          done
+
+      - name: Create AppImage (amd64)
+        run: |
+          # Prepare AppDir
+          APP_DIR="build/linux/AppDir_amd64"
+          rm -rf "$APP_DIR"
+          mkdir -p "$APP_DIR/usr/bin"
+          mkdir -p "$APP_DIR/usr/share/icons/hicolor/512x512/apps"
+          cp "build/bin/${APP_NAME}_amd64_linux" "$APP_DIR/usr/bin/maclaw"
+          cp build/appicon.png "$APP_DIR/maclaw.png"
+          cp build/appicon.png "$APP_DIR/.DirIcon"
+
+          # Desktop file (no leading spaces allowed)
+          cat > "$APP_DIR/maclaw.desktop" << 'DEOF'
+          [Desktop Entry]
+          Name=MaClaw
+          Exec=maclaw
+          Icon=maclaw
+          Type=Application
+          Categories=Development;
+          DEOF
+          sed -i 's/^[[:space:]]*//' "$APP_DIR/maclaw.desktop"
+
+          # AppRun (shebang must be at column 0)
+          cat > "$APP_DIR/AppRun" << 'REOF'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          export PATH="${HERE}/usr/bin:${PATH}"
+          exec maclaw "$@"
+          REOF
+          sed -i 's/^[[:space:]]*//' "$APP_DIR/AppRun"
+          chmod +x "$APP_DIR/AppRun"
+
+          # Download appimagetool
+          wget -q -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APP_DIR" \
+            "dist/MaClaw-${VERSION}-x86_64.AppImage"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            dist/MaClaw-*-x86_64.AppImage
+            dist/maclaw-tui_amd64_linux
+            dist/maclaw-tui_arm64_linux
+            dist/maclaw-tool_amd64_linux
+            dist/maclaw-tool_arm64_linux
+
+  # ============================================================
+  # Release: collect all artifacts and create GitHub Release
+  # ============================================================
+  release:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

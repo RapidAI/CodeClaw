@@ -198,6 +198,24 @@ func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryS
 		mux.HandleFunc("POST /api/v1/credits/topup", smHandlers.TopUpCredits)
 		mux.HandleFunc("POST /api/v1/credits/withdraw", smHandlers.WithdrawCredits)
 		mux.HandleFunc("GET /api/v1/crypto/pubkey", smHandlers.GetPublicKey)
+		mux.HandleFunc("GET /api/v1/skillmarket/{id}/download", smHandlers.DownloadSkillMarket)
+		// Rating & Trial API
+		mux.HandleFunc("GET /api/v1/skillmarket/search", smHandlers.SearchSkillMarket)
+		mux.HandleFunc("GET /api/v1/skillmarket/top", smHandlers.GetLeaderboard)
+		mux.HandleFunc("POST /api/v1/skillmarket/{id}/rate", smHandlers.RateSkill)
+		mux.HandleFunc("GET /api/v1/skillmarket/{id}/ratings", smHandlers.GetRatingStats)
+		// Admin review & config
+		mux.HandleFunc("POST /api/v1/admin/skillmarket/{id}/approve", RequireAdmin(adminService, smHandlers.AdminApproveSkill))
+		mux.HandleFunc("POST /api/v1/admin/skillmarket/{id}/reject", RequireAdmin(adminService, smHandlers.AdminRejectSkill))
+		mux.HandleFunc("PUT /api/v1/admin/config/trial", RequireAdmin(adminService, smHandlers.UpdateTrialConfig))
+		// API Key management
+		mux.HandleFunc("POST /api/v1/skillmarket/{id}/apikeys/upload", smHandlers.UploadAPIKeys)
+		mux.HandleFunc("GET /api/v1/skillmarket/{id}/apikeys/status", smHandlers.GetAPIKeyStatus)
+		mux.HandleFunc("POST /api/v1/skillmarket/{id}/withdraw", smHandlers.WithdrawSkill)
+		mux.HandleFunc("GET /api/v1/account/{email}/tier", smHandlers.GetAccountTier)
+		// Admin refund & purchases
+		mux.HandleFunc("POST /api/v1/admin/refund", RequireAdmin(adminService, smHandlers.AdminRefund))
+		mux.HandleFunc("GET /api/v1/admin/purchases", RequireAdmin(adminService, smHandlers.AdminListPurchases))
 	}
 	return mux
 }

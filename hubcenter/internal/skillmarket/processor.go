@@ -98,9 +98,24 @@ func (p *Processor) processOne(ctx context.Context, subID string) error {
 		return p.failSubmission(ctx, sub, strings.Join(msgs, "; "))
 	}
 
+	// 安全扫描
+	secReport, err := ScanPackage(sandboxDir)
+	if err != nil {
+		log.Printf("[skillmarket] security scan error for %s: %v", subID, err)
+	}
+	if HasHardcodedSecrets(secReport) {
+		return p.failSubmission(ctx, sub, "security scan failed: hardcoded secrets detected")
+	}
+	securityLabels := GenerateLabels(secReport)
+
 	// 构建 HubSkillFull 并发布
 	meta := result.Metadata
 	skillID := generateID()
+
+	if len(securityLabels) > 0 {
+		log.Printf("[skillmarket] skill %s security labels: %v", skillID, securityLabels)
+	}
+
 	full := skill.HubSkillFull{
 		HubSkillMeta: skill.HubSkillMeta{
 			ID:          skillID,
