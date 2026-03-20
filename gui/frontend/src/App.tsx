@@ -3204,7 +3204,7 @@ ${instruction}`;
                     <div
                         className={`sidebar-item ${navTab === 'skills' ? 'active' : ''}`}
                         onClick={() => switchTool('skills')}
-                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'skills' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center', display: isLiteMode ? 'none' : undefined }}
+                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'skills' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                         title={t("skills")}
                     >
                         <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🧩</span>
@@ -3213,7 +3213,7 @@ ${instruction}`;
                     <div
                         className={`sidebar-item ${navTab === 'mcp' ? 'active' : ''}`}
                         onClick={() => switchTool('mcp')}
-                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'mcp' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center', display: isLiteMode ? 'none' : undefined }}
+                        style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'mcp' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                         title="MCP"
                     >
                         <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🔌</span>
@@ -4064,7 +4064,7 @@ ${instruction}`;
                                         <option value="zh-Hant">繁體中文</option>
                                     </select>
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                                {!isLiteMode && <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                                     <label className="form-label" style={{ marginBottom: 0, whiteSpace: 'nowrap', fontSize: '0.8rem' }}>{t("defaultLaunchModeLabel")}</label>
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '3px', cursor: 'pointer', fontSize: '0.78rem' }}>
                                         <input type="radio" name="launchMode" checked={!config?.default_launch_mode || config.default_launch_mode === 'local'} onChange={() => { if (config) { const c = new main.AppConfig({ ...config, default_launch_mode: 'local' }); setConfig(c); SaveConfig(c); } }} />
@@ -4074,7 +4074,7 @@ ${instruction}`;
                                         <input type="radio" name="launchMode" checked={config?.default_launch_mode === 'remote'} onChange={() => { if (config) { const c = new main.AppConfig({ ...config, default_launch_mode: 'remote' }); setConfig(c); SaveConfig(c); } }} />
                                         {t("remoteModeLabel")}
                                     </label>
-                                </div>
+                                </div>}
                                 {!isWindows && (
                                     <button
                                         className="btn-link"
