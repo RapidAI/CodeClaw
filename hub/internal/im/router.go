@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,8 +18,20 @@ type DeviceFinder interface {
 	// FindOnlineMachineForUser returns the machine ID of an online device
 	// belonging to the given user. Returns ("", false) if no device is online.
 	FindOnlineMachineForUser(ctx context.Context, userID string) (machineID string, llmConfigured bool, found bool)
+	// FindAllOnlineMachinesForUser returns all online machines for the user.
+	FindAllOnlineMachinesForUser(ctx context.Context, userID string) []OnlineMachineInfo
+	// FindOnlineMachineByName returns the machine ID matching the given name
+	// (case-insensitive) for the user. Returns ("", false) if not found.
+	FindOnlineMachineByName(ctx context.Context, userID, name string) (machineID string, found bool)
 	// SendToMachine sends a JSON-serialisable message to the machine via WebSocket.
 	SendToMachine(machineID string, msg any) error
+}
+
+// OnlineMachineInfo holds summary info about an online machine for IM display.
+type OnlineMachineInfo struct {
+	MachineID     string
+	Name          string
+	LLMConfigured bool
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +82,13 @@ type MessageRouter struct {
 	mu          sync.Mutex
 	pendingReqs map[string]*PendingIMRequest // requestID → pending
 
+	// selectedMachine tracks the user's chosen machine for IM routing.
+	// Key: userID, Value: machineID. Protected by mu.
+	selectedMachine map[string]string
+
+	// discussions tracks active /discuss sessions per user. Protected by mu.
+	discussions map[string]*DiscussionState
+
 	stopOnce sync.Once
 	stopCh   chan struct{}
 }
@@ -76,12 +96,167 @@ type MessageRouter struct {
 // NewMessageRouter creates a MessageRouter with the given device finder.
 func NewMessageRouter(devices DeviceFinder) *MessageRouter {
 	r := &MessageRouter{
-		devices:     devices,
-		pendingReqs: make(map[string]*PendingIMRequest),
-		stopCh:      make(chan struct{}),
+		devices:         devices,
+		pendingReqs:     make(map[string]*PendingIMRequest),
+		selectedMachine: make(map[string]string),
+		discussions:     make(map[string]*DiscussionState),
+		stopCh:          make(chan struct{}),
 	}
 	go r.cleanupLoop()
 	return r
+}
+
+// MachineSelectResult is returned by SelectMachine / TrySelectByName.
+type MachineSelectResult struct {
+	OK       bool   // selection succeeded
+	Message  string // human-readable status message
+}
+
+// broadcastMachineID is the sentinel value stored in selectedMachine to
+// indicate that the user is in broadcast mode (/call all).
+const broadcastMachineID = "__all__"
+
+// SelectMachine explicitly sets the target machine for a user (via /call).
+func (r *MessageRouter) SelectMachine(ctx context.Context, userID, name string) MachineSelectResult {
+	machines := r.devices.FindAllOnlineMachinesForUser(ctx, userID)
+	if len(machines) == 0 {
+		return MachineSelectResult{OK: false, Message: "📴 当前没有在线设备。"}
+	}
+	if len(machines) == 1 {
+		return MachineSelectResult{OK: true, Message: fmt.Sprintf("✅ 当前只有一台在线设备 %s，无需切换。", machines[0].Name)}
+	}
+
+	// "/call all" — enter broadcast mode.
+	if strings.EqualFold(name, "all") {
+		r.mu.Lock()
+		r.selectedMachine[userID] = broadcastMachineID
+		r.mu.Unlock()
+		var names []string
+		for _, m := range machines {
+			names = append(names, m.Name)
+		}
+		return MachineSelectResult{
+			OK:      true,
+			Message: fmt.Sprintf("📢 已进入群聊模式，后续消息将发送给所有在线设备：%s\n\n使用 @昵称 消息 可指定某台设备。使用 /call <昵称> 退出群聊。", strings.Join(names, "、")),
+		}
+	}
+
+	// Find all matches (case-insensitive) to detect duplicates.
+	var matched []OnlineMachineInfo
+	for _, m := range machines {
+		if strings.EqualFold(m.Name, name) {
+			matched = append(matched, m)
+		}
+	}
+
+	if len(matched) == 0 {
+		list := r.formatMachineList(machines)
+		return MachineSelectResult{
+			OK:      false,
+			Message: fmt.Sprintf("未找到名为 %q 的在线设备。\n\n%s", name, list),
+		}
+	}
+
+	if len(matched) > 1 {
+		list := r.formatMachineList(machines)
+		return MachineSelectResult{
+			OK:      false,
+			Message: fmt.Sprintf("⚠️ 有 %d 台设备同名 %q，请先在客户端修改昵称使其唯一，然后重试。\n\n%s", len(matched), name, list),
+		}
+	}
+
+	r.mu.Lock()
+	r.selectedMachine[userID] = matched[0].MachineID
+	r.mu.Unlock()
+
+	return MachineSelectResult{
+		OK:      true,
+		Message: fmt.Sprintf("✅ 已切换设备，你当前正在与 %s 交流。", matched[0].Name),
+	}
+}
+
+// TrySelectByName attempts to match the text against an online machine name.
+// Returns (true, response) if the text matched a machine name (switch or error).
+// Returns (false, nil) if no match — caller should route as normal message.
+func (r *MessageRouter) TrySelectByName(ctx context.Context, userID, text string) (handled bool, resp *GenericResponse) {
+	machines := r.devices.FindAllOnlineMachinesForUser(ctx, userID)
+	// Only attempt name-based switching when multiple machines are online.
+	if len(machines) <= 1 {
+		return false, nil
+	}
+
+	// Count matches.
+	var matched []OnlineMachineInfo
+	for _, m := range machines {
+		if strings.EqualFold(m.Name, text) {
+			matched = append(matched, m)
+		}
+	}
+
+	if len(matched) == 0 {
+		return false, nil
+	}
+
+	if len(matched) > 1 {
+		list := r.formatMachineList(machines)
+		return true, &GenericResponse{
+			StatusCode: 409,
+			StatusIcon: "⚠️",
+			Title:      "设备重名",
+			Body:       fmt.Sprintf("有 %d 台设备同名 %q，请先在客户端修改昵称使其唯一。\n\n%s\n\n修改后使用 /call <昵称> 切换。", len(matched), text, list),
+		}
+	}
+
+	// If the matched machine is already the current selection, don't intercept —
+	// let the text pass through to the Agent as a normal message.
+	r.mu.Lock()
+	current := r.selectedMachine[userID]
+	r.mu.Unlock()
+	if current == matched[0].MachineID {
+		return false, nil
+	}
+
+	// Switch to the new machine.
+	r.mu.Lock()
+	r.selectedMachine[userID] = matched[0].MachineID
+	r.mu.Unlock()
+
+	return true, &GenericResponse{
+		StatusCode: 200,
+		StatusIcon: "✅",
+		Title:      "已切换设备",
+		Body:       fmt.Sprintf("已切换设备，你当前正在与 %s 交流。", matched[0].Name),
+	}
+}
+
+// GetSelectedMachine returns the currently selected machine for a user.
+func (r *MessageRouter) GetSelectedMachine(userID string) (machineID string, ok bool) {
+	r.mu.Lock()
+	mid, ok := r.selectedMachine[userID]
+	r.mu.Unlock()
+	return mid, ok
+}
+
+// ClearSelectedMachine removes the machine selection for a user.
+func (r *MessageRouter) ClearSelectedMachine(userID string) {
+	r.mu.Lock()
+	delete(r.selectedMachine, userID)
+	r.mu.Unlock()
+}
+
+// formatMachineList builds a human-readable list of online machines.
+func (r *MessageRouter) formatMachineList(machines []OnlineMachineInfo) string {
+	var b strings.Builder
+	b.WriteString("📋 在线设备列表：\n")
+	for i, m := range machines {
+		llm := "❌"
+		if m.LLMConfigured {
+			llm = "✅"
+		}
+		fmt.Fprintf(&b, "%d. %s (LLM: %s)\n", i+1, m.Name, llm)
+	}
+	b.WriteString("\n使用 /call <昵称> 切换设备。")
+	return b.String()
 }
 
 // SetProgressDelivery configures the function used to deliver progress
@@ -101,9 +276,18 @@ func (r *MessageRouter) Stop() {
 // Preconditions: identity mapping and rate limiting have already been applied
 // by the Adapter before calling this method.
 func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, platformUID, text string) (*GenericResponse, error) {
-	// 1. Find the user's online device.
-	machineID, llmConfigured, found := r.devices.FindOnlineMachineForUser(ctx, userID)
-	if !found {
+	// 0. Parse @name prefix for targeted send in broadcast mode.
+	var targetName string
+	if strings.HasPrefix(text, "@") {
+		if idx := strings.IndexByte(text, ' '); idx > 1 {
+			targetName = text[1:idx]
+			text = strings.TrimSpace(text[idx+1:])
+		}
+	}
+
+	// 1. Resolve the target machine(s).
+	machines := r.devices.FindAllOnlineMachinesForUser(ctx, userID)
+	if len(machines) == 0 {
 		return &GenericResponse{
 			StatusCode: 503,
 			StatusIcon: "📴",
@@ -112,17 +296,98 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 		}, nil
 	}
 
-	// 2. Check LLM configuration.
-	if !llmConfigured {
+	// If @name was specified, route to that specific machine regardless of mode.
+	if targetName != "" {
+		for _, m := range machines {
+			if strings.EqualFold(m.Name, targetName) {
+				if !m.LLMConfigured {
+					return &GenericResponse{
+						StatusCode: 503,
+						StatusIcon: "⚠️",
+						Title:      "Agent 未就绪",
+						Body:       fmt.Sprintf("设备 %s 的 LLM 未配置，Agent 无法运行。", m.Name),
+					}, nil
+				}
+				resp, err := r.routeToSingleMachine(ctx, userID, platformName, platformUID, text, m.MachineID, "")
+				return resp, err
+			}
+		}
 		return &GenericResponse{
-			StatusCode: 503,
-			StatusIcon: "⚠️",
-			Title:      "Agent 未就绪",
-			Body:       "设备已在线，但 MaClaw LLM 未配置。Agent 无法运行。\n\n请在 MaClaw 客户端的设置中配置 LLM（URL、Key、Model），然后重试。",
+			StatusCode: 404,
+			StatusIcon: "❓",
+			Title:      "设备未找到",
+			Body:       fmt.Sprintf("未找到名为 %q 的在线设备。", targetName),
 		}, nil
 	}
 
-	// 3. Create pending request.
+	if len(machines) == 1 {
+		// Single machine — auto-select.
+		m := machines[0]
+		r.mu.Lock()
+		r.selectedMachine[userID] = m.MachineID
+		r.mu.Unlock()
+		if !m.LLMConfigured {
+			return &GenericResponse{
+				StatusCode: 503,
+				StatusIcon: "⚠️",
+				Title:      "Agent 未就绪",
+				Body:       "设备已在线，但 MaClaw LLM 未配置。Agent 无法运行。\n\n请在 MaClaw 客户端的设置中配置 LLM（URL、Key、Model），然后重试。",
+			}, nil
+		}
+		return r.routeToSingleMachine(ctx, userID, platformName, platformUID, text, m.MachineID, "")
+	}
+
+	// Multiple machines.
+	r.mu.Lock()
+	selected := r.selectedMachine[userID]
+	r.mu.Unlock()
+
+	if selected == "" {
+		list := r.formatMachineList(machines)
+		return &GenericResponse{
+			StatusCode: 300,
+			StatusIcon: "🖥️",
+			Title:      "请选择设备",
+			Body:       fmt.Sprintf("您有 %d 台设备在线，请先选择目标设备：\n\n%s", len(machines), list),
+		}, nil
+	}
+
+	// Broadcast mode.
+	if selected == broadcastMachineID {
+		return r.routeBroadcast(ctx, userID, platformName, platformUID, text, machines)
+	}
+
+	// Single-machine selection — verify still online.
+	for _, m := range machines {
+		if m.MachineID == selected {
+			if !m.LLMConfigured {
+				return &GenericResponse{
+					StatusCode: 503,
+					StatusIcon: "⚠️",
+					Title:      "Agent 未就绪",
+					Body:       "设备已在线，但 MaClaw LLM 未配置。Agent 无法运行。\n\n请在 MaClaw 客户端的设置中配置 LLM（URL、Key、Model），然后重试。",
+				}, nil
+			}
+			return r.routeToSingleMachine(ctx, userID, platformName, platformUID, text, m.MachineID, "")
+		}
+	}
+
+	// Selected machine went offline.
+	r.mu.Lock()
+	delete(r.selectedMachine, userID)
+	r.mu.Unlock()
+	list := r.formatMachineList(machines)
+	return &GenericResponse{
+		StatusCode: 503,
+		StatusIcon: "📴",
+		Title:      "设备已离线",
+		Body:       fmt.Sprintf("之前选择的设备已离线，请重新选择：\n\n%s", list),
+	}, nil
+}
+
+// routeToSingleMachine sends a message to one machine and waits for the reply.
+// If namePrefix is non-empty, progress and response text are prefixed with [namePrefix].
+func (r *MessageRouter) routeToSingleMachine(ctx context.Context, userID, platformName, platformUID, text, machineID, namePrefix string) (*GenericResponse, error) {
 	requestID := fmt.Sprintf("im_%s_%d", userID, time.Now().UnixNano())
 	now := time.Now()
 	pending := &PendingIMRequest{
@@ -161,23 +426,22 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 	}
 	if err := r.devices.SendToMachine(machineID, wsMsg); err != nil {
 		log.Printf("[MessageRouter] SendToMachine failed for machine=%s: %v", machineID, err)
+		body := "无法将消息发送到您的设备，请检查连接状态。"
+		if namePrefix != "" {
+			body = fmt.Sprintf("[%s] %s", namePrefix, body)
+		}
 		return &GenericResponse{
 			StatusCode: 503,
 			StatusIcon: "📴",
 			Title:      "发送失败",
-			Body:       "无法将消息发送到您的设备，请检查连接状态。",
+			Body:       body,
 		}, nil
 	}
 
 	// 5. Wait for Agent response with resettable timeout.
-	// Progress updates from the Agent reset the timer, preventing 504 on
-	// long-running tasks like file search or large builds.
 	timer := time.NewTimer(pending.Timeout)
 	defer timer.Stop()
 
-	// progressTexts collects progress messages; lastDelivered throttles IM sends.
-	// lastProgressText tracks the most recent progress text for deduplication:
-	// consecutive identical messages are suppressed even across throttle windows.
 	var progressTexts []string
 	var lastDelivered time.Time
 	var lastProgressText string
@@ -187,17 +451,24 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 		select {
 		case resp := <-pending.ResponseCh:
 			if resp == nil {
+				body := "Agent 未返回有效回复，请稍后重试。"
+				if namePrefix != "" {
+					body = fmt.Sprintf("[%s] %s", namePrefix, body)
+				}
 				return &GenericResponse{
 					StatusCode: 500,
 					StatusIcon: "❌",
 					Title:      "Agent 返回空响应",
-					Body:       "Agent 未返回有效回复，请稍后重试。",
+					Body:       body,
 				}, nil
 			}
-			return resp.ToGenericResponse(), nil
+			gr := resp.ToGenericResponse()
+			if namePrefix != "" {
+				gr.Body = fmt.Sprintf("[%s] %s", namePrefix, gr.Body)
+			}
+			return gr, nil
 
 		case progressText := <-pending.ProgressCh:
-			// Reset the timeout — the Agent is still alive and working.
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -207,23 +478,25 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 			timer.Reset(pending.Timeout)
 			progressTexts = append(progressTexts, progressText)
 
-			// Throttle IM delivery: at most once per progressMinInterval
-			// to avoid flooding the user with status messages.
-			// Also deduplicate: skip if the text is identical to the previous
-			// progress received (not just the last delivered), so that
-			// A→B→A sequences still deliver the second A after throttle passes.
 			isDup := progressText == lastProgressText
 			lastProgressText = progressText
 
 			if time.Since(lastDelivered) >= progressMinInterval && !isDup {
 				lastDelivered = time.Now()
-				go r.deliverProgress(ctx, userID, platformName, platformUID, progressText)
+				deliverText := progressText
+				if namePrefix != "" {
+					deliverText = fmt.Sprintf("[%s] %s", namePrefix, progressText)
+				}
+				go r.deliverProgress(ctx, userID, platformName, platformUID, deliverText)
 			}
 
 		case <-timer.C:
 			body := "Agent 在 180 秒内未回复，请稍后重试。\n\n可能原因：LLM 服务响应缓慢或不可用。"
 			if len(progressTexts) > 0 {
 				body = fmt.Sprintf("Agent 任务执行超时。最后状态：%s\n\n任务可能仍在后台运行，请稍后查询结果。", progressTexts[len(progressTexts)-1])
+			}
+			if namePrefix != "" {
+				body = fmt.Sprintf("[%s] %s", namePrefix, body)
 			}
 			return &GenericResponse{
 				StatusCode: 504,
@@ -236,6 +509,68 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 			return nil, ctx.Err()
 		}
 	}
+}
+
+// routeBroadcast sends the message to all online machines concurrently and
+// collects responses. Each machine's response/progress is prefixed with
+// [machineName]. Responses are delivered first-come-first-served.
+func (r *MessageRouter) routeBroadcast(ctx context.Context, userID, platformName, platformUID, text string, machines []OnlineMachineInfo) (*GenericResponse, error) {
+	// Filter to LLM-configured machines only.
+	var targets []OnlineMachineInfo
+	var skipped []string
+	for _, m := range machines {
+		if m.LLMConfigured {
+			targets = append(targets, m)
+		} else {
+			skipped = append(skipped, m.Name)
+		}
+	}
+	if len(targets) == 0 {
+		return &GenericResponse{
+			StatusCode: 503,
+			StatusIcon: "⚠️",
+			Title:      "无可用设备",
+			Body:       "所有在线设备的 LLM 均未配置，Agent 无法运行。",
+		}, nil
+	}
+
+	// Launch concurrent requests.
+	type result struct {
+		name string
+		resp *GenericResponse
+		err  error
+	}
+	ch := make(chan result, len(targets))
+
+	for _, m := range targets {
+		go func(m OnlineMachineInfo) {
+			resp, err := r.routeToSingleMachine(ctx, userID, platformName, platformUID, text, m.MachineID, m.Name)
+			ch <- result{name: m.Name, resp: resp, err: err}
+		}(m)
+	}
+
+	// Collect all responses.
+	var parts []string
+	for range targets {
+		res := <-ch
+		if res.err != nil {
+			parts = append(parts, fmt.Sprintf("[%s] ❌ 错误: %v", res.name, res.err))
+		} else if res.resp != nil {
+			// Body is already prefixed by routeToSingleMachine.
+			parts = append(parts, res.resp.Body)
+		}
+	}
+
+	if len(skipped) > 0 {
+		parts = append(parts, fmt.Sprintf("⚠️ 以下设备 LLM 未配置，已跳过: %s", strings.Join(skipped, "、")))
+	}
+
+	return &GenericResponse{
+		StatusCode: 200,
+		StatusIcon: "📢",
+		Title:      "群聊回复",
+		Body:       strings.Join(parts, "\n\n"),
+	}, nil
 }
 
 // HandleAgentResponse is called when the Hub receives an "im.agent_response"

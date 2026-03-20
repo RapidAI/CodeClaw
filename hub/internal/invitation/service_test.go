@@ -102,6 +102,7 @@ func (m *memInvitationCodeRepo) Unbind(_ context.Context, id string) error {
 			c.Status = "unused"
 			c.UsedByEmail = ""
 			c.UsedAt = nil
+			c.Exported = false
 			return nil
 		}
 	}
@@ -142,6 +143,41 @@ func (m *memInvitationCodeRepo) GetByEmail(_ context.Context, email string) (*st
 		}
 	}
 	return latest, nil
+}
+
+func (m *memInvitationCodeRepo) ListUnused(_ context.Context, exportedFilter string) ([]*store.InvitationCode, error) {
+	var result []*store.InvitationCode
+	for _, c := range m.codes {
+		if c.Status != "unused" {
+			continue
+		}
+		switch exportedFilter {
+		case "exported":
+			if !c.Exported {
+				continue
+			}
+		case "all":
+			// no filter
+		default:
+			// "unexported" or unknown defaults to unexported
+			if c.Exported {
+				continue
+			}
+		}
+		result = append(result, c)
+	}
+	return result, nil
+}
+
+func (m *memInvitationCodeRepo) MarkExported(_ context.Context, ids []string) error {
+	for _, id := range ids {
+		for _, c := range m.codes {
+			if c.ID == id {
+				c.Exported = true
+			}
+		}
+	}
+	return nil
 }
 
 type memSettingsRepo struct {

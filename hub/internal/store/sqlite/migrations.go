@@ -130,6 +130,32 @@ func RunMigrations(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_invitation_codes_code ON invitation_codes(code);`,
 
 		`CREATE INDEX IF NOT EXISTS idx_invitation_codes_status ON invitation_codes(status);`,
+
+		`CREATE TABLE IF NOT EXISTS gossip_posts (
+			id TEXT PRIMARY KEY,
+			machine_id TEXT NOT NULL,
+			user_email TEXT NOT NULL DEFAULT '',
+			nickname TEXT NOT NULL,
+			content TEXT NOT NULL,
+			category TEXT NOT NULL DEFAULT 'owner',
+			score INTEGER NOT NULL DEFAULT 0,
+			votes INTEGER NOT NULL DEFAULT 0,
+			locked INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS gossip_comments (
+			id TEXT PRIMARY KEY,
+			post_id TEXT NOT NULL,
+			machine_id TEXT NOT NULL,
+			user_email TEXT NOT NULL DEFAULT '',
+			nickname TEXT NOT NULL,
+			content TEXT NOT NULL,
+			rating INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		);`,
+
+		`CREATE INDEX IF NOT EXISTS idx_gossip_comments_post_id ON gossip_comments(post_id);`,
 	}
 
 	for _, stmt := range stmts {
@@ -149,6 +175,7 @@ func RunMigrations(db *sql.DB) error {
 	alterStmts = append(alterStmts, `ALTER TABLE login_tokens ADD COLUMN poll_token_hash TEXT NOT NULL DEFAULT ''`)
 	alterStmts = append(alterStmts, `ALTER TABLE invitation_codes ADD COLUMN validity_days INTEGER NOT NULL DEFAULT 0`)
 	alterStmts = append(alterStmts, `ALTER TABLE user_enrollments ADD COLUMN mobile TEXT NOT NULL DEFAULT ''`)
+	alterStmts = append(alterStmts, `ALTER TABLE invitation_codes ADD COLUMN exported INTEGER NOT NULL DEFAULT 0`)
 
 	for _, stmt := range alterStmts {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {

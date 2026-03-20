@@ -58,6 +58,7 @@ type InvitationCode struct {
 	UsedByEmail  string
 	UsedAt       *time.Time
 	ValidityDays int // 0 = 长期有效，>0 = 有效天数
+	Exported     bool
 	CreatedAt    time.Time
 }
 
@@ -180,6 +181,8 @@ type InvitationCodeRepository interface {
 	Unbind(ctx context.Context, id string) error
 	DeleteByID(ctx context.Context, id string) error
 	DeleteByEmail(ctx context.Context, email string) (int64, error)
+	ListUnused(ctx context.Context, exportedFilter string) ([]*InvitationCode, error)
+	MarkExported(ctx context.Context, ids []string) error
 }
 
 type MachineRepository interface {

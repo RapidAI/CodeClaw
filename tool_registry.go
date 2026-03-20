@@ -46,6 +46,7 @@ type ToolRegistry struct {
 	onChange []func()
 }
 
+
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{tools: make(map[string]*RegisteredTool)}
 }
@@ -80,12 +81,17 @@ func (r *ToolRegistry) Unregister(name string) {
 		}
 	}
 }
-
 func (r *ToolRegistry) Get(name string) (*RegisteredTool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	t, ok := r.tools[name]
-	return t, ok
+	if !ok {
+		return nil, false
+	}
+	// Return a copy so callers cannot mutate the internal map entry without a lock.
+	cp := *t
+	return &cp, true
+}return t, ok
 }
 
 func (r *ToolRegistry) List() []RegisteredTool {
@@ -97,6 +103,7 @@ func (r *ToolRegistry) List() []RegisteredTool {
 	}
 	return out
 }
+
 
 func (r *ToolRegistry) ListAvailable() []RegisteredTool {
 	r.mu.RLock()

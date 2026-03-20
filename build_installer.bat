@@ -18,7 +18,7 @@ set "GOPATH=%USERPROFILE%\go"
 set "PATH=%GOPATH%\bin;%PATH%"
 
 REM -- Clean previous build artifacts --
-echo [Step 1/7] Cleaning previous build...
+echo [Step 1/9] Cleaning previous build...
 if exist "%OUTPUT_DIR%" (
     rmdir /s /q "%OUTPUT_DIR%" 2>nul
     if exist "%OUTPUT_DIR%" (
@@ -31,7 +31,7 @@ if exist "%OUTPUT_DIR%" (
 if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
 
 REM -- Increment build number and set version (single PowerShell call) --
-echo [Step 2/7] Updating version number...
+echo [Step 2/9] Updating version number...
 %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command ^
   "if (Test-Path 'build_number') { $n = [int](Get-Content 'build_number') + 1 } else { $n = 1 };" ^
   "Set-Content -Path 'build_number' -Value $n -NoNewline;" ^
@@ -59,12 +59,12 @@ del /q "%~dp0temp_BUILD_NUM.txt" "%~dp0temp_VERSION.txt" "%~dp0temp_PRODUCT_NAME
 echo [INFO] Building Version: %VERSION%
 
 REM -- Sync version with frontend --
-echo [Step 3/7] Syncing version with frontend...
-powershell -NoProfile -Command "@('export const buildNumber = ''%BUILD_NUM%'';','export const appVersion = ''%VERSION%'';') | Set-Content -Path '%~dp0frontend\src\version.ts' -Encoding Utf8"
+echo [Step 3/9] Syncing version with frontend...
+powershell -NoProfile -Command "@('export const buildNumber = ''%BUILD_NUM%'';','export const appVersion = ''%VERSION%'';') | Set-Content -Path '%~dp0gui\frontend\src\version.ts' -Encoding Utf8"
 
 REM -- Build Frontend --
-echo [Step 4/7] Building frontend...
-cd "%~dp0frontend"
+echo [Step 4/9] Building frontend...
+cd "%~dp0gui\frontend"
 if not exist "node_modules" (
     call npm.cmd install --cache ./.npm_cache
     if !errorlevel! neq 0 (
@@ -81,7 +81,8 @@ if !errorlevel! neq 0 (
 cd "%~dp0"
 
 REM -- Generate Windows Resources (icon + version info) --
-echo [Step 5/7] Generating Windows resources...
+echo [Step 5/9] Generating Windows resources...
+del /q "%~dp0gui\resource_windows_*.syso" 2>nul
 del /q "%~dp0resource_windows_*.syso" 2>nul
 del /q "%~dp0tmp*.syso" 2>nul
 del /q "%~dp0tmp*.json" 2>nul
@@ -103,35 +104,67 @@ if !errorlevel! neq 0 (
 )
 
 REM -- Build Go Binaries --
-echo [Step 6/7] Compiling Go binaries...
+echo [Step 6/9] Compiling GUI binaries...
 set "GOOS=windows"
 set "CGO_ENABLED=0"
 set "GOARCH=amd64"
-"%GOVERSIONINFO_PATH%" -64 -icon "%~dp0build\windows\icon.ico" -manifest "%~dp0build\windows\wails.exe.manifest.tmp" -o "%~dp0resource_windows_amd64.syso" "%~dp0build\windows\versioninfo.json.tmp"
+"%GOVERSIONINFO_PATH%" -64 -icon "%~dp0build\windows\icon.ico" -manifest "%~dp0build\windows\wails.exe.manifest.tmp" -o "%~dp0gui\resource_windows_amd64.syso" "%~dp0build\windows\versioninfo.json.tmp"
 if !errorlevel! neq 0 (
     echo [ERROR] Failed to generate amd64 resources.
     goto :error
 )
-go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "%OUTPUT_DIR%\%APP_NAME%_amd64.exe"
+go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "%OUTPUT_DIR%\%APP_NAME%_amd64.exe" ./gui/
 if !errorlevel! neq 0 (
-    echo [ERROR] Go build for amd64 failed.
+    echo [ERROR] Go build for GUI amd64 failed.
     goto :error
 )
-del "%~dp0resource_windows_amd64.syso"
+del "%~dp0gui\resource_windows_amd64.syso"
 set "GOARCH=arm64"
-"%GOVERSIONINFO_PATH%" -64 -arm -icon "%~dp0build\windows\icon.ico" -manifest "%~dp0build\windows\wails.exe.manifest.tmp" -o "%~dp0resource_windows_arm64.syso" "%~dp0build\windows\versioninfo.json.tmp"
+"%GOVERSIONINFO_PATH%" -64 -arm -icon "%~dp0build\windows\icon.ico" -manifest "%~dp0build\windows\wails.exe.manifest.tmp" -o "%~dp0gui\resource_windows_arm64.syso" "%~dp0build\windows\versioninfo.json.tmp"
 if !errorlevel! neq 0 (
     echo [ERROR] Failed to generate arm64 resources.
     goto :error
 )
-go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "%OUTPUT_DIR%\%APP_NAME%_arm64.exe"
+go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "%OUTPUT_DIR%\%APP_NAME%_arm64.exe" ./gui/
 if !errorlevel! neq 0 (
-    echo [ERROR] Go build for arm64 failed.
+    echo [ERROR] Go build for GUI arm64 failed.
     goto :error
 )
-del "%~dp0resource_windows_arm64.syso"
+del "%~dp0gui\resource_windows_arm64.syso"
 del "%~dp0build\windows\wails.exe.manifest.tmp"
 del "%~dp0build\windows\versioninfo.json.tmp"
+
+REM -- Build TUI/CLI Binaries --
+echo [Step 7/9] Compiling TUI/CLI binaries...
+set "GOOS=windows"
+set "CGO_ENABLED=0"
+set "GOARCH=amd64"
+go build -ldflags "-s -w" -o "%OUTPUT_DIR%\maclaw-tui_amd64.exe" ./tui/
+if !errorlevel! neq 0 (
+    echo [ERROR] Go build for TUI amd64 failed.
+    goto :error
+)
+set "GOARCH=arm64"
+go build -ldflags "-s -w" -o "%OUTPUT_DIR%\maclaw-tui_arm64.exe" ./tui/
+if !errorlevel! neq 0 (
+    echo [ERROR] Go build for TUI arm64 failed.
+    goto :error
+)
+
+REM -- Build maclaw-tool Binary --
+echo [Step 8/9] Compiling maclaw-tool binaries...
+set "GOARCH=amd64"
+go build -ldflags "-s -w" -o "%OUTPUT_DIR%\maclaw-tool_amd64.exe" ./cmd/maclaw-tool/
+if !errorlevel! neq 0 (
+    echo [ERROR] Go build for maclaw-tool amd64 failed.
+    goto :error
+)
+set "GOARCH=arm64"
+go build -ldflags "-s -w" -o "%OUTPUT_DIR%\maclaw-tool_arm64.exe" ./cmd/maclaw-tool/
+if !errorlevel! neq 0 (
+    echo [ERROR] Go build for maclaw-tool arm64 failed.
+    goto :error
+)
 
 REM Reset Env for NSIS
 set "GOOS="
@@ -141,7 +174,7 @@ set "CC="
 set "CXX="
 
 REM -- Create NSIS Installer --
-echo [Step 7/7] Creating NSIS installer...
+echo [Step 9/9] Creating NSIS installer...
 if not exist "%NSIS_PATH%" goto nsis_missing
 
 "%NSIS_PATH%" /DINFO_PROJECTNAME="%APP_NAME%" /DPRODUCT_EXECUTABLE="%APP_NAME%.exe" /DINFO_PRODUCTNAME="%PRODUCT_NAME%" /DINFO_COMPANYNAME="%COMPANY_NAME%" /DINFO_COPYRIGHT="%COPYRIGHT_TEXT%" /DINFO_PRODUCTVERSION="%VERSION%" /DARG_WAILS_AMD64_BINARY="%OUTPUT_DIR%\%APP_NAME%_amd64.exe" /DARG_WAILS_ARM64_BINARY="%OUTPUT_DIR%\%APP_NAME%_arm64.exe" "%~dp0build\windows\installer\multiarch.nsi"
@@ -154,15 +187,24 @@ if exist "%OUTPUT_DIR%\%APP_NAME%-Setup.exe" (
     echo [SUCCESS] Windows installer created at: %OUTPUT_DIR%\%APP_NAME%-Setup.exe
 )
 
-REM -- Copy/Rename Main Binary for convenience --
-echo   - Creating main executable copy (amd64)...
+REM -- Copy/Rename Main Binaries for convenience --
+echo   - Creating main executable copies (amd64)...
 copy /Y "%OUTPUT_DIR%\%APP_NAME%_amd64.exe" "%OUTPUT_DIR%\%APP_NAME%.exe" >nul
-if exist "%OUTPUT_DIR%\%APP_NAME%.exe" (
-    echo [SUCCESS] Windows main binary created: %OUTPUT_DIR%\%APP_NAME%.exe
+copy /Y "%OUTPUT_DIR%\maclaw-tui_amd64.exe" "%OUTPUT_DIR%\maclaw-tui.exe" >nul
+copy /Y "%OUTPUT_DIR%\maclaw-tool_amd64.exe" "%OUTPUT_DIR%\maclaw-tool.exe" >nul
 
-    echo   - Creating Windows portable zip...
-    powershell -Command "Compress-Archive -Path '%OUTPUT_DIR%\%APP_NAME%.exe' -DestinationPath '%OUTPUT_DIR%\%APP_NAME%-Windows-Portable.zip' -Force"
+if exist "%OUTPUT_DIR%\%APP_NAME%.exe" (
+    echo [SUCCESS] GUI binary: %OUTPUT_DIR%\%APP_NAME%.exe
 )
+if exist "%OUTPUT_DIR%\maclaw-tui.exe" (
+    echo [SUCCESS] TUI/CLI binary: %OUTPUT_DIR%\maclaw-tui.exe
+)
+if exist "%OUTPUT_DIR%\maclaw-tool.exe" (
+    echo [SUCCESS] maclaw-tool binary: %OUTPUT_DIR%\maclaw-tool.exe
+)
+
+echo   - Creating Windows portable zip...
+powershell -Command "Compress-Archive -Path '%OUTPUT_DIR%\%APP_NAME%.exe','%OUTPUT_DIR%\maclaw-tui.exe','%OUTPUT_DIR%\maclaw-tool.exe' -DestinationPath '%OUTPUT_DIR%\%APP_NAME%-Windows-Portable.zip' -Force"
 
 goto :success
 

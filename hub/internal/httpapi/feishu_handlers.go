@@ -3,6 +3,9 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
 	"github.com/RapidAI/CodeClaw/hub/internal/store"
@@ -75,23 +78,73 @@ func UpdateFeishuConfigHandler(system store.SystemSettingsRepository, notifier *
 	}
 }
 
-// GetFeishuBindingsHandler returns the current email→open_id bindings.
+// GetFeishuBindingsHandler returns the current email→open_id bindings with
+// server-side pagination and optional email search.
+//
+// Query params:
+//   - page      (int, default 1)
+//   - page_size (int, default 50, max 100)
+//   - search    (string, optional email substring filter)
 func GetFeishuBindingsHandler(notifier *feishu.Notifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if notifier == nil {
-			writeJSON(w, http.StatusOK, map[string]any{"bindings": []any{}})
+			writeJSON(w, http.StatusOK, map[string]any{"bindings": []any{}, "total": 0, "page": 1, "page_size": 50})
 			return
 		}
 		m := notifier.GetOpenIDMap()
+
 		type binding struct {
 			Email  string `json:"email"`
 			OpenID string `json:"open_id"`
 		}
-		bindings := make([]binding, 0, len(m))
-		for email, oid := range m {
-			bindings = append(bindings, binding{Email: email, OpenID: oid})
+
+		// Collect and optionally filter by search.
+		search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
+		initCap := len(m)
+		if search != "" {
+			initCap = 0 // avoid over-allocation when filtering
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"bindings": bindings})
+		all := make([]binding, 0, initCap)
+		for email, oid := range m {
+			if search != "" && !strings.Contains(strings.ToLower(email), search) {
+				continue
+			}
+			all = append(all, binding{Email: email, OpenID: oid})
+		}
+
+		// Sort by email for stable pagination.
+		sort.Slice(all, func(i, j int) bool { return all[i].Email < all[j].Email })
+
+		total := len(all)
+
+		// Parse pagination params.
+		pageSize := 50
+		if ps, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && ps > 0 {
+			pageSize = ps
+		}
+		if pageSize > 100 {
+			pageSize = 100
+		}
+		page := 1
+		if p, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && p > 0 {
+			page = p
+		}
+
+		start := (page - 1) * pageSize
+		if start > total {
+			start = total
+		}
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"bindings":  all[start:end],
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
+		})
 	}
 }
 

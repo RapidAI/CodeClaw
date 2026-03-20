@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"path/filepath"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
 	"github.com/RapidAI/CodeClaw/hub/internal/center"
@@ -18,7 +17,6 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
-	"github.com/RapidAI/CodeClaw/hub/internal/skill"
 	"github.com/RapidAI/CodeClaw/hub/internal/store"
 	"github.com/RapidAI/CodeClaw/hub/internal/store/sqlite"
 	"github.com/RapidAI/CodeClaw/hub/internal/ws"
@@ -187,10 +185,6 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	// falls back to legacy notifier path.
 	sessionService.RegisterListener(feishuNotifier.HandleEvent)
 
-	// Skill store: derive directory from database DSN path.
-	skillStoreDir := filepath.Join(filepath.Dir(cfg.Database.DSN), "skills")
-	skillStore := skill.NewSkillStore(skillStoreDir)
-
 	router := httpapi.NewRouter(
 		adminService,
 		identityService,
@@ -205,7 +199,6 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		feishuPlugin,
 		openclawIMPlugin,
 		qqbotPlugin,
-		skillStore,
 		cfg.PWA.StaticDir,
 		cfg.PWA.RoutePrefix,
 		cfg.Bridge.Dir,
@@ -229,9 +222,6 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		FeishuPlugin:     feishuPlugin,
 		OpenclawIMPlugin: openclawIMPlugin,
 		QQBotPlugin:      qqbotPlugin,
-
-		// Skill store
-		SkillStore: skillStore,
 	}, nil
 }
 

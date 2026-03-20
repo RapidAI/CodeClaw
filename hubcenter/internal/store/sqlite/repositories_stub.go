@@ -38,6 +38,11 @@ type blockedIPRepo struct {
 	batch      *writeBatcher
 }
 
+type gossipRepo struct {
+	db, readDB *sql.DB
+	batch      *writeBatcher
+}
+
 func NewStore(p *Provider) *store.Store {
 	return &store.Store{
 		Admins:        &adminRepo{db: p.Write, readDB: p.Read, batch: p.batch},
@@ -47,6 +52,7 @@ func NewStore(p *Provider) *store.Store {
 		HubUserLinks:  &hubUserLinkRepo{db: p.Write, readDB: p.Read, batch: p.batch},
 		BlockedEmails: &blockedEmailRepo{db: p.Write, readDB: p.Read, batch: p.batch},
 		BlockedIPs:    &blockedIPRepo{db: p.Write, readDB: p.Read, batch: p.batch},
+		Gossip:        &gossipRepo{db: p.Write, readDB: p.Read, batch: p.batch},
 	}
 }
 
@@ -725,4 +731,118 @@ func timePtrString(v *time.Time) any {
 		return nil
 	}
 	return v.Format(time.RFC3339)
+}
+
+// ── Gossip Repository ──────────────────────────────────────────────────
+
+func (r *gossipRepo) CreatePost(ctx context.Context, post *store.GossipPost) error {
+	return execWrite(ctx, r.batch, r.db,
+		`INSERT INTO gossip_posts (id, machine_id, user_email, nickname, content, category, score, votes, locked, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?)`,
+		post.ID, post.MachineID, post.UserEmail, post.Nickname, post.Content, post.Category, post.CreatedAt.Format(time.RFC3339))
+}
+
+func (r *gossipRepo) ListPosts(ctx context.Context, offset, limit int) ([]*store.GossipPost, int, error) {
+	var total int
+	if err := r.readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM gossip_posts`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.readDB.QueryContext(ctx,
+		`SELECT id, machine_id, user_email, nickname, content, category, score, votes, locked, created_at
+		 FROM gossip_posts ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var items []*store.GossipPost
+	for rows.Next() {
+		var p store.GossipPost
+		var locked int
+		var createdAt string
+		if err := rows.Scan(&p.ID, &p.MachineID, &p.UserEmail, &p.Nickname, &p.Content, &p.Category, &p.Score, &p.Votes, &locked, &createdAt); err != nil {
+			return nil, 0, err
+		}
+		p.Locked = locked != 0
+		p.CreatedAt = mustParseTime(createdAt)
+		items = append(items, &p)
+	}
+	return items, total, rows.Err()
+}
+
+func (r *gossipRepo) GetPost(ctx context.Context, id string) (*store.GossipPost, error) {
+	var p store.GossipPost
+	var locked int
+	var createdAt string
+	err := r.readDB.QueryRowContext(ctx,
+		`SELECT id, machine_id, user_email, nickname, content, category, score, votes, locked, created_at
+		 FROM gossip_posts WHERE id = ?`, id).Scan(
+		&p.ID, &p.MachineID, &p.UserEmail, &p.Nickname, &p.Content, &p.Category, &p.Score, &p.Votes, &locked, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	p.Locked = locked != 0
+	p.CreatedAt = mustParseTime(createdAt)
+	return &p, nil
+}
+
+func (r *gossipRepo) DeletePost(ctx context.Context, id string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM gossip_comments WHERE post_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM gossip_posts WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *gossipRepo) LockPost(ctx context.Context, id string, locked bool) error {
+	return execWrite(ctx, r.batch, r.db, `UPDATE gossip_posts SET locked = ? WHERE id = ?`, boolToInt(locked), id)
+}
+
+func (r *gossipRepo) CreateComment(ctx context.Context, comment *store.GossipComment) error {
+	return execWrite(ctx, r.batch, r.db,
+		`INSERT INTO gossip_comments (id, post_id, machine_id, user_email, nickname, content, rating, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		comment.ID, comment.PostID, comment.MachineID, comment.UserEmail, comment.Nickname, comment.Content, comment.Rating, comment.CreatedAt.Format(time.RFC3339))
+}
+
+func (r *gossipRepo) ListComments(ctx context.Context, postID string, offset, limit int) ([]*store.GossipComment, int, error) {
+	var total int
+	if err := r.readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM gossip_comments WHERE post_id = ?`, postID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.readDB.QueryContext(ctx,
+		`SELECT id, post_id, machine_id, user_email, nickname, content, rating, created_at
+		 FROM gossip_comments WHERE post_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?`, postID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var items []*store.GossipComment
+	for rows.Next() {
+		var c store.GossipComment
+		var createdAt string
+		if err := rows.Scan(&c.ID, &c.PostID, &c.MachineID, &c.UserEmail, &c.Nickname, &c.Content, &c.Rating, &createdAt); err != nil {
+			return nil, 0, err
+		}
+		c.CreatedAt = mustParseTime(createdAt)
+		items = append(items, &c)
+	}
+	return items, total, rows.Err()
+}
+
+func (r *gossipRepo) DeleteComment(ctx context.Context, id string) error {
+	return execWrite(ctx, r.batch, r.db, `DELETE FROM gossip_comments WHERE id = ?`, id)
+}
+
+func (r *gossipRepo) UpdatePostScore(ctx context.Context, postID string) error {
+	return execWrite(ctx, r.batch, r.db,
+		`UPDATE gossip_posts SET score = COALESCE((SELECT SUM(rating) FROM gossip_comments WHERE post_id = ? AND rating > 0), 0),
+		 votes = COALESCE((SELECT COUNT(*) FROM gossip_comments WHERE post_id = ? AND rating > 0), 0) WHERE id = ?`,
+		postID, postID, postID)
 }

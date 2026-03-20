@@ -34,6 +34,7 @@ type invitationCodeResponse struct {
 	UsedAt       *string `json:"used_at"`
 	ValidityDays int     `json:"validity_days"`
 	BoundAt      *string `json:"bound_at"`
+	Exported     bool    `json:"exported"`
 	CreatedAt    string  `json:"created_at"`
 }
 
@@ -134,10 +135,13 @@ func InvitationCodeStatusHandler(svc *invitation.Service) http.HandlerFunc {
 
 func ExportInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		status := r.URL.Query().Get("status")
-		search := r.URL.Query().Get("search")
+		// exported filter: "unexported" (default), "exported", "all"
+		exportedFilter := r.URL.Query().Get("exported")
+		if exportedFilter == "" {
+			exportedFilter = "unexported"
+		}
 
-		codes, err := svc.ListCodes(r.Context(), status, search)
+		codes, err := svc.ExportUnusedCodes(r.Context(), exportedFilter)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "EXPORT_FAILED", err.Error())
 			return
@@ -151,6 +155,7 @@ func ExportInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=invitation_codes_%s.txt", time.Now().Format("20060102_150405")))
+		w.Header().Set("X-Export-Count", fmt.Sprintf("%d", len(codes)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(sb.String()))
 	}
@@ -246,6 +251,7 @@ func toInvitationCodeResponse(c *store.InvitationCode) invitationCodeResponse {
 		Status:       c.Status,
 		UsedByEmail:  c.UsedByEmail,
 		ValidityDays: c.ValidityDays,
+		Exported:     c.Exported,
 		CreatedAt:    c.CreatedAt.Format(time.RFC3339),
 	}
 	if c.UsedAt != nil {

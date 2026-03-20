@@ -13,7 +13,6 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
-	"github.com/RapidAI/CodeClaw/hub/internal/skill"
 	"github.com/RapidAI/CodeClaw/hub/internal/store"
 	"github.com/RapidAI/CodeClaw/hub/internal/ws"
 )
@@ -32,7 +31,6 @@ func NewRouter(
 	feishuPlugin *feishu.FeishuPlugin,
 	openclawIMPlugin *im.WebhookIMPlugin,
 	qqbotPlugin *qqbot.Plugin,
-	skillStore *skill.SkillStore,
 	staticDir string,
 	routePrefix string,
 	bridgeDir string,
@@ -169,14 +167,6 @@ func NewRouter(
 	mux.HandleFunc("/ws", gateway.HandleWS)
 	mux.HandleFunc("GET /api/shortcuts", GetShortcutsHandler(identity, system))
 	mux.HandleFunc("PUT /api/shortcuts", PutShortcutsHandler(identity, system))
-	// Skill Catalog API
-	skillHandlers := NewSkillHandlers(skillStore)
-	mux.HandleFunc("GET /api/v1/skills/search", skillHandlers.SearchSkills)
-	mux.HandleFunc("GET /api/v1/skills/{id}", skillHandlers.GetSkill)
-	mux.HandleFunc("GET /api/v1/skills/{id}/download", skillHandlers.DownloadSkill)
-	mux.HandleFunc("GET /api/v1/skills/popular", skillHandlers.PopularSkills)
-	mux.HandleFunc("POST /api/v1/skills", skillHandlers.PublishSkill)
-
 	// Webhook session endpoint (Bearer token auth handled internally)
 	mux.HandleFunc("POST /api/webhook/session", WebhookCreateSessionHandler(deviceSvc, sessionSvc))
 

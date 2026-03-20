@@ -27,6 +27,31 @@ func (f *DeviceServiceFinder) FindOnlineMachineForUser(ctx context.Context, user
 	return "", false, false
 }
 
+// FindAllOnlineMachinesForUser returns all online machines for the user.
+func (f *DeviceServiceFinder) FindAllOnlineMachinesForUser(ctx context.Context, userID string) []OnlineMachineInfo {
+	machines, err := f.Svc.ListMachines(ctx, userID)
+	if err != nil {
+		return nil
+	}
+	var out []OnlineMachineInfo
+	for _, m := range machines {
+		if m.Online {
+			out = append(out, OnlineMachineInfo{
+				MachineID:     m.MachineID,
+				Name:          m.Name,
+				LLMConfigured: m.LLMConfigured,
+			})
+		}
+	}
+	return out
+}
+
+// FindOnlineMachineByName returns the machine ID matching the given name
+// (case-insensitive) for the user.
+func (f *DeviceServiceFinder) FindOnlineMachineByName(ctx context.Context, userID, name string) (machineID string, found bool) {
+	return f.Svc.FindOnlineMachineByName(userID, name)
+}
+
 // SendToMachine sends a JSON-serialisable message to the machine via WebSocket.
 func (f *DeviceServiceFinder) SendToMachine(machineID string, msg any) error {
 	return f.Svc.SendToMachine(machineID, msg)

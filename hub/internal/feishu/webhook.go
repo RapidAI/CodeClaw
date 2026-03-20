@@ -129,7 +129,7 @@ func handleBotMessage(n *Notifier, raw json.RawMessage) {
 		if text != "" && !looksLikeEmail(text) && !isVerifyCode(text) {
 			// Legacy slash commands stay in the legacy path, except for
 			// agent conversation reset commands which the adapter handles.
-			isAgentCmd := text == "/new" || text == "/reset" || text == "/clear"
+			isAgentCmd := text == "/new" || text == "/reset" || text == "/clear" || strings.HasPrefix(text, "/call ") || strings.HasPrefix(text, "/discuss ") || text == "/discuss" || text == "/stop"
 			if isAgentCmd || !strings.HasPrefix(text, "/") {
 				msgType := event.Message.MessageType
 				if msgType == "" {
@@ -201,6 +201,8 @@ func handleCommand(n *Notifier, openID, text string) {
 		handleKill(n, openID, args)
 	case "/use", "/u":
 		handleUseSession(n, openID, args)
+	case "/call":
+		handleCallMachine(n, openID, args)
 	case "/info":
 		handleInfo(n, openID)
 	case "/screenshot", "/sc":
@@ -218,6 +220,10 @@ func helpText() string {
 	return "📋 可用命令 / Available Commands:\n\n" +
 		"/info — 查看概览（有会话时显示会话详情）\n" +
 		"/machines — 查看设备列表\n" +
+		"/call <昵称> — 切换目标设备（也可直接发送设备昵称切换）\n" +
+		"/call all — 进入群聊模式，消息发送给所有在线设备\n" +
+		"/discuss <话题> — AI 多轮讨论模式，设备间互相印证\n" +
+		"/stop — 终止讨论 / 退出讨论模式\n" +
 		"/sessions — 查看会话列表\n" +
 		"/use <编号> — 切换到会话（之后直接发文本即为命令）\n" +
 		"/exit — 退出当前会话上下文\n" +
@@ -228,7 +234,7 @@ func helpText() string {
 		"/kill <编号> — 终止会话\n" +
 		"/unbind — 解除飞书绑定\n" +
 		"/help — 显示此帮助\n\n" +
-		"💡 先 /sessions 查看编号，再 /use 编号 切换会话。"
+		"💡 先 /machines 查看设备，/call 昵称 切换设备，再发消息给 Agent。"
 }
 
 // bindingGuide returns onboarding text for users who haven't bound their email yet.
@@ -319,6 +325,15 @@ func handleListMachines(n *Notifier, openID string) {
 	}
 	sb.WriteString("使用 /sessions <machine_id前8位> 查看会话")
 	replyText(n, openID, sb.String())
+}
+
+func handleCallMachine(n *Notifier, openID string, args []string) {
+	if len(args) == 0 {
+		replyText(n, openID, "用法: /call <设备昵称>\n\n输入 /machines 查看在线设备列表。")
+		return
+	}
+	// In legacy mode (no IM adapter), just show a hint.
+	replyText(n, openID, "⚠️ /call 命令需要通过 IM Adapter 处理。请确认 IM 插件已启用。")
 }
 
 func handleListSessions(n *Notifier, openID string, args []string) {

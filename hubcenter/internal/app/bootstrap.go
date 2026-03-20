@@ -1,12 +1,16 @@
 package app
 
 import (
+	"context"
+	"path/filepath"
+
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/auth"
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/config"
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/entry"
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/httpapi"
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/hubs"
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/mail"
+	"github.com/RapidAI/CodeClaw/hubcenter/internal/skill"
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/store/sqlite"
 )
 
@@ -36,7 +40,17 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	mailer := mail.New(*cfg, st.System)
 	hubService := hubs.NewService(st.Hubs, st.HubUserLinks, st.BlockedEmails, st.BlockedIPs, st.System, mailer, cfg.Server.PublicBaseURL)
 	entryService := entry.NewService(st.Hubs, st.HubUserLinks, st.BlockedEmails, st.BlockedIPs)
-	router := httpapi.NewRouter(adminService, hubService, entryService, mailer)
+
+	// Skill store: derive directory from database DSN path.
+	skillStoreDir := filepath.Join(filepath.Dir(cfg.Database.DSN), "skills")
+	skillStore := skill.NewSkillStore(skillStoreDir)
+
+	// Gossip snapshot cache: static gzip file for zero-CPU client polling.
+	gossipCachePath := filepath.Join(filepath.Dir(cfg.Database.DSN), "gossip_cache.json.gz")
+	gossipCache := httpapi.NewGossipCache(st.Gossip, gossipCachePath)
+	gossipCache.EnsureExists(context.Background())
+
+	router := httpapi.NewRouter(adminService, hubService, entryService, mailer, skillStore, st.Gossip, gossipCache)
 
 	return &App{
 		Config:       cfg,

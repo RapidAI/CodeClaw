@@ -123,6 +123,42 @@ type BlockedIPRepository interface {
 	List(ctx context.Context) ([]*BlockedIP, error)
 }
 
+type GossipPost struct {
+	ID        string
+	MachineID string
+	UserEmail string // stored for admin tracing, never exposed in public API
+	Nickname  string // anonymous display name, e.g. "MaClaw-a3f2"
+	Content   string
+	Category  string // "owner" | "project" | "news"
+	Score     int    // aggregate rating score
+	Votes     int    // total vote count
+	Locked    bool   // admin locked — no new comments/ratings
+	CreatedAt time.Time
+}
+
+type GossipComment struct {
+	ID        string
+	PostID    string
+	MachineID string
+	UserEmail string // stored for admin tracing, never exposed in public API
+	Nickname  string
+	Content   string
+	Rating    int // 1-5 star rating, 0 = comment only
+	CreatedAt time.Time
+}
+
+type GossipRepository interface {
+	CreatePost(ctx context.Context, post *GossipPost) error
+	ListPosts(ctx context.Context, offset, limit int) ([]*GossipPost, int, error)
+	GetPost(ctx context.Context, id string) (*GossipPost, error)
+	DeletePost(ctx context.Context, id string) error
+	LockPost(ctx context.Context, id string, locked bool) error
+	CreateComment(ctx context.Context, comment *GossipComment) error
+	ListComments(ctx context.Context, postID string, offset, limit int) ([]*GossipComment, int, error)
+	DeleteComment(ctx context.Context, id string) error
+	UpdatePostScore(ctx context.Context, postID string) error
+}
+
 type Store struct {
 	Admins        AdminUserRepository
 	System        SystemSettingsRepository
@@ -131,4 +167,5 @@ type Store struct {
 	HubUserLinks  HubUserLinkRepository
 	BlockedEmails BlockedEmailRepository
 	BlockedIPs    BlockedIPRepository
+	Gossip        GossipRepository
 }

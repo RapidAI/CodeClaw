@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -162,6 +163,26 @@ func (s *Service) MarkOnline(ctx context.Context, machineID string, hello ws.Mac
 			info.LLMConfigured = v
 		}
 	}
+
+	// Check for name conflict among same-user online machines.
+	var conflictWith string
+	if conn != nil && info.Name != "" {
+		for otherID, otherConn := range s.runtime.desktopsByMachine {
+			if otherID == machineID || otherConn == nil || otherConn.Conn == nil {
+				continue
+			}
+			if otherConn.UserID != conn.UserID {
+				continue
+			}
+			if otherMeta, ok := s.runtime.metadataByMachine[otherID]; ok {
+				if strings.EqualFold(otherMeta.Name, info.Name) {
+					conflictWith = otherMeta.Name
+					break
+				}
+			}
+		}
+	}
+
 	s.runtime.metadataByMachine[machineID] = info
 	s.runtime.lastHeartbeatAt[machineID] = now
 	s.appendEventLocked(MachineEvent{
@@ -172,6 +193,18 @@ func (s *Service) MarkOnline(ctx context.Context, machineID string, hello ws.Mac
 		Message:   "machine marked online",
 	})
 	s.runtime.mu.Unlock()
+
+	// Notify the machine about name conflict via WebSocket (non-blocking).
+	if conflictWith != "" {
+		log.Printf("[device] MarkOnline: name conflict for machine_id=%s name=%q (already used by another online machine)", machineID, conflictWith)
+		_ = s.SendToMachine(machineID, map[string]any{
+			"type": "machine.name_conflict",
+			"payload": map[string]any{
+				"name":    conflictWith,
+				"message": fmt.Sprintf("昵称 %q 已被您的另一台在线设备使用，请修改昵称以便通过 IM 区分设备。", conflictWith),
+			},
+		})
+	}
 
 	if s.repo == nil {
 		log.Printf("[device] MarkOnline: no repo, skipping DB update for machine_id=%s", machineID)
@@ -270,6 +303,25 @@ func (s *Service) SendToMachine(machineID string, msg any) error {
 		Message:   "command dispatched to machine",
 	})
 	return conn.Conn.WriteJSON(msg)
+}
+
+// FindOnlineMachineByName returns the machine ID of an online device belonging
+// to the given user whose Name matches (case-insensitive). Returns ("", false)
+// if no match is found.
+func (s *Service) FindOnlineMachineByName(userID, name string) (machineID string, found bool) {
+	s.runtime.mu.RLock()
+	defer s.runtime.mu.RUnlock()
+	for mid, conn := range s.runtime.desktopsByMachine {
+		if conn == nil || conn.Conn == nil || conn.UserID != userID {
+			continue
+		}
+		if meta, ok := s.runtime.metadataByMachine[mid]; ok {
+			if strings.EqualFold(meta.Name, name) {
+				return mid, true
+			}
+		}
+	}
+	return "", false
 }
 
 func (s *Service) ListOnlineMachines() []MachineRuntimeInfo {

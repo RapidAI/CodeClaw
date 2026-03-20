@@ -1,0 +1,32 @@
+[Unit]
+Description=MaClaw Daemon - AI Coding Assistant Background Service
+After=network.target
+
+[Service]
+Type=simple
+User=maclaw
+Group=maclaw
+ExecStart=/usr/local/bin/maclaw-tui daemon --pid-file=/var/run/maclaw/maclaw.pid --log-file=/var/log/maclaw/daemon.log
+ExecStop=/bin/kill -SIGTERM $MAINPID
+PIDFile=/var/run/maclaw/maclaw.pid
+Restart=on-failure
+RestartSec=5
+
+# 环境变量
+Environment=MACLAW_DATA_DIR=/var/lib/maclaw
+Environment=MACLAW_HUB_URL=http://localhost:9099
+Environment=MACLAW_TOKEN=
+Environment=MACLAW_CLAWNET=0
+
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/maclaw /var/log/maclaw /var/run/maclaw
+
+# 资源限制
+LimitNOFILE=65536
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

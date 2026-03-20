@@ -70,6 +70,29 @@ func RunMigrations(db *sql.DB) error {
 			payload_json TEXT NOT NULL DEFAULT '{}',
 			created_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS gossip_posts (
+			id TEXT PRIMARY KEY,
+			machine_id TEXT NOT NULL,
+			user_email TEXT NOT NULL DEFAULT '',
+			nickname TEXT NOT NULL,
+			content TEXT NOT NULL,
+			category TEXT NOT NULL DEFAULT 'owner',
+			score INTEGER NOT NULL DEFAULT 0,
+			votes INTEGER NOT NULL DEFAULT 0,
+			locked INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS gossip_comments (
+			id TEXT PRIMARY KEY,
+			post_id TEXT NOT NULL,
+			machine_id TEXT NOT NULL,
+			user_email TEXT NOT NULL DEFAULT '',
+			nickname TEXT NOT NULL,
+			content TEXT NOT NULL,
+			rating INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_gossip_comments_post_id ON gossip_comments(post_id);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {

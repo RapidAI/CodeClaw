@@ -216,7 +216,106 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 		return
 	}
 
-	// 3. Route to MaClaw Agent via MessageRouter
+	// 3. Handle /call command — always handled by Hub, never sent to Agent.
+	if strings.HasPrefix(text, "/call ") || strings.HasPrefix(text, "/call\t") || text == "/call" {
+		name := ""
+		if len(text) > 5 {
+			name = strings.TrimSpace(text[6:])
+		}
+		if name == "" {
+			a.sendResponse(ctx, plugin, target, &GenericResponse{
+				StatusCode: 400,
+				StatusIcon: "❓",
+				Title:      "缺少参数",
+				Body:       "用法: /call <设备昵称>\n\n输入 /machines 查看在线设备列表。",
+			})
+			return
+		}
+		result := a.messageRouter.SelectMachine(ctx, unifiedID, name)
+		icon := "✅"
+		code := 200
+		if !result.OK {
+			icon = "⚠️"
+			code = 400
+		}
+		a.sendResponse(ctx, plugin, target, &GenericResponse{
+			StatusCode: code,
+			StatusIcon: icon,
+			Title:      "设备切换",
+			Body:       result.Message,
+		})
+		return
+	}
+
+	// 3b. Handle /discuss command — start AI-to-AI discussion.
+	if strings.HasPrefix(text, "/discuss ") || strings.HasPrefix(text, "/discuss\t") {
+		topic := strings.TrimSpace(text[9:])
+		if topic == "" {
+			a.sendResponse(ctx, plugin, target, &GenericResponse{
+				StatusCode: 400,
+				StatusIcon: "❓",
+				Title:      "缺少参数",
+				Body:       "用法: /discuss <话题>",
+			})
+			return
+		}
+		resp := a.messageRouter.StartDiscussion(ctx, unifiedID, msg.PlatformName, msg.PlatformUID, topic)
+		a.sendResponse(ctx, plugin, target, resp)
+		return
+	}
+	if text == "/discuss" {
+		a.sendResponse(ctx, plugin, target, &GenericResponse{
+			StatusCode: 400,
+			StatusIcon: "❓",
+			Title:      "缺少参数",
+			Body:       "用法: /discuss <话题>\n\n让多台设备的 AI 围绕话题进行多轮讨论。",
+		})
+		return
+	}
+
+	// 3c. Handle /stop command — stop active discussion.
+	if text == "/stop" {
+		resp := a.messageRouter.StopDiscussion(unifiedID)
+		a.sendResponse(ctx, plugin, target, resp)
+		return
+	}
+
+	// 3d. If user is in discussion mode, handle accordingly.
+	if !strings.HasPrefix(text, "/") && a.messageRouter.IsInDiscussion(unifiedID) {
+		if a.messageRouter.IsDiscussionRunning(unifiedID) {
+			// Discussion is running — inject as human interjection.
+			if a.messageRouter.InjectUserInput(unifiedID, text) {
+				a.sendResponse(ctx, plugin, target, &GenericResponse{
+					StatusCode: 200,
+					StatusIcon: "💬",
+					Title:      "已收到",
+					Body:       "你的发言将加入下一轮讨论。",
+				})
+			} else {
+				a.sendResponse(ctx, plugin, target, &GenericResponse{
+					StatusCode: 429,
+					StatusIcon: "⏳",
+					Title:      "缓冲已满",
+					Body:       "发言过多，请稍后再试。",
+				})
+			}
+			return
+		}
+		// Follow-up topic — start a new discussion round with previous summary.
+		resp := a.messageRouter.StartDiscussion(ctx, unifiedID, msg.PlatformName, msg.PlatformUID, text)
+		a.sendResponse(ctx, plugin, target, resp)
+		return
+	}
+
+	// 4. Try matching text as a machine nickname (direct name switch).
+	if !strings.HasPrefix(text, "/") {
+		if handled, nameResp := a.messageRouter.TrySelectByName(ctx, unifiedID, text); handled {
+			a.sendResponse(ctx, plugin, target, nameResp)
+			return
+		}
+	}
+
+	// 5. Route to MaClaw Agent via MessageRouter
 	resp, err := a.messageRouter.RouteToAgent(ctx, unifiedID, msg.PlatformName, msg.PlatformUID, text)
 	if err != nil {
 		a.sendResponse(ctx, plugin, target, &GenericResponse{

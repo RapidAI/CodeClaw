@@ -10,6 +10,8 @@ import (
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/entry"
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/hubs"
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/mail"
+	"github.com/RapidAI/CodeClaw/hubcenter/internal/skill"
+	"github.com/RapidAI/CodeClaw/hubcenter/internal/store"
 )
 
 type EntryResolveRequest struct {
@@ -127,7 +129,7 @@ func EntryResolveHandler(service *entry.Service) http.HandlerFunc {
 	}
 }
 
-func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryService *entry.Service, mailer *mail.Service) http.Handler {
+func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryService *entry.Service, mailer *mail.Service, skillStore *skill.SkillStore, gossipRepo store.GossipRepository, gossipCache *GossipCache) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", HealthHandler("MaClaw-hubcenter"))
 	mux.HandleFunc("GET /api/admin/status", AdminStatusHandler(adminService))
@@ -156,6 +158,33 @@ func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryS
 	mux.HandleFunc("POST /api/hubs/{id}/heartbeat", HubHeartbeatHandler(hubService))
 	mux.HandleFunc("GET /hub-registration/confirm", ConfirmHubRegistrationHandler(hubService))
 	mux.HandleFunc("POST /api/entry/resolve", EntryResolveHandler(entryService))
+	// Skill Catalog API
+	skillHandlers := NewSkillHandlers(skillStore)
+	mux.HandleFunc("GET /api/v1/skills/search", skillHandlers.SearchSkills)
+	mux.HandleFunc("GET /api/v1/skills/{id}", skillHandlers.GetSkill)
+	mux.HandleFunc("GET /api/v1/skills/{id}/download", skillHandlers.DownloadSkill)
+	mux.HandleFunc("GET /api/v1/skills/popular", skillHandlers.PopularSkills)
+	mux.HandleFunc("POST /api/v1/skills", skillHandlers.PublishSkill)
+	mux.HandleFunc("POST /api/v1/skills/{id}/rate", skillHandlers.RateSkill)
+	// SkillHub admin management
+	mux.HandleFunc("GET /api/admin/skillhub/list", RequireAdmin(adminService, skillHandlers.AdminListSkills))
+	mux.HandleFunc("POST /api/admin/skillhub/visibility", RequireAdmin(adminService, skillHandlers.AdminSetVisibility))
+	mux.HandleFunc("DELETE /api/admin/skillhub/{id}", RequireAdmin(adminService, skillHandlers.AdminDeleteSkill))
+	// Gossip — anonymous gossip board
+	mux.HandleFunc("POST /api/gossip/publish", GossipPublishHandler(gossipRepo, gossipCache))
+	mux.HandleFunc("GET /api/gossip/browse", GossipBrowseHandler(gossipRepo))
+	mux.HandleFunc("POST /api/gossip/comment", GossipCommentHandler(gossipRepo, gossipCache))
+	mux.HandleFunc("POST /api/gossip/rate", GossipRateHandler(gossipRepo, gossipCache))
+	mux.HandleFunc("GET /api/gossip/comments", GossipCommentsListHandler(gossipRepo))
+	mux.HandleFunc("GET /api/gossip/snapshot", GossipSnapshotHandler(gossipCache))
+	mux.HandleFunc("OPTIONS /api/gossip/snapshot", GossipSnapshotHandler(gossipCache))
+	// Gossip admin management
+	mux.HandleFunc("GET /api/admin/gossip", RequireAdmin(adminService, AdminListGossipHandler(gossipRepo)))
+	mux.HandleFunc("DELETE /api/admin/gossip", RequireAdmin(adminService, AdminDeleteGossipHandler(gossipRepo, gossipCache)))
+	mux.HandleFunc("POST /api/admin/gossip/lock", RequireAdmin(adminService, AdminLockGossipHandler(gossipRepo, gossipCache)))
+	mux.HandleFunc("GET /api/admin/gossip/comments", RequireAdmin(adminService, AdminListGossipCommentsHandler(gossipRepo)))
+	mux.HandleFunc("DELETE /api/admin/gossip/comments", RequireAdmin(adminService, AdminDeleteGossipCommentHandler(gossipRepo, gossipCache)))
 	registerAdminStaticRoutes(mux, "./web/admin", "/admin")
+	registerStaticRoutes(mux, "./web/skillhub", "/skillhub")
 	return mux
 }

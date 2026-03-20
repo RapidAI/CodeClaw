@@ -2,9 +2,9 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "MaClaw",
   "outputfilename": "MaClaw",
-  "frontend:install": "npm install --cache ./.npm_cache",
-  "frontend:build": "npm run build",
-  "frontend:dev:watcher": "npm run dev",
+  "frontend:install": "cd gui/frontend && npm install --cache ./.npm_cache",
+  "frontend:build": "cd gui/frontend && npm run build",
+  "frontend:dev:watcher": "cd gui/frontend && npm run dev",
   "frontend:dev:serverUrl": "auto",
   "info": {
     "productName": "MaClaw",

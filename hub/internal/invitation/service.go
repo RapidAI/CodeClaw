@@ -212,6 +212,35 @@ func (s *Service) ListCodes(ctx context.Context, status string, search string) (
 	return s.repo.List(ctx, status, search)
 }
 
+// ExportUnusedCodes returns unused invitation codes filtered by exported status,
+// and marks the returned codes as exported.
+// exportedFilter: "unexported" (default), "exported", or "all".
+func (s *Service) ExportUnusedCodes(ctx context.Context, exportedFilter string) ([]*store.InvitationCode, error) {
+	switch exportedFilter {
+	case "exported", "all":
+		// valid
+	default:
+		exportedFilter = "unexported"
+	}
+	codes, err := s.repo.ListUnused(ctx, exportedFilter)
+	if err != nil {
+		return nil, fmt.Errorf("listing unused codes: %w", err)
+	}
+	// Mark unexported codes as exported
+	var toMark []string
+	for _, c := range codes {
+		if !c.Exported {
+			toMark = append(toMark, c.ID)
+		}
+	}
+	if len(toMark) > 0 {
+		if err := s.repo.MarkExported(ctx, toMark); err != nil {
+			return nil, fmt.Errorf("marking exported: %w", err)
+		}
+	}
+	return codes, nil
+}
+
 // ListCodesPaged returns a page of invitation codes and the total count.
 func (s *Service) ListCodesPaged(ctx context.Context, status string, search string, page, pageSize int) ([]*store.InvitationCode, int, error) {
 	if page < 1 {

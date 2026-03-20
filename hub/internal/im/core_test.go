@@ -3,6 +3,7 @@ package im
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -72,10 +73,34 @@ type mockDeviceFinder struct {
 	found         bool
 	sentMessages  []any
 	mu            sync.Mutex
+	// For multi-machine tests.
+	allMachines []OnlineMachineInfo
 }
 
 func (m *mockDeviceFinder) FindOnlineMachineForUser(_ context.Context, _ string) (string, bool, bool) {
 	return m.machineID, m.llmConfigured, m.found
+}
+
+func (m *mockDeviceFinder) FindAllOnlineMachinesForUser(_ context.Context, _ string) []OnlineMachineInfo {
+	if len(m.allMachines) > 0 {
+		return m.allMachines
+	}
+	if !m.found {
+		return nil
+	}
+	return []OnlineMachineInfo{{MachineID: m.machineID, Name: "default", LLMConfigured: m.llmConfigured}}
+}
+
+func (m *mockDeviceFinder) FindOnlineMachineByName(_ context.Context, _ string, name string) (string, bool) {
+	for _, machine := range m.allMachines {
+		if strings.EqualFold(machine.Name, name) {
+			return machine.MachineID, true
+		}
+	}
+	if m.found && strings.EqualFold(name, "default") {
+		return m.machineID, true
+	}
+	return "", false
 }
 
 func (m *mockDeviceFinder) SendToMachine(_ string, msg any) error {

@@ -20,8 +20,8 @@ fi
 
 # Sync version to frontend
 echo "Syncing version $VERSION to frontend..."
-sed -i '' "s/const APP_VERSION = \".*\";/const APP_VERSION = \"$VERSION\";/" frontend/src/App.tsx
-echo "export const buildNumber = \"$BUILD_NUM\";" > frontend/src/version.ts
+sed -i '' "s/const APP_VERSION = \".*\";/const APP_VERSION = \"$VERSION\";/" gui/frontend/src/App.tsx
+echo "export const buildNumber = \"$BUILD_NUM\";" > gui/frontend/src/version.ts
 
 IDENTIFIER="com.wails.MaClaw"
 OUTPUT_DIR="dist"
@@ -43,21 +43,21 @@ mkdir -p "$BIN_DIR"
 
 # Build Frontend
 echo "[1/4] Building Frontend..."
-cd frontend
+cd gui/frontend
 npm install --cache ./.npm_cache
 npm run build
-cd ..
+cd ../..
 
 # Build Binaries
 echo "[2/4] Compiling Go Binaries..."
 
 # Build AMD64
 echo "  - Building for amd64..."
-CGO_ENABLED=1 CGO_LDFLAGS="-weak_framework UniformTypeIdentifiers" GOOS=darwin GOARCH=amd64 go build -tags desktop,production -o "${BIN_DIR}/${APP_NAME}_amd64"
+CGO_ENABLED=1 CGO_LDFLAGS="-weak_framework UniformTypeIdentifiers" GOOS=darwin GOARCH=amd64 go build -tags desktop,production -o "${BIN_DIR}/${APP_NAME}_amd64" ./gui/
 
 # Build ARM64
 echo "  - Building for arm64..."
-CGO_ENABLED=1 CGO_LDFLAGS="-weak_framework UniformTypeIdentifiers" GOOS=darwin GOARCH=arm64 go build -tags desktop,production -o "${BIN_DIR}/${APP_NAME}_arm64"
+CGO_ENABLED=1 CGO_LDFLAGS="-weak_framework UniformTypeIdentifiers" GOOS=darwin GOARCH=arm64 go build -tags desktop,production -o "${BIN_DIR}/${APP_NAME}_arm64" ./gui/
 
 # Generate Windows Resources
 echo "  - Generating Windows Resources..."
@@ -73,8 +73,8 @@ if command -v "$RSRC_TOOL" &> /dev/null; then
         -e "s/{{.Info.ProductVersion}}.0/$VERSION/g" \
         build/windows/wails.exe.manifest > build/windows/wails.exe.manifest.tmp
 
-    "$RSRC_TOOL" -manifest build/windows/wails.exe.manifest.tmp -ico build/windows/icon.ico -arch amd64 -o resource_windows_amd64.syso
-    "$RSRC_TOOL" -manifest build/windows/wails.exe.manifest.tmp -ico build/windows/icon.ico -arch arm64 -o resource_windows_arm64.syso
+    "$RSRC_TOOL" -manifest build/windows/wails.exe.manifest.tmp -ico build/windows/icon.ico -arch amd64 -o gui/resource_windows_amd64.syso
+    "$RSRC_TOOL" -manifest build/windows/wails.exe.manifest.tmp -ico build/windows/icon.ico -arch arm64 -o gui/resource_windows_arm64.syso
     
     rm build/windows/wails.exe.manifest.tmp
 else
@@ -83,14 +83,30 @@ fi
 
 # Build Windows AMD64
 echo "  - Building for Windows amd64..."
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "${BIN_DIR}/${APP_NAME}_amd64.exe"
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "${BIN_DIR}/${APP_NAME}_amd64.exe" ./gui/
 
 # Build Windows ARM64
 echo "  - Building for Windows arm64..."
-CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "${BIN_DIR}/${APP_NAME}_arm64.exe"
+CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "${BIN_DIR}/${APP_NAME}_arm64.exe" ./gui/
 
 # Cleanup Windows Resources
-rm -f resource_windows_amd64.syso resource_windows_arm64.syso
+rm -f gui/resource_windows_amd64.syso gui/resource_windows_arm64.syso
+
+# Build TUI/CLI Binaries
+echo "  - Building TUI/CLI binaries..."
+for TUI_ARCH in amd64 arm64; do
+    # macOS TUI
+    CGO_ENABLED=0 GOOS=darwin GOARCH=$TUI_ARCH go build -ldflags "-s -w" -o "${BIN_DIR}/maclaw-tui_${TUI_ARCH}_darwin" ./tui/
+    # Windows TUI
+    CGO_ENABLED=0 GOOS=windows GOARCH=$TUI_ARCH go build -ldflags "-s -w" -o "${BIN_DIR}/maclaw-tui_${TUI_ARCH}.exe" ./tui/
+    # Linux TUI
+    CGO_ENABLED=0 GOOS=linux GOARCH=$TUI_ARCH go build -ldflags "-s -w" -o "${BIN_DIR}/maclaw-tui_${TUI_ARCH}_linux" ./tui/
+    # maclaw-tool
+    CGO_ENABLED=0 GOOS=darwin GOARCH=$TUI_ARCH go build -ldflags "-s -w" -o "${BIN_DIR}/maclaw-tool_${TUI_ARCH}_darwin" ./cmd/maclaw-tool/
+    CGO_ENABLED=0 GOOS=windows GOARCH=$TUI_ARCH go build -ldflags "-s -w" -o "${BIN_DIR}/maclaw-tool_${TUI_ARCH}.exe" ./cmd/maclaw-tool/
+    CGO_ENABLED=0 GOOS=linux GOARCH=$TUI_ARCH go build -ldflags "-s -w" -o "${BIN_DIR}/maclaw-tool_${TUI_ARCH}_linux" ./cmd/maclaw-tool/
+done
+echo "  TUI/CLI binaries built for all platforms."
 
 # Export PATH for nfpm
 export PATH=$PATH:$(go env GOPATH)/bin
@@ -123,9 +139,9 @@ build_linux() {
     # Build binary
     # Note: On Linux/macOS cross-compile, CGO is required for Wails.
     if [ -n "$CC_CMD" ]; then
-        eval $CC_CMD CGO_ENABLED=1 GOOS=linux GOARCH=$ARCH go build -tags desktop,production -o "${BIN_DIR}/${APP_NAME}_${ARCH}_linux"
+        eval $CC_CMD CGO_ENABLED=1 GOOS=linux GOARCH=$ARCH go build -tags desktop,production -o "${BIN_DIR}/${APP_NAME}_${ARCH}_linux" ./gui/
     elif [ "$(uname)" == "Linux" ]; then
-        CGO_ENABLED=1 GOOS=linux GOARCH=$ARCH go build -tags desktop,production -o "${BIN_DIR}/${APP_NAME}_${ARCH}_linux"
+        CGO_ENABLED=1 GOOS=linux GOARCH=$ARCH go build -tags desktop,production -o "${BIN_DIR}/${APP_NAME}_${ARCH}_linux" ./gui/
     fi
     
     # Package
@@ -342,6 +358,17 @@ create_pkg() {
 echo "[4/4] Creating Packages..."
 cp "${BIN_DIR}/${APP_NAME}_amd64.exe" "${OUTPUT_DIR}/"
 cp "${BIN_DIR}/${APP_NAME}_arm64.exe" "${OUTPUT_DIR}/"
+
+# Copy TUI/CLI binaries to output
+for TUI_ARCH in amd64 arm64; do
+    cp "${BIN_DIR}/maclaw-tui_${TUI_ARCH}_darwin" "${OUTPUT_DIR}/" 2>/dev/null || true
+    cp "${BIN_DIR}/maclaw-tui_${TUI_ARCH}.exe" "${OUTPUT_DIR}/" 2>/dev/null || true
+    cp "${BIN_DIR}/maclaw-tui_${TUI_ARCH}_linux" "${OUTPUT_DIR}/" 2>/dev/null || true
+    cp "${BIN_DIR}/maclaw-tool_${TUI_ARCH}_darwin" "${OUTPUT_DIR}/" 2>/dev/null || true
+    cp "${BIN_DIR}/maclaw-tool_${TUI_ARCH}.exe" "${OUTPUT_DIR}/" 2>/dev/null || true
+    cp "${BIN_DIR}/maclaw-tool_${TUI_ARCH}_linux" "${OUTPUT_DIR}/" 2>/dev/null || true
+done
+
 create_pkg amd64
 create_pkg arm64
 create_pkg universal
