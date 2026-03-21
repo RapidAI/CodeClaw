@@ -78,7 +78,7 @@ jobs:
           } | ConvertTo-Json -Depth 6
           [System.IO.File]::WriteAllText("build/windows/versioninfo.json.tmp", $versionInfo, [System.Text.UTF8Encoding]::new($false))
 
-          $goversioninfo = Join-Path $env:GOPATH "bin/goversioninfo.exe"
+          $goversioninfo = Join-Path (go env GOPATH) "bin/goversioninfo.exe"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
           # --- amd64 ---
@@ -313,8 +313,12 @@ jobs:
         run: |
           sudo apt-get update
           # Try 4.0 first (Ubuntu 22.04), fall back to 4.1 (Ubuntu 24.04+)
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev 2>/dev/null \
-            || sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+          if sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev 2>/dev/null; then
+            echo "WEBKIT_TAGS=desktop,production" >> $GITHUB_ENV
+          else
+            sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+            echo "WEBKIT_TAGS=desktop,production,webkit2_41" >> $GITHUB_ENV
+          fi
 
       - name: Extract version from wails.json
         run: |
@@ -331,7 +335,7 @@ jobs:
         run: |
           mkdir -p dist build/bin
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-            go build -tags desktop,production -o "build/bin/${APP_NAME}_amd64_linux" ./gui/
+            go build -tags "${WEBKIT_TAGS}" -o "build/bin/${APP_NAME}_amd64_linux" ./gui/
 
       - name: Build TUI & maclaw-tool (linux)
         run: |
