@@ -384,7 +384,7 @@ jobs:
           chmod +x "$APP_DIR/AppRun"
 
           # Download appimagetool
-          wget -q -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage"
+          wget -q -O appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APP_DIR" \
             "dist/MaClaw-${VERSION}-x86_64.AppImage"
