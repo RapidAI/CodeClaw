@@ -180,9 +180,11 @@ if not exist "%POWERSHELL%" (
   "$ErrorActionPreference = 'Stop';" ^
   "$src = '%ROOT_DIR_TRIM%';" ^
   "$dst = '%STAGE_ROOT%';" ^
-  "$skipNames = @('.git','.gocache','.gomodcache','.kiro','.kode','.vscode','build','dist');" ^
-  "Get-ChildItem -Path $src -Force | Where-Object { $skipNames -notcontains $_.Name } | ForEach-Object { Copy-Item -Path $_.FullName -Destination $dst -Recurse -Force };" ^
-  "$removePaths = @('frontend\node_modules','hub\bin','hub\package','hub\data','hub\.gocache','hub\.gomodcache','hubcenter\bin','hubcenter\package','hubcenter\data','hubcenter\.gocache','hubcenter\.gomodcache','openclaw-bridge\node_modules','openclaw-bridge\dist');" ^
+  "$copyDirs = @('corelib','hub','hubcenter','openclaw-bridge','gui\internal\systray');" ^
+  "$copyFiles = @('go.mod','go.sum');" ^
+  "foreach ($f in $copyFiles) { $p = Join-Path $src $f; if (Test-Path $p) { Copy-Item -Path $p -Destination $dst -Force } };" ^
+  "foreach ($d in $copyDirs) { $p = Join-Path $src $d; if (Test-Path $p) { Copy-Item -Path $p -Destination (Join-Path $dst $d) -Recurse -Force } };" ^
+  "$removePaths = @('hub\bin','hub\package','hub\data','hub\.gocache','hub\.gomodcache','hubcenter\bin','hubcenter\package','hubcenter\data','hubcenter\.gocache','hubcenter\.gomodcache','openclaw-bridge\node_modules','openclaw-bridge\dist');" ^
   "foreach ($rel in $removePaths) { $path = Join-Path $dst $rel; if (Test-Path $path) { Remove-Item -Recurse -Force $path -ErrorAction SilentlyContinue } };" ^
   "Get-ChildItem -Path $dst -Recurse -File -Include *.exe,*.exe~ -Force | Remove-Item -Force -ErrorAction SilentlyContinue;"
 if errorlevel 1 (

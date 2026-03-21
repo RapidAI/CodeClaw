@@ -56,6 +56,7 @@ type DeviceLister interface {
 type MachineInfo struct {
 	MachineID      string
 	Name           string
+	Alias          string
 	Platform       string
 	Hostname       string
 	Online         bool

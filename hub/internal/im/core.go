@@ -395,7 +395,11 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 	}
 
 	// 4. Try matching text as a machine nickname (direct name switch).
-	if !strings.HasPrefix(text, "/") {
+	// When LLM smart mode is active, skip this — IntentClassifier decides
+	// routing, so sending "安妮" means talking TO that device, not switching.
+	// Users can still switch explicitly via /call.
+	llmActive := a.coordinator != nil && a.coordinator.IsLLMEnabled()
+	if !llmActive && !strings.HasPrefix(text, "/") {
 		if handled, nameResp := a.messageRouter.TrySelectByName(ctx, unifiedID, text); handled {
 			a.sendResponse(ctx, plugin, target, nameResp)
 			return
