@@ -26,9 +26,10 @@ func (e ValidationError) String() string {
 
 // ValidationResult 是包验证的汇总结果。
 type ValidationResult struct {
-	Valid    bool              `json:"valid"`
-	Errors   []ValidationError `json:"errors,omitempty"`
-	Metadata *SkillMetadata    `json:"metadata,omitempty"` // 解析成功时填充
+	Valid       bool              `json:"valid"`
+	Errors      []ValidationError `json:"errors,omitempty"`
+	Metadata    *SkillMetadata    `json:"metadata,omitempty"` // 解析成功时填充
+	PackageRoot string            `json:"package_root"`       // 实际包根目录（可能是子目录）
 }
 
 // ValidatePackage 验证解压后的 Skill 包目录。
@@ -36,8 +37,11 @@ type ValidationResult struct {
 func ValidatePackage(sandboxDir string) (*ValidationResult, error) {
 	result := &ValidationResult{Valid: true}
 
-	// 1. 检查 skill.yaml 存在
-	yamlPath := filepath.Join(sandboxDir, "skill.yaml")
+	// 1. 解析包根目录：支持 skill.yaml 在根目录或唯一子目录中
+	pkgRoot := resolvePackageRoot(sandboxDir)
+	result.PackageRoot = pkgRoot
+
+	yamlPath := filepath.Join(pkgRoot, "skill.yaml")
 	if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
 		result.Valid = false
 		result.Errors = append(result.Errors, ValidationError{
@@ -82,11 +86,11 @@ func ValidatePackage(sandboxDir string) (*ValidationResult, error) {
 	}
 
 	// 4. 扫描并验证脚本文件
-	err = filepath.Walk(sandboxDir, func(path string, info os.FileInfo, walkErr error) error {
+	err = filepath.Walk(pkgRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil || info.IsDir() {
 			return walkErr
 		}
-		rel, _ := filepath.Rel(sandboxDir, path)
+		rel, _ := filepath.Rel(pkgRoot, path)
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
 		case ".py":
@@ -193,4 +197,41 @@ func findPython() string {
 		}
 	}
 	return ""
+}
+
+// resolvePackageRoot 解析实际的包根目录。
+// 如果 sandboxDir 根目录直接包含 skill.yaml，返回 sandboxDir。
+// 否则，如果根目录只有一个有效子目录且该子目录包含 skill.yaml，返回该子目录。
+// 跳过 __MACOSX 等打包工具产生的垃圾目录。
+// 其他情况返回 sandboxDir（后续校验会报错）。
+func resolvePackageRoot(sandboxDir string) string {
+	if _, err := os.Stat(filepath.Join(sandboxDir, "skill.yaml")); err == nil {
+		return sandboxDir
+	}
+	entries, err := os.ReadDir(sandboxDir)
+	if err != nil {
+		return sandboxDir
+	}
+	var soleDir string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// 跳过 macOS 打包垃圾目录
+		if e.Name() == "__MACOSX" {
+			continue
+		}
+		if soleDir != "" {
+			return sandboxDir // 多个有效子目录，无法判断
+		}
+		soleDir = e.Name()
+	}
+	if soleDir == "" {
+		return sandboxDir
+	}
+	candidate := filepath.Join(sandboxDir, soleDir)
+	if _, err := os.Stat(filepath.Join(candidate, "skill.yaml")); err == nil {
+		return candidate
+	}
+	return sandboxDir
 }

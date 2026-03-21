@@ -1,11 +1,11 @@
 package oauth
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/RapidAI/CodeClaw/corelib"
@@ -25,14 +25,35 @@ func NeedsRefresh(provider corelib.MaclawLLMProvider) bool {
 	return time.Now().Unix()+int64(TokenRefreshMargin.Seconds()) >= provider.TokenExpiresAt
 }
 
-// RefreshAccessToken 使用 refresh_token 获取新的 access_token。
-func RefreshAccessToken(cfg Config, refreshToken string) (*TokenResult, error) {
-	data := url.Values{}
-	data.Set("grant_type", "refresh_token")
-	data.Set("refresh_token", refreshToken)
-	data.Set("client_id", cfg.ClientID)
+// refreshRequest 是发送给 OpenAI token endpoint 的 JSON 刷新请求。
+// 与 Codex CLI 保持一致，使用 JSON 格式而非 form-encoded。
+type refreshRequest struct {
+	ClientID     string `json:"client_id"`
+	GrantType    string `json:"grant_type"`
+	RefreshToken string `json:"refresh_token"`
+}
 
-	resp, err := http.PostForm(cfg.TokenEndpoint, data)
+// RefreshAccessToken 使用 refresh_token 获取新的 access_token。
+// 使用 JSON POST 请求（与 Codex CLI 保持一致）。
+func RefreshAccessToken(cfg Config, refreshToken string) (*TokenResult, error) {
+	reqBody := refreshRequest{
+		ClientID:     cfg.ClientID,
+		GrantType:    "refresh_token",
+		RefreshToken: refreshToken,
+	}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("token refresh: failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, cfg.TokenEndpoint, bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("token refresh: failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token refresh request failed: %w", err)
 	}

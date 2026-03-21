@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"time"
@@ -48,9 +49,16 @@ func NewCallbackServer() *CallbackServer {
 // Start 在 127.0.0.1:0 上启动 HTTP 回调服务器（OS 自动分配端口），
 // 并在 callbackPath 上注册回调处理器。
 func (s *CallbackServer) Start(callbackPath string) error {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	return s.StartOnPort(callbackPath, 0)
+}
+
+// StartOnPort 在 127.0.0.1:<port> 上启动 HTTP 回调服务器。
+// port 为 0 时由 OS 自动分配端口。
+func (s *CallbackServer) StartOnPort(callbackPath string, port int) error {
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("callback server: listen failed: %w", err)
+		return fmt.Errorf("callback server: listen on %s failed: %w", addr, err)
 	}
 	s.listener = ln
 	s.port = ln.Addr().(*net.TCPAddr).Port
@@ -96,7 +104,7 @@ func (s *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 	if errParam := q.Get("error"); errParam != "" {
 		desc := q.Get("error_description")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, errorHTML, errParam, desc)
+		fmt.Fprintf(w, errorHTML, html.EscapeString(errParam), html.EscapeString(desc))
 		s.errCh <- fmt.Errorf("oauth error: %s: %s", errParam, desc)
 		return
 	}
@@ -104,7 +112,7 @@ func (s *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 	code := q.Get("code")
 	if code == "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, errorHTML, "missing_code", "回调请求中缺少 code 参数")
+		fmt.Fprintf(w, errorHTML, "missing_code", html.EscapeString("回调请求中缺少 code 参数"))
 		s.errCh <- fmt.Errorf("oauth error: missing code parameter in callback")
 		return
 	}

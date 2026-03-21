@@ -48,6 +48,7 @@ type AppConfig struct {
 	RemoteMachineID    string `json:"remote_machine_id"`
 	RemoteMachineToken string `json:"remote_machine_token"`
 	RemoteHeartbeatSec int    `json:"remote_heartbeat_sec"`
+	RemoteNickname     string `json:"remote_nickname,omitempty"`
 	RemoteClientID     string `json:"remote_client_id"`
 	DefaultLaunchMode  string `json:"default_launch_mode"`
 	// MaClaw LLM configuration

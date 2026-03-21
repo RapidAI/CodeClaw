@@ -372,6 +372,13 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 		}, nil,
 		func(args map[string]interface{}) string { return h.toolSwitchLLMProvider(args) })
 
+	reg("set_nickname", "设置本机在 Hub 群聊中的昵称。当用户给你起名字（如'你叫安妮'、'以后叫你小明'）时，调用此工具上报新昵称，这样在群聊中 /call 和 @昵称 就能用新名字找到你。",
+		ToolCategoryBuiltin, []string{"nickname", "name", "identity", "alias"},
+		map[string]interface{}{
+			"nickname": map[string]string{"type": "string", "description": "新昵称（如 安妮、小明）"},
+		}, []string{"nickname"},
+		func(args map[string]interface{}) string { return h.toolSetNickname(args) })
+
 	// --- Agent self-management ---
 	reg("set_max_iterations", fmt.Sprintf("调整最大推理轮数。设置后会持久化保存，后续对话也会生效。当你判断任务复杂需要更多轮次时调用此工具扩展上限，任务简单时可缩减。上限不超过 %d。", maxAgentIterationsCap),
 		ToolCategoryBuiltin, []string{"agent", "iterations", "limit"},

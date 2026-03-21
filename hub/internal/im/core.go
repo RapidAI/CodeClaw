@@ -351,6 +351,22 @@ func (a *Adapter) DeliverProgress(ctx context.Context, platformName, userID, pla
 	}
 }
 
+// DeliverResponse sends a full GenericResponse to a user via the appropriate
+// IM plugin. This is used by the MessageRouter to deliver image/file
+// responses individually in broadcast mode.
+func (a *Adapter) DeliverResponse(ctx context.Context, platformName, userID, platformUID string, resp *GenericResponse) {
+	a.mu.RLock()
+	plugin, ok := a.plugins[platformName]
+	a.mu.RUnlock()
+	if !ok {
+		log.Printf("[IM Adapter] DeliverResponse: no plugin for platform %q", platformName)
+		return
+	}
+
+	target := UserTarget{PlatformUID: platformUID, UnifiedUserID: userID}
+	a.sendResponse(ctx, plugin, target, resp)
+}
+
 // ---------------------------------------------------------------------------
 // Response formatting & delivery (capability-based format selection)
 // ---------------------------------------------------------------------------

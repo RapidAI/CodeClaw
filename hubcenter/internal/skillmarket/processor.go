@@ -103,7 +103,8 @@ func (p *Processor) processOne(ctx context.Context, subID string) error {
 	}
 
 	// 安全扫描
-	secReport, err := ScanPackage(sandboxDir)
+	pkgRoot := result.PackageRoot
+	secReport, err := ScanPackage(pkgRoot)
 	if err != nil {
 		log.Printf("[skillmarket] security scan error for %s: %v", subID, err)
 	}
@@ -165,11 +166,11 @@ func (p *Processor) processOne(ctx context.Context, subID string) error {
 
 	// 读取包内文件
 	full.Files = make(map[string]string)
-	_ = filepath.Walk(sandboxDir, func(path string, info os.FileInfo, walkErr error) error {
+	_ = filepath.Walk(pkgRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil || info.IsDir() {
 			return walkErr
 		}
-		rel, _ := filepath.Rel(sandboxDir, path)
+		rel, _ := filepath.Rel(pkgRoot, path)
 		if rel == "skill.yaml" {
 			return nil // 元数据已解析
 		}

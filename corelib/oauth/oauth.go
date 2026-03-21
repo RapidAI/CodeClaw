@@ -17,14 +17,20 @@ import (
 
 // OpenAI OAuth 常量
 const (
-	// OpenAIClientID 是 Codex CLI 的 OAuth client_id（占位符，需替换为实际值）。
-	OpenAIClientID = "codex-cli"
+	// OpenAIClientID 是 Codex CLI 注册的 OAuth client_id。
+	OpenAIClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+
+	// OpenAIIssuer 是 OpenAI 的 OAuth issuer 基础 URL。
+	OpenAIIssuer = "https://auth.openai.com"
 
 	// OpenAIAuthEndpoint 是 OpenAI 的 OAuth 授权端点。
-	OpenAIAuthEndpoint = "https://auth.openai.com/oauth/authorize"
+	OpenAIAuthEndpoint = OpenAIIssuer + "/oauth/authorize"
 
 	// OpenAITokenEndpoint 是 OpenAI 的 OAuth token 端点。
-	OpenAITokenEndpoint = "https://auth.openai.com/oauth/token"
+	OpenAITokenEndpoint = OpenAIIssuer + "/oauth/token"
+
+	// DefaultCallbackPort 是 Codex CLI 使用的默认回调端口。
+	DefaultCallbackPort = 1455
 
 	// TokenRefreshMargin 是 token 过期前触发刷新的提前量。
 	TokenRefreshMargin = 5 * time.Minute
@@ -53,7 +59,7 @@ func DefaultConfig() Config {
 		ClientID:      OpenAIClientID,
 		AuthEndpoint:  OpenAIAuthEndpoint,
 		TokenEndpoint: OpenAITokenEndpoint,
-		Scopes:        nil,
+		Scopes:        []string{"openid", "profile", "email", "offline_access"},
 		CallbackPath:  "/auth/callback",
 		Timeout:       120 * time.Second,
 	}
@@ -83,17 +89,20 @@ func GenerateCodeChallenge(verifier string) string {
 }
 
 // BuildAuthURL 构建 OAuth 授权 URL，包含所有必要的查询参数。
+// 与 Codex CLI 保持一致，包含 codex_cli_simplified_flow 等额外参数。
 func BuildAuthURL(cfg Config, codeChallenge, redirectURI, state string) string {
 	params := url.Values{}
+	params.Set("response_type", "code")
 	params.Set("client_id", cfg.ClientID)
 	params.Set("redirect_uri", redirectURI)
-	params.Set("response_type", "code")
-	params.Set("code_challenge", codeChallenge)
-	params.Set("code_challenge_method", "S256")
 	if len(cfg.Scopes) > 0 {
 		params.Set("scope", strings.Join(cfg.Scopes, " "))
 	}
+	params.Set("code_challenge", codeChallenge)
+	params.Set("code_challenge_method", "S256")
 	params.Set("state", state)
+	// Codex CLI 兼容参数
+	params.Set("codex_cli_simplified_flow", "true")
 
 	return cfg.AuthEndpoint + "?" + params.Encode()
 }
@@ -180,16 +189,19 @@ func RunOAuthFlow(cfg Config) (*TokenResult, error) {
 	}
 	challenge := GenerateCodeChallenge(verifier)
 
-	// 2. 启动 Callback Server
+	// 2. 启动 Callback Server（优先使用 Codex CLI 默认端口 1455）
 	cbServer := NewCallbackServer()
-	if err := cbServer.Start(cfg.CallbackPath); err != nil {
-		return nil, fmt.Errorf("oauth flow: failed to start callback server: %w", err)
+	if err := cbServer.StartOnPort(cfg.CallbackPath, DefaultCallbackPort); err != nil {
+		// fallback 到随机端口
+		if err2 := cbServer.Start(cfg.CallbackPath); err2 != nil {
+			return nil, fmt.Errorf("oauth flow: failed to start callback server: %w", err2)
+		}
 	}
 	defer cbServer.Stop()
 
-	// 3. 构建 redirect_uri 和授权 URL
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d%s", cbServer.Port(), cfg.CallbackPath)
-	state := challenge[:16] // 使用 challenge 前缀作为简单 state 参数
+	// 3. 构建 redirect_uri 和授权 URL（使用 localhost 与 Codex CLI 保持一致）
+	redirectURI := fmt.Sprintf("http://localhost:%d%s", cbServer.Port(), cfg.CallbackPath)
+	state := generateState()
 	authURL := BuildAuthURL(cfg, challenge, redirectURI, state)
 
 	// 4. 打开系统浏览器
@@ -210,4 +222,14 @@ func RunOAuthFlow(cfg Config) (*TokenResult, error) {
 	}
 
 	return token, nil
+}
+
+// generateState 生成 32 字节随机 state 参数（base64url 编码）。
+func generateState() string {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		// fallback: 使用 code challenge 前缀
+		return "maclaw-oauth-state"
+	}
+	return base64.RawURLEncoding.EncodeToString(buf)
 }

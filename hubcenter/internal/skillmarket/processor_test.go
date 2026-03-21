@@ -159,3 +159,96 @@ func createZipSlipZip(t *testing.T) string {
 	}
 	return zipPath
 }
+
+// ── resolvePackageRoot 测试 ─────────────────────────────────────────────
+
+func TestResolvePackageRoot_FlatLayout(t *testing.T) {
+	// skill.yaml 直接在根目录
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "skill.yaml"), []byte("name: test\n"), 0o644)
+	got := resolvePackageRoot(dir)
+	if got != dir {
+		t.Errorf("expected %s, got %s", dir, got)
+	}
+}
+
+func TestResolvePackageRoot_WrappedLayout(t *testing.T) {
+	// skill.yaml 在唯一子目录中
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "my-skill")
+	os.MkdirAll(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "skill.yaml"), []byte("name: test\n"), 0o644)
+	got := resolvePackageRoot(dir)
+	if got != sub {
+		t.Errorf("expected %s, got %s", sub, got)
+	}
+}
+
+func TestResolvePackageRoot_WrappedWithMacOSX(t *testing.T) {
+	// skill.yaml 在子目录中，同时有 __MACOSX 垃圾目录
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "my-skill")
+	os.MkdirAll(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "skill.yaml"), []byte("name: test\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "__MACOSX"), 0o755)
+	got := resolvePackageRoot(dir)
+	if got != sub {
+		t.Errorf("expected %s, got %s", sub, got)
+	}
+}
+
+func TestResolvePackageRoot_MultipleDirs(t *testing.T) {
+	// 多个子目录，无法判断，应 fallback
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "a"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "b"), 0o755)
+	got := resolvePackageRoot(dir)
+	if got != dir {
+		t.Errorf("expected fallback to %s, got %s", dir, got)
+	}
+}
+
+func TestResolvePackageRoot_SubdirWithoutYaml(t *testing.T) {
+	// 唯一子目录但没有 skill.yaml
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "empty-skill"), 0o755)
+	got := resolvePackageRoot(dir)
+	if got != dir {
+		t.Errorf("expected fallback to %s, got %s", dir, got)
+	}
+}
+
+func TestResolvePackageRoot_WrappedWithLooseFiles(t *testing.T) {
+	// 子目录 + 根目录有散落文件（非目录），应正常识别子目录
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "my-skill")
+	os.MkdirAll(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "skill.yaml"), []byte("name: test\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{}, 0o644)
+	got := resolvePackageRoot(dir)
+	if got != sub {
+		t.Errorf("expected %s, got %s", sub, got)
+	}
+}
+
+func TestValidatePackage_WrappedLayout(t *testing.T) {
+	// 端到端测试：zip 内有一层目录包裹
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "my-skill")
+	os.MkdirAll(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "skill.yaml"), []byte("name: wrapped\ndescription: test wrapped layout\n"), 0o644)
+
+	result, err := ValidatePackage(dir)
+	if err != nil {
+		t.Fatalf("ValidatePackage error: %v", err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected valid, got errors: %v", result.Errors)
+	}
+	if result.Metadata.Name != "wrapped" {
+		t.Errorf("expected name 'wrapped', got %q", result.Metadata.Name)
+	}
+	if result.PackageRoot != sub {
+		t.Errorf("expected PackageRoot %s, got %s", sub, result.PackageRoot)
+	}
+}

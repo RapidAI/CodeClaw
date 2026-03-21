@@ -12,6 +12,7 @@ const (
 
 type remoteMachineProfile struct {
 	Name           string
+	Nickname       string
 	Platform       string
 	Hostname       string
 	Arch           string
@@ -37,8 +38,10 @@ func (a *App) currentRemoteMachineProfile(heartbeatSec int, activeSessions int) 
 	if err == nil && hostname != "" {
 		name = hostname
 	}
+	cfg, _ := a.LoadConfig()
 	return remoteMachineProfile{
 		Name:           name,
+		Nickname:       cfg.RemoteNickname,
 		Platform:       normalizedRemotePlatform(),
 		Hostname:       hostname,
 		Arch:           goruntime.GOARCH,

@@ -106,6 +106,12 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		imAdapter.DeliverProgress(ctx, platformName, userID, platformUID, text)
 	})
 
+	// 3c. Wire response delivery so the MessageRouter can deliver full
+	//     GenericResponse messages (images, files) individually in broadcast mode.
+	messageRouter.SetResponseDelivery(func(ctx context.Context, userID, platformName, platformUID string, resp *im.GenericResponse) {
+		imAdapter.DeliverResponse(ctx, platformName, userID, platformUID, resp)
+	})
+
 	// 4. Feishu_Plugin
 	feishuPlugin := feishu.NewPlugin(feishuNotifier)
 

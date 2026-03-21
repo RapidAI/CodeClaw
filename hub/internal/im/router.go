@@ -76,12 +76,17 @@ const progressHeartbeat = "__heartbeat__"
 // ProgressDeliveryFunc is called to deliver progress text to a user via IM.
 type ProgressDeliveryFunc func(ctx context.Context, userID, platformName, platformUID, text string)
 
+// ResponseDeliveryFunc is called to deliver a full GenericResponse to a user
+// via IM. Used by routeBroadcast to deliver image/file responses individually.
+type ResponseDeliveryFunc func(ctx context.Context, userID, platformName, platformUID string, resp *GenericResponse)
+
 // MessageRouter replaces the old NL_Router + BridgeExecutor pipeline.
 // It transparently relays IM messages to the user's MaClaw client Agent
 // and waits for the Agent's response.
 type MessageRouter struct {
 	devices          DeviceFinder
 	progressDelivery ProgressDeliveryFunc
+	responseDelivery ResponseDeliveryFunc
 
 	mu          sync.Mutex
 	pendingReqs map[string]*PendingIMRequest // requestID → pending
@@ -139,9 +144,10 @@ func (r *MessageRouter) SelectMachine(ctx context.Context, userID, name string) 
 		for _, m := range machines {
 			names = append(names, m.Name)
 		}
+		guide := fmt.Sprintf("📢 已进入群聊模式\n在线设备：%s\n\n使用方式：\n• 直接发消息 → 所有设备同时回复\n• @昵称 消息 → 只发给指定设备\n• /call <昵称> → 切回单聊\n• /discuss 话题 → 发起多轮讨论\n• /stop → 停止讨论", strings.Join(names, "、"))
 		return MachineSelectResult{
 			OK:      true,
-			Message: fmt.Sprintf("📢 已进入群聊模式，后续消息将发送给所有在线设备：%s\n\n使用 @昵称 消息 可指定某台设备。使用 /call <昵称> 退出群聊。", strings.Join(names, "、")),
+			Message: guide,
 		}
 	}
 
@@ -267,6 +273,13 @@ func (r *MessageRouter) formatMachineList(machines []OnlineMachineInfo) string {
 // updates to users via IM. Called by the Adapter after construction.
 func (r *MessageRouter) SetProgressDelivery(fn ProgressDeliveryFunc) {
 	r.progressDelivery = fn
+}
+
+// SetResponseDelivery configures the function used to deliver full
+// GenericResponse messages to users via IM. Used by routeBroadcast
+// to deliver image/file responses individually.
+func (r *MessageRouter) SetResponseDelivery(fn ResponseDeliveryFunc) {
+	r.responseDelivery = fn
 }
 
 // Stop terminates the background cleanup goroutine.
@@ -468,7 +481,11 @@ func (r *MessageRouter) routeToSingleMachine(ctx context.Context, userID, platfo
 			}
 			gr := resp.ToGenericResponse()
 			if namePrefix != "" {
-				gr.Body = fmt.Sprintf("[%s] %s", namePrefix, gr.Body)
+				if gr.Body != "" {
+					gr.Body = fmt.Sprintf("[%s] %s", namePrefix, gr.Body)
+				} else {
+					gr.Body = fmt.Sprintf("[%s]", namePrefix)
+				}
 			}
 			return gr, nil
 
@@ -523,7 +540,8 @@ func (r *MessageRouter) routeToSingleMachine(ctx context.Context, userID, platfo
 
 // routeBroadcast sends the message to all online machines concurrently and
 // collects responses. Each machine's response/progress is prefixed with
-// [machineName]. Responses are delivered first-come-first-served.
+// [machineName]. Image and file responses are delivered individually via
+// responseDelivery; text-only responses are combined into one message.
 func (r *MessageRouter) routeBroadcast(ctx context.Context, userID, platformName, platformUID, text string, machines []OnlineMachineInfo) (*GenericResponse, error) {
 	// Filter to LLM-configured machines only.
 	var targets []OnlineMachineInfo
@@ -559,27 +577,52 @@ func (r *MessageRouter) routeBroadcast(ctx context.Context, userID, platformName
 		}(m)
 	}
 
-	// Collect all responses.
-	var parts []string
+	// Collect all responses, delivering rich (image/file) ones individually.
+	var textParts []string
 	for range targets {
 		res := <-ch
 		if res.err != nil {
-			parts = append(parts, fmt.Sprintf("[%s] ❌ 错误: %v", res.name, res.err))
-		} else if res.resp != nil {
+			textParts = append(textParts, fmt.Sprintf("[%s] ❌ 错误: %v", res.name, res.err))
+			continue
+		}
+		if res.resp == nil {
+			continue
+		}
+
+		hasImage := res.resp.ImageKey != ""
+		hasFile := res.resp.FileData != "" && res.resp.FileName != ""
+
+		if (hasImage || hasFile) && r.responseDelivery != nil {
+			// Deliver image/file response individually.
+			r.responseDelivery(ctx, userID, platformName, platformUID, res.resp)
+		} else if hasImage || hasFile {
+			// No responseDelivery wired — fallback: mention that media was lost.
+			textParts = append(textParts, fmt.Sprintf("[%s] (图片/文件无法在合并消息中显示)", res.name))
+		} else {
+			// Pure text — collect for combined message.
 			// Body is already prefixed by routeToSingleMachine.
-			parts = append(parts, res.resp.Body)
+			textParts = append(textParts, res.resp.Body)
 		}
 	}
 
 	if len(skipped) > 0 {
-		parts = append(parts, fmt.Sprintf("⚠️ 以下设备 LLM 未配置，已跳过: %s", strings.Join(skipped, "、")))
+		textParts = append(textParts, fmt.Sprintf("⚠️ 以下设备 LLM 未配置，已跳过: %s", strings.Join(skipped, "、")))
+	}
+
+	if len(textParts) == 0 {
+		return &GenericResponse{
+			StatusCode: 200,
+			StatusIcon: "📢",
+			Title:      "群聊回复",
+			Body:       "📢 群聊回复已分别发送",
+		}, nil
 	}
 
 	return &GenericResponse{
 		StatusCode: 200,
 		StatusIcon: "📢",
 		Title:      "群聊回复",
-		Body:       strings.Join(parts, "\n\n"),
+		Body:       strings.Join(textParts, "\n\n"),
 	}, nil
 }
 

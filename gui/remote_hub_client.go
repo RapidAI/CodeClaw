@@ -245,6 +245,7 @@ func (c *RemoteHubClient) sendMachineHelloLocked() error {
 		MachineID: c.machineID,
 		Payload: map[string]interface{}{
 			"name":                   profile.Name,
+			"nickname":               profile.Nickname,
 			"platform":               profile.Platform,
 			"hostname":               profile.Hostname,
 			"arch":                   profile.Arch,
@@ -965,6 +966,24 @@ func (c *RemoteHubClient) SendIMProactiveMessage(text string) error {
 		MachineID: c.machineID,
 		Payload: map[string]string{
 			"text": text,
+		},
+	}
+	return c.conn.WriteJSON(msg)
+}
+
+// SendNicknameUpdate sends a runtime nickname change to the Hub.
+func (c *RemoteHubClient) SendNicknameUpdate(nickname string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return nil
+	}
+	msg := HubEnvelope{
+		Type:      "machine.nickname_update",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		Payload: map[string]string{
+			"nickname": nickname,
 		},
 	}
 	return c.conn.WriteJSON(msg)

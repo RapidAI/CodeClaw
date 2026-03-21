@@ -154,6 +154,11 @@ func (s *Service) MarkOnline(ctx context.Context, machineID string, hello ws.Mac
 	info.Arch = strings.TrimSpace(hello.Arch)
 	info.AppVersion = strings.TrimSpace(hello.AppVersion)
 	info.HeartbeatIntervalSec = normalizeHeartbeatInterval(hello.HeartbeatIntervalSec)
+	// Apply nickname from hello payload (persisted on client side).
+	if nn := strings.TrimSpace(hello.Nickname); nn != "" {
+		info.Alias = nn
+		log.Printf("[device] MarkOnline: nickname=%q for machine_id=%s", nn, machineID)
+	}
 	info.Online = true
 	info.Status = "online"
 	info.LastSeenAt = &now
@@ -311,6 +316,18 @@ func (s *Service) SendToMachine(machineID string, msg any) error {
 func (s *Service) FindOnlineMachineByName(userID, name string) (machineID string, found bool) {
 	s.runtime.mu.RLock()
 	defer s.runtime.mu.RUnlock()
+	// First pass: match Alias (priority).
+	for mid, conn := range s.runtime.desktopsByMachine {
+		if conn == nil || conn.Conn == nil || conn.UserID != userID {
+			continue
+		}
+		if meta, ok := s.runtime.metadataByMachine[mid]; ok {
+			if meta.Alias != "" && strings.EqualFold(meta.Alias, name) {
+				return mid, true
+			}
+		}
+	}
+	// Second pass: match Name (fallback).
 	for mid, conn := range s.runtime.desktopsByMachine {
 		if conn == nil || conn.Conn == nil || conn.UserID != userID {
 			continue
@@ -337,6 +354,7 @@ func (s *Service) ListOnlineMachines() []MachineRuntimeInfo {
 		}
 		if meta, ok := s.runtime.metadataByMachine[machineID]; ok {
 			info.Name = meta.Name
+			info.Alias = meta.Alias
 			info.Platform = meta.Platform
 			info.Hostname = meta.Hostname
 			info.Arch = meta.Arch
@@ -504,6 +522,17 @@ func (s *Service) RenameMachine(ctx context.Context, machineID string, alias str
 		return errors.New("no repository configured")
 	}
 	return s.repo.UpdateAlias(ctx, machineID, alias)
+}
+
+// UpdateRuntimeAlias sets the runtime-only Alias for a machine (not persisted to DB).
+// Used by the machine.nickname_update WebSocket message.
+func (s *Service) UpdateRuntimeAlias(machineID string, alias string) {
+	s.runtime.mu.Lock()
+	defer s.runtime.mu.Unlock()
+	info := s.runtime.metadataByMachine[machineID]
+	info.Alias = alias
+	s.runtime.metadataByMachine[machineID] = info
+	log.Printf("[device] UpdateRuntimeAlias: machine_id=%s alias=%q", machineID, alias)
 }
 
 func (s *Service) ClearOfflineMachines(ctx context.Context) (int64, error) {

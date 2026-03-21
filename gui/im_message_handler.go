@@ -4079,6 +4079,31 @@ func (h *IMMessageHandler) toolSetMaxIterations(args map[string]interface{}) str
 }
 
 // ---------------------------------------------------------------------------
+// Nickname (set_nickname) tool
+// ---------------------------------------------------------------------------
+
+func (h *IMMessageHandler) toolSetNickname(args map[string]interface{}) string {
+	nickname := strings.TrimSpace(stringVal(args, "nickname"))
+	if nickname == "" {
+		return "❌ nickname 不能为空"
+	}
+	// Persist to local config.
+	cfg, err := h.app.LoadConfig()
+	if err == nil {
+		cfg.RemoteNickname = nickname
+		_ = h.app.SaveConfig(cfg)
+	}
+	// Send to Hub via WebSocket.
+	if hc := h.app.hubClient(); hc != nil {
+		if err := hc.SendNicknameUpdate(nickname); err != nil {
+			log.Printf("[set_nickname] SendNicknameUpdate error: %v", err)
+			return fmt.Sprintf("⚠️ 昵称已保存到本地（%s），但上报 Hub 失败：%v", nickname, err)
+		}
+	}
+	return fmt.Sprintf("✅ 昵称已更新为「%s」，Hub 已同步。", nickname)
+}
+
+// ---------------------------------------------------------------------------
 // LLM provider switch tool
 // ---------------------------------------------------------------------------
 

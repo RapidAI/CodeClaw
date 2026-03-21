@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -147,6 +148,7 @@ func (c *ConnContext) writeLoop() {
 
 type MachineHelloPayload struct {
 	Name                 string         `json:"name"`
+	Nickname             string         `json:"nickname,omitempty"`
 	Platform             string         `json:"platform"`
 	Hostname             string         `json:"hostname,omitempty"`
 	Arch                 string         `json:"arch,omitempty"`
@@ -168,6 +170,7 @@ type DeviceBinder interface {
 	MarkOnline(ctx context.Context, machineID string, hello MachineHelloPayload) error
 	Heartbeat(ctx context.Context, machineID string, heartbeat MachineHeartbeatPayload) error
 	SendToMachine(machineID string, msg any) error
+	UpdateRuntimeAlias(machineID string, alias string)
 }
 
 type SessionService interface {
@@ -434,6 +437,10 @@ func (g *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 			}
 		case "im.gateway_message":
 			if err := g.handleIMGatewayMessage(ctx, msg); err != nil {
+				return
+			}
+		case "machine.nickname_update":
+			if err := g.handleMachineNicknameUpdate(ctx, msg); err != nil {
 				return
 			}
 		default:
@@ -1209,4 +1216,21 @@ func writeWSError(conn *websocket.Conn, code, message string) error {
 
 func writeAck(conn *websocket.Conn, requestID string) error {
 	return conn.WriteJSON(map[string]any{"type": "ack", "request_id": requestID, "payload": map[string]any{"ok": true}})
+}
+
+// handleMachineNicknameUpdate processes a runtime nickname change from a machine.
+func (g *Gateway) handleMachineNicknameUpdate(ctx *ConnContext, msg Envelope) error {
+	if ctx.Role != "machine" {
+		return writeWSError(ctx.Conn, "FORBIDDEN", "Machine role required")
+	}
+	var payload struct {
+		Nickname string `json:"nickname"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return writeWSError(ctx.Conn, "INVALID_MESSAGE", "Invalid machine.nickname_update payload")
+	}
+	nickname := strings.TrimSpace(payload.Nickname)
+	log.Printf("[ws] handleMachineNicknameUpdate: machine_id=%s nickname=%q", ctx.MachineID, nickname)
+	g.Devices.UpdateRuntimeAlias(ctx.MachineID, nickname)
+	return writeAck(ctx.Conn, msg.RequestID)
 }
