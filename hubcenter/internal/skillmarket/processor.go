@@ -99,22 +99,22 @@ func (p *Processor) processOne(ctx context.Context, subID string) error {
 		for _, e := range result.Errors {
 			msgs = append(msgs, e.String())
 		}
-		return p.failSubmission(ctx, sub, strings.Join(msgs, "; "))
+		return p.failSubmissionWithMeta(ctx, sub, result.Metadata, strings.Join(msgs, "; "))
 	}
 
 	// 安全扫描
 	pkgRoot := result.PackageRoot
+	meta := result.Metadata
 	secReport, err := ScanPackage(pkgRoot)
 	if err != nil {
 		log.Printf("[skillmarket] security scan error for %s: %v", subID, err)
 	}
 	if HasHardcodedSecrets(secReport) {
-		return p.failSubmission(ctx, sub, "security scan failed: hardcoded secrets detected")
+		return p.failSubmissionWithMeta(ctx, sub, meta, "security scan failed: hardcoded secrets detected")
 	}
 	securityLabels := GenerateLabels(secReport)
 
 	// 构建 HubSkillFull 并发布
-	meta := result.Metadata
 	skillID := generateID()
 
 	if len(securityLabels) > 0 {
@@ -183,7 +183,7 @@ func (p *Processor) processOne(ctx context.Context, subID string) error {
 	})
 
 	if err := p.skillStore.Publish(full); err != nil {
-		return p.failSubmission(ctx, sub, fmt.Sprintf("publish failed: %v", err))
+		return p.failSubmissionWithMeta(ctx, sub, meta, fmt.Sprintf("publish failed: %v", err))
 	}
 
 	// 标记成功
@@ -202,17 +202,57 @@ func (p *Processor) processOne(ctx context.Context, subID string) error {
 	}
 
 	// 发送成功通知邮件
-	p.sendNotification(ctx, sub.Email, "SkillMarket: Skill Submitted",
-		fmt.Sprintf("Your skill \"%s\" (v%d) has entered trial period.\nSkill ID: %s", meta.Name, versionNum, skillID))
+	p.sendNotification(ctx, sub.Email, fmt.Sprintf("SkillMarket: Skill Submitted - %s (v%d)", meta.Name, versionNum),
+		formatSkillNotificationBody(meta, skillID, versionNum))
 
 	return nil
 }
 
 func (p *Processor) failSubmission(ctx context.Context, sub *SkillSubmission, errMsg string) error {
+	return p.failSubmissionWithMeta(ctx, sub, nil, errMsg)
+}
+
+func (p *Processor) failSubmissionWithMeta(ctx context.Context, sub *SkillSubmission, meta *SkillMetadata, errMsg string) error {
 	_ = p.store.UpdateSubmissionStatus(ctx, sub.ID, "failed", errMsg, "")
-	p.sendNotification(ctx, sub.Email, "SkillMarket: Submission Failed",
-		fmt.Sprintf("Your skill submission failed.\nReason: %s", errMsg))
+	subject := "SkillMarket: Submission Failed"
+	body := fmt.Sprintf("Your skill submission failed.\nReason: %s", errMsg)
+	if meta != nil {
+		subject = fmt.Sprintf("SkillMarket: Submission Failed - %s", meta.Name)
+		body = fmt.Sprintf("Your skill \"%s\" submission failed.\nReason: %s", meta.Name, errMsg)
+		if meta.Description != "" {
+			body += fmt.Sprintf("\nDescription: %s", meta.Description)
+		}
+	}
+	p.sendNotification(ctx, sub.Email, subject, body)
 	return fmt.Errorf("submission %s failed: %s", sub.ID, errMsg)
+}
+
+// formatSkillNotificationBody 构建详细的 skill 上传成功通知邮件内容。
+func formatSkillNotificationBody(meta *SkillMetadata, skillID string, version int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Your skill has entered trial period.\n\n")
+	fmt.Fprintf(&b, "Name: %s\n", meta.Name)
+	fmt.Fprintf(&b, "Version: %d\n", version)
+	fmt.Fprintf(&b, "Skill ID: %s\n", skillID)
+	if meta.Description != "" {
+		fmt.Fprintf(&b, "Description: %s\n", meta.Description)
+	}
+	if meta.Author != "" {
+		fmt.Fprintf(&b, "Author: %s\n", meta.Author)
+	}
+	if len(meta.Tags) > 0 {
+		fmt.Fprintf(&b, "Tags: %s\n", strings.Join(meta.Tags, ", "))
+	}
+	if len(meta.Platforms) > 0 {
+		fmt.Fprintf(&b, "Platforms: %s\n", strings.Join(meta.Platforms, ", "))
+	}
+	if len(meta.Permissions) > 0 {
+		fmt.Fprintf(&b, "Permissions: %s\n", strings.Join(meta.Permissions, ", "))
+	}
+	if len(meta.Triggers) > 0 {
+		fmt.Fprintf(&b, "Triggers: %s\n", strings.Join(meta.Triggers, ", "))
+	}
+	return b.String()
 }
 
 func (p *Processor) sendNotification(ctx context.Context, to, subject, body string) {

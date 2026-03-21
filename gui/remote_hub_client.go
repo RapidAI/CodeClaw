@@ -656,6 +656,8 @@ func (c *RemoteHubClient) readLoop() {
 			go c.handleIMGatewayReply(msg)
 		case "im.gateway_claim_result":
 			c.handleIMGatewayClaimResult(msg)
+		case "machine.nickname_assigned":
+			c.handleNicknameAssigned(msg)
 		}
 	}
 }
@@ -887,6 +889,30 @@ func (c *RemoteHubClient) handleIMGatewayClaimResult(msg inboundHubEnvelope) {
 		log.Printf("[hub-client] gateway claim DENIED for platform=%s: %s", payload.Platform, payload.Reason)
 	}
 }
+
+func (c *RemoteHubClient) handleNicknameAssigned(msg inboundHubEnvelope) {
+	var payload struct {
+		Nickname string `json:"nickname"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return
+	}
+	nickname := strings.TrimSpace(payload.Nickname)
+	if nickname == "" {
+		return
+	}
+	log.Printf("[hub-client] nickname assigned by Hub: %q", nickname)
+	cfg, err := c.app.LoadConfig()
+	if err != nil {
+		return
+	}
+	// Only save if no nickname was previously set (don't overwrite user choice).
+	if cfg.RemoteNickname == "" {
+		cfg.RemoteNickname = nickname
+		_ = c.app.SaveConfig(cfg)
+	}
+}
+
 
 // sendIMAgentResponse sends the Agent's reply back to Hub.
 func (c *RemoteHubClient) sendIMAgentResponse(requestID string, resp *IMAgentResponse) error {

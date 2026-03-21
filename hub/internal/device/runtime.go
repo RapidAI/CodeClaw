@@ -41,6 +41,11 @@ type Runtime struct {
 type Service struct {
 	repo    MachineRepository
 	runtime *Runtime
+
+	// OnMultiDeviceOnline is called (in a goroutine) when a user's second
+	// device comes online. The callback receives the userID and a list of
+	// all online machine display names. Used to push IM usage guidance.
+	OnMultiDeviceOnline func(userID string, machineNames []string)
 }
 
 func (s *Service) IsMachineOnline(machineID string) bool {
@@ -155,9 +160,18 @@ func (s *Service) MarkOnline(ctx context.Context, machineID string, hello ws.Mac
 	info.AppVersion = strings.TrimSpace(hello.AppVersion)
 	info.HeartbeatIntervalSec = normalizeHeartbeatInterval(hello.HeartbeatIntervalSec)
 	// Apply nickname from hello payload (persisted on client side).
+	var assignedNickname string
 	if nn := strings.TrimSpace(hello.Nickname); nn != "" {
 		info.Alias = nn
 		log.Printf("[device] MarkOnline: nickname=%q for machine_id=%s", nn, machineID)
+	} else if info.Alias == "" {
+		// No nickname provided and none previously set — auto-assign one
+		// so the device has a stable identity in IM from the start.
+		assignedNickname = s.pickNicknameLocked(machineID, conn)
+		if assignedNickname != "" {
+			info.Alias = assignedNickname
+			log.Printf("[device] MarkOnline: auto-assigned nickname=%q for machine_id=%s", assignedNickname, machineID)
+		}
 	}
 	info.Online = true
 	info.Status = "online"
@@ -171,7 +185,7 @@ func (s *Service) MarkOnline(ctx context.Context, machineID string, hello ws.Mac
 
 	// Check for name conflict among same-user online machines.
 	var conflictWith string
-	if conn != nil && info.Name != "" {
+	if conn != nil && info.Name != "" && assignedNickname == "" {
 		for otherID, otherConn := range s.runtime.desktopsByMachine {
 			if otherID == machineID || otherConn == nil || otherConn.Conn == nil {
 				continue
@@ -197,7 +211,36 @@ func (s *Service) MarkOnline(ctx context.Context, machineID string, hello ws.Mac
 		Type:      "online",
 		Message:   "machine marked online",
 	})
+
+	// Count online machines for the same user (for multi-device guide).
+	var onlineNames []string
+	if conn != nil {
+		for otherID, otherConn := range s.runtime.desktopsByMachine {
+			if otherConn == nil || otherConn.Conn == nil || otherConn.UserID != conn.UserID {
+				continue
+			}
+			if otherMeta, ok := s.runtime.metadataByMachine[otherID]; ok && otherMeta.Online {
+				name := otherMeta.Alias
+				if name == "" {
+					name = otherMeta.Name
+				}
+				onlineNames = append(onlineNames, name)
+			}
+		}
+	}
+
 	s.runtime.mu.Unlock()
+
+	// Notify the machine about its auto-assigned nickname so it can
+	// remember it and report it on subsequent connections.
+	if assignedNickname != "" {
+		_ = s.SendToMachine(machineID, map[string]any{
+			"type": "machine.nickname_assigned",
+			"payload": map[string]any{
+				"nickname": assignedNickname,
+			},
+		})
+	}
 
 	// Notify the machine about name conflict via WebSocket (non-blocking).
 	if conflictWith != "" {
@@ -209,6 +252,12 @@ func (s *Service) MarkOnline(ctx context.Context, machineID string, hello ws.Mac
 				"message": fmt.Sprintf("昵称 %q 已被您的另一台在线设备使用，请修改昵称以便通过 IM 区分设备。", conflictWith),
 			},
 		})
+	}
+
+	// When the second device comes online, push a usage guide to the user's IM.
+	if len(onlineNames) == 2 && s.OnMultiDeviceOnline != nil {
+		userID := safeConnUserID(conn)
+		go s.OnMultiDeviceOnline(userID, onlineNames)
 	}
 
 	if s.repo == nil {
@@ -634,6 +683,45 @@ func defaultMachinePlatform(v string) string {
 		return "unknown"
 	}
 	return strings.TrimSpace(v)
+}
+
+// defaultNicknames is the pool of friendly Chinese nicknames auto-assigned
+// to machines that connect without a nickname.
+var defaultNicknames = []string{"张三", "李四", "王五", "赵六", "孙七"}
+
+// pickNicknameLocked selects a nickname for the given machine from the pool,
+// avoiding names already used by other online machines of the same user.
+// Must be called with s.runtime.mu held.
+func (s *Service) pickNicknameLocked(machineID string, conn *ws.ConnContext) string {
+	if conn == nil {
+		return ""
+	}
+	used := make(map[string]bool)
+	for otherID, otherConn := range s.runtime.desktopsByMachine {
+		if otherID == machineID || otherConn == nil || otherConn.Conn == nil {
+			continue
+		}
+		if otherConn.UserID != conn.UserID {
+			continue
+		}
+		if otherMeta, ok := s.runtime.metadataByMachine[otherID]; ok {
+			if otherMeta.Alias != "" {
+				used[otherMeta.Alias] = true
+			}
+		}
+	}
+	for _, n := range defaultNicknames {
+		if !used[n] {
+			return n
+		}
+	}
+	// Fallback: 助手N
+	for i := len(defaultNicknames) + 1; ; i++ {
+		n := fmt.Sprintf("助手%d", i)
+		if !used[n] {
+			return n
+		}
+	}
 }
 
 func normalizeHeartbeatInterval(v int) int {

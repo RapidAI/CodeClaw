@@ -233,6 +233,11 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 			})
 			return
 		}
+		// If a discussion is running, stop it before switching device.
+		if a.messageRouter.IsInDiscussion(unifiedID) {
+			a.messageRouter.StopDiscussion(unifiedID)
+		}
+
 		result := a.messageRouter.SelectMachine(ctx, unifiedID, name)
 		icon := "✅"
 		code := 200
@@ -345,6 +350,10 @@ func (a *Adapter) DeliverProgress(ctx context.Context, platformName, userID, pla
 		return
 	}
 
+	// Progress messages are always sent as plain text; strip Markdown
+	// so users don't see raw formatting marks.
+	text = stripMarkdown(text)
+
 	target := UserTarget{PlatformUID: platformUID, UnifiedUserID: userID}
 	if err := plugin.SendText(ctx, target, text); err != nil {
 		log.Printf("[IM Adapter] DeliverProgress SendText failed for %s: %v", platformName, err)
@@ -439,6 +448,11 @@ func (a *Adapter) sendResponse(ctx context.Context, plugin IMPlugin, target User
 	text := out.FallbackText
 	if text == "" {
 		text = resp.ToFallbackText()
+	}
+
+	// Strip Markdown when the platform doesn't render it.
+	if !caps.SupportsMarkdown {
+		text = stripMarkdown(text)
 	}
 
 	// Truncate if platform has a max text length.

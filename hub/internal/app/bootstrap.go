@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
 	"github.com/RapidAI/CodeClaw/hub/internal/center"
@@ -195,6 +196,23 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	//     non-request-based messages (e.g. scheduled task results) to users.
 	proactiveSender := im.NewProactiveSender(broadcaster, &userEmailLookup{users: st.Users})
 	gateway.SetIMProactiveSender(proactiveSender)
+
+	// When a user's second device comes online, push a multi-device usage
+	// guide to their IM so they know how to switch between machines.
+	deviceService.OnMultiDeviceOnline = func(userID string, machineNames []string) {
+		names := strings.Join(machineNames, "、")
+		guide := fmt.Sprintf("🖥️ 您有 %d 台设备同时在线：%s\n\n"+
+			"使用方式：\n"+
+			"• /call <昵称> — 切换到指定设备\n"+
+			"• /call all — 进入群聊模式（所有设备同时回复）\n"+
+			"• /machines — 查看在线设备列表\n"+
+			"• /discuss <话题> — 让多台设备 AI 讨论\n\n"+
+			"当前默认与第一台上线的设备交流，发送 /call <昵称> 切换。",
+			len(machineNames), names)
+		if err := proactiveSender.SendProactiveMessage(context.Background(), userID, guide); err != nil {
+			log.Printf("[bootstrap] multi-device guide send failed for user=%s: %v", userID, err)
+		}
+	}
 
 	// Wire login link broadcaster into identity service so PWA login
 	// confirmation links are also sent to bound IM channels.
