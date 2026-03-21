@@ -47,19 +47,23 @@ interface AutoCompressStatus {
 
 const CATEGORIES = [
     { value: "", label: { zh: "全部", en: "All" } },
+    { value: "self_identity", label: { zh: "自我认知", en: "Self Identity" } },
     { value: "user_fact", label: { zh: "用户事实", en: "User Fact" } },
     { value: "preference", label: { zh: "偏好设置", en: "Preference" } },
     { value: "project_knowledge", label: { zh: "项目知识", en: "Project" } },
     { value: "instruction", label: { zh: "指令", en: "Instruction" } },
     { value: "conversation_summary", label: { zh: "对话摘要", en: "Summary" } },
+    { value: "session_checkpoint", label: { zh: "会话检查点", en: "Checkpoint" } },
 ] as const;
 
 const CATEGORY_COLORS: Record<string, string> = {
+    self_identity: "#e11d48",
     user_fact: "#6366f1",
     preference: "#0891b2",
     project_knowledge: "#059669",
     instruction: "#d97706",
     conversation_summary: "#8b5cf6",
+    session_checkpoint: "#64748b",
 };
 
 type Props = { lang: string };
@@ -377,31 +381,29 @@ function TimeMachineTab({ t, isZh, onDataChanged }: TimeMachineProps) {
         try {
             const next = !autoEnabled;
             await SetAutoCompress(next);
-            setTimeout(() => {
-                setAutoEnabled(next);
-                setToggling(false);
-                if (next) {
-                    clearTimeout(autoRefreshTimer.current);
-                    autoRefreshTimer.current = setTimeout(async () => { await loadBackups(); await loadStatus(); onDataChanged(); }, 2000);
-                }
-            }, 0);
-        } catch (e) { setTimeout(() => { setError(String(e)); setToggling(false); }, 0); }
+            setAutoEnabled(next);
+            if (next) {
+                clearTimeout(autoRefreshTimer.current);
+                autoRefreshTimer.current = setTimeout(async () => { await loadBackups(); await loadStatus(); onDataChanged(); }, 2000);
+            }
+        } catch (e) {
+            setError(String(e));
+        } finally {
+            setToggling(false);
+        }
     };
 
     const handleCompress = async () => {
         setCompressing(true); setError(""); setCompressResult(null);
         try {
             const result = await CompressMemories();
-            // Wails Go→JS bridge may resolve outside React's scheduling batch,
-            // so wrap state updates in setTimeout to guarantee a re-render.
-            setTimeout(() => {
-                setCompressResult(result as CompressResult);
-                setCompressing(false);
-                loadBackups();
-                onDataChanged();
-            }, 0);
+            setCompressResult(result as CompressResult);
+            loadBackups();
+            onDataChanged();
         } catch (e) {
-            setTimeout(() => { setError(String(e)); setCompressing(false); }, 0);
+            setError(String(e));
+        } finally {
+            setCompressing(false);
         }
     };
 
@@ -409,18 +411,16 @@ function TimeMachineTab({ t, isZh, onDataChanged }: TimeMachineProps) {
         setError("");
         try {
             await RestoreMemoryBackup(name);
-            setTimeout(() => {
-                setRestoreTarget(null);
-                loadBackups();
-                onDataChanged();
-            }, 0);
-        } catch (e) { setTimeout(() => setError(String(e)), 0); }
+            setRestoreTarget(null);
+            loadBackups();
+            onDataChanged();
+        } catch (e) { setError(String(e)); }
     };
 
     const handleDeleteBackup = async (name: string) => {
         setError("");
-        try { await DeleteMemoryBackup(name); setTimeout(() => { setDeleteTarget(null); loadBackups(); }, 0); }
-        catch (e) { setTimeout(() => setError(String(e)), 0); }
+        try { await DeleteMemoryBackup(name); setDeleteTarget(null); loadBackups(); }
+        catch (e) { setError(String(e)); }
     };
 
     return (

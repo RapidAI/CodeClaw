@@ -42,11 +42,33 @@ func serveStaticIndexFallback(w http.ResponseWriter, r *http.Request, staticDir 
 	}
 
 	candidate := filepath.Join(staticDir, filepath.FromSlash(relPath))
-	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-		http.ServeFile(w, r, candidate)
+
+	// Prevent path traversal: ensure candidate stays within staticDir.
+	absStatic, err := filepath.Abs(staticDir)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	absCandidate, err := filepath.Abs(candidate)
+	if err != nil || !strings.HasPrefix(absCandidate, absStatic+string(filepath.Separator)) && absCandidate != absStatic {
+		http.NotFound(w, r)
 		return
 	}
 
+	if info, err := os.Stat(candidate); err == nil {
+		if !info.IsDir() {
+			http.ServeFile(w, r, candidate)
+			return
+		}
+		// Directory: try its index.html
+		dirIndex := filepath.Join(candidate, "index.html")
+		if _, err := os.Stat(dirIndex); err == nil {
+			http.ServeFile(w, r, dirIndex)
+			return
+		}
+	}
+
+	// Fallback to root index.html (SPA-style)
 	if _, err := os.Stat(indexPath); err == nil {
 		http.ServeFile(w, r, indexPath)
 		return

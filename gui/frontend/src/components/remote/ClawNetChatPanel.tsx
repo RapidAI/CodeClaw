@@ -11,6 +11,13 @@ import {
 import { colors } from "./styles";
 import { cnCard, cnLabel, cnInput, cnActionBtn, cnTabStyle } from "./clawnetStyles";
 
+const FAV_STORAGE_KEY = "clawnet_fav_topics";
+const FAV_LIMIT = 5;
+
+function readFavs(): string[] {
+    try { return JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || "[]"); } catch { return []; }
+}
+
 type Props = { lang: string; clawNetRunning: boolean };
 
 export function ClawNetChatPanel({ lang, clawNetRunning }: Props) {
@@ -34,6 +41,29 @@ export function ClawNetChatPanel({ lang, clawNetRunning }: Props) {
     const [showNewTopic, setShowNewTopic] = useState(false);
     const [newTopicName, setNewTopicName] = useState("");
     const [newTopicDesc, setNewTopicDesc] = useState("");
+
+    // Favorites state
+    const [favTopics, setFavTopics] = useState<string[]>(readFavs);
+    const persistFavs = useCallback((next: string[]) => {
+        setFavTopics(next);
+        localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(next));
+    }, []);
+    const toggleFav = useCallback((name: string) => {
+        setFavTopics(prev => {
+            if (prev.includes(name)) {
+                const next = prev.filter(n => n !== name);
+                localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(next));
+                return next;
+            }
+            if (prev.length >= FAV_LIMIT) {
+                alert(zh ? `收藏已满（最多${FAV_LIMIT}个），请先去掉旧的收藏` : `Favorites full (max ${FAV_LIMIT}). Remove an old one first.`);
+                return prev;
+            }
+            const next = [...prev, name];
+            localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(next));
+            return next;
+        });
+    }, [zh]);
 
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
@@ -168,8 +198,16 @@ export function ClawNetChatPanel({ lang, clawNetRunning }: Props) {
 
             {tab === "topics" && !activeTopic && (
                 <>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", gap: "6px" }}>
                         <button style={cnActionBtn()} onClick={() => setShowNewTopic(!showNewTopic)}>{showNewTopic ? (zh ? "取消" : "Cancel") : (zh ? "创建频道" : "New Topic")}</button>
+                        <div style={{ flex: 1, display: "flex", gap: "4px", overflow: "hidden", flexWrap: "wrap" }}>
+                            {favTopics.map(fn => (
+                                <button key={fn} style={{ padding: "2px 8px", fontSize: "0.68rem", borderRadius: "999px", border: "1px solid rgba(47,128,237,.25)", background: "rgba(47,128,237,.08)", color: colors.primary || "#2c6fca", cursor: "pointer", whiteSpace: "nowrap", lineHeight: "1.6" }}
+                                    onClick={() => loadTopicMsgs(fn)} title={fn}>
+                                    ★ {fn.length > 10 ? fn.slice(0, 10) + "…" : fn}
+                                </button>
+                            ))}
+                        </div>
                         <button style={cnActionBtn(loading)} onClick={loadTopics} disabled={loading}>{zh ? "刷新" : "Refresh"}</button>
                     </div>
                     {showNewTopic && (
@@ -180,12 +218,23 @@ export function ClawNetChatPanel({ lang, clawNetRunning }: Props) {
                         </div>
                     )}
                     {loading && <div style={cnLabel}>{zh ? "加载中..." : "Loading..."}</div>}
-                    {topics.map((t: any, i: number) => (
-                        <div key={i} style={{ ...cnCard, cursor: "pointer" }} onClick={() => loadTopicMsgs(t.name || t.id || "")}>
-                            <div style={{ fontSize: "0.74rem", fontWeight: 600, color: colors.text }}>{t.name || t.id}</div>
-                            {t.description && <div style={{ fontSize: "0.7rem", color: colors.textMuted }}>{t.description}</div>}
-                        </div>
-                    ))}
+                    {topics.map((t: any, i: number) => {
+                        const topicKey = t.name || t.id || "";
+                        const isFav = favTopics.includes(topicKey);
+                        return (
+                            <div key={i} style={{ ...cnCard, cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
+                                <div style={{ flex: 1, overflow: "hidden" }} onClick={() => loadTopicMsgs(topicKey)}>
+                                    <div style={{ fontSize: "0.74rem", fontWeight: 600, color: colors.text }}>{t.name || t.id}</div>
+                                    {t.description && <div style={{ fontSize: "0.7rem", color: colors.textMuted }}>{t.description}</div>}
+                                </div>
+                                <button onClick={(e) => { e.stopPropagation(); toggleFav(topicKey); }}
+                                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.85rem", padding: "2px 4px", flexShrink: 0, color: isFav ? "#e6a817" : colors.textMuted || "#999", lineHeight: 1 }}
+                                    title={isFav ? (zh ? "取消收藏" : "Unfavorite") : (zh ? "收藏" : "Favorite")}>
+                                    {isFav ? "★" : "☆"}
+                                </button>
+                            </div>
+                        );
+                    })}
                     {!loading && topics.length === 0 && <div style={cnLabel}>{zh ? "暂无频道" : "No topics"}</div>}
                 </>
             )}

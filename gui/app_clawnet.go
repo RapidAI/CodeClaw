@@ -1351,10 +1351,18 @@ func (a *App) ClawNetNutshellStatus() map[string]interface{} {
 
 // ClawNetNutshellInstall installs the nutshell CLI via clawnet.
 func (a *App) ClawNetNutshellInstall() map[string]interface{} {
-	if err := a.nutshellMgr().Install(); err != nil {
-		return map[string]interface{}{"ok": false, "error": err.Error()}
+	emitter := func(stage string, pct int, msg string) {
+		a.emitEvent("nutshell-install-progress", map[string]interface{}{
+			"stage":   stage,
+			"percent": pct,
+			"message": msg,
+		})
 	}
-	return map[string]interface{}{"ok": true}
+	path, err := a.nutshellMgr().InstallWithProgress(emitter)
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": err.Error(), "manualPath": clawnet.NutshellBinaryPath()}
+	}
+	return map[string]interface{}{"ok": true, "path": path}
 }
 
 // ClawNetNutshellInit initializes a new nutshell bundle in the given directory.

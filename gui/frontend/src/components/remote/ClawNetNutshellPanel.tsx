@@ -10,6 +10,7 @@ import {
     ClawNetNutshellPack,
     ClawNetNutshellUnpack,
 } from "../../../wailsjs/go/main/App";
+import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
 import { colors } from "./styles";
 import { cnCard, cnLabel, cnHeading, cnInput, cnActionBtn, cnTabStyle } from "./clawnetStyles";
 
@@ -22,6 +23,8 @@ export function ClawNetNutshellPanel({ lang, clawNetRunning }: Props) {
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState("");
     const [output, setOutput] = useState("");
+    const [dlProgress, setDlProgress] = useState<{ stage: string; percent: number; message: string } | null>(null);
+    const [manualPath, setManualPath] = useState("");
     const [tab, setTab] = useState<"publish" | "claim" | "pack">("publish");
 
     // Publish form
@@ -58,15 +61,39 @@ export function ClawNetNutshellPanel({ lang, clawNetRunning }: Props) {
 
     useEffect(() => { checkStatus(); }, [checkStatus]);
 
+    useEffect(() => {
+        EventsOn("nutshell-install-progress", (data: any) => {
+            if (data && typeof data === "object") {
+                setDlProgress({ stage: data.stage, percent: data.percent ?? 0, message: data.message ?? "" });
+                if (data.stage === "done") {
+                    setTimeout(() => setDlProgress(null), 1500);
+                }
+            }
+        });
+        return () => { EventsOff("nutshell-install-progress"); };
+    }, []);
+
     const handleInstall = async () => {
-        setBusy(true); setOutput("");
+        setBusy(true); setOutput(""); setMsg(""); setManualPath("");
+        setDlProgress({ stage: "downloading", percent: 0, message: zh ? "准备下载..." : "Preparing..." });
         try {
             const res = await ClawNetNutshellInstall();
             if (!mountedRef.current) return;
             if (res.ok) { showMsg(zh ? "✅ Nutshell 已安装" : "✅ Nutshell installed"); checkStatus(); }
-            else showMsg(`❌ ${res.error}`);
+            else {
+                const errStr = res.error || "";
+                const isNotAvailable = errStr.includes("nutshell-not-available") || errStr.includes("not available");
+                if (isNotAvailable) {
+                    setManualPath(res.manualPath || "");
+                    showMsg(zh
+                        ? "❌ 当前平台暂无预编译的 Nutshell 二进制"
+                        : "❌ No prebuilt Nutshell binary for your platform", 30000);
+                } else {
+                    showMsg(`❌ ${errStr}`);
+                }
+            }
         } catch (e: any) { showMsg(`❌ ${e.message}`); }
-        if (mountedRef.current) setBusy(false);
+        if (mountedRef.current) { setBusy(false); setDlProgress(null); }
     };
 
     const runAction = async (label: string, fn: () => Promise<any>) => {
@@ -92,10 +119,47 @@ export function ClawNetNutshellPanel({ lang, clawNetRunning }: Props) {
                 <div style={{ fontSize: "0.72rem", color: colors.textMuted, marginBottom: "12px" }}>
                     {zh ? "Nutshell 是 ClawNet 的任务打包工具" : "Nutshell packages AI task context into .nut bundles"}
                 </div>
+
+                {/* Progress bar during download */}
+                {dlProgress && dlProgress.stage === "downloading" && (
+                    <div style={{ margin: "12px auto", maxWidth: "260px" }}>
+                        <div style={{ background: colors.bg, borderRadius: "4px", height: "8px", overflow: "hidden", marginBottom: "6px" }}>
+                            <div style={{
+                                background: colors.primary,
+                                height: "100%",
+                                width: `${dlProgress.percent}%`,
+                                borderRadius: "4px",
+                                transition: "width 0.3s ease",
+                            }} />
+                        </div>
+                        <div style={{ fontSize: "0.68rem", color: colors.textMuted }}>{dlProgress.message}</div>
+                    </div>
+                )}
+
                 <button style={cnActionBtn(busy)} onClick={handleInstall} disabled={busy}>
-                    {busy ? "..." : (zh ? "安装 Nutshell" : "Install Nutshell")}
+                    {busy ? (zh ? "下载中..." : "Downloading...") : (zh ? "安装 Nutshell" : "Install Nutshell")}
                 </button>
+
                 {msg && <div style={{ fontSize: "0.72rem", marginTop: "8px", color: msg.startsWith("✅") ? colors.success : colors.danger }}>{msg}</div>}
+
+                {/* Friendly fallback when binary not available for this platform */}
+                {manualPath && (
+                    <div style={{ marginTop: "12px", padding: "10px", background: colors.bg, borderRadius: "6px", textAlign: "left", fontSize: "0.68rem", color: colors.textSecondary, lineHeight: 1.6 }}>
+                        <div style={{ marginBottom: "4px", fontWeight: 600, color: colors.text }}>
+                            {zh ? "💡 手动安装方法" : "💡 Manual Installation"}
+                        </div>
+                        <div>{zh ? "下载或编译 nutshell 二进制，放到：" : "Download or build the nutshell binary and place it at:"}</div>
+                        <div style={{ fontFamily: "monospace", fontSize: "0.65rem", padding: "4px 6px", background: colors.accentBg, borderRadius: "4px", margin: "4px 0", wordBreak: "break-all" }}>
+                            {manualPath}
+                        </div>
+                        <div>
+                            <a href="https://github.com/ChatChatTech/ClawNet/releases" target="_blank" rel="noopener noreferrer"
+                                style={{ color: colors.primary, textDecoration: "underline", cursor: "pointer" }}>
+                                GitHub Releases →
+                            </a>
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }

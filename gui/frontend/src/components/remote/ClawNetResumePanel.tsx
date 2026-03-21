@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
 import {
     ClawNetGetResume,
     ClawNetUpdateResume,
@@ -30,6 +30,15 @@ export function ClawNetResumePanel({ lang, clawNetRunning }: Props) {
     const [query, setQuery] = useState("");
     const [results, setResults] = useState<any[]>([]);
     const [searching, setSearching] = useState(false);
+    const [viewingEntry, setViewingEntry] = useState<any | null>(null);
+
+    // Close modal on Escape key
+    useEffect(() => {
+        if (!viewingEntry) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setViewingEntry(null); };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [viewingEntry]);
 
     const mountedRef = useRef(true);
     useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -84,6 +93,8 @@ export function ClawNetResumePanel({ lang, clawNetRunning }: Props) {
     };
 
     if (!clawNetRunning) return <div style={cnLabel}>{zh ? "虾网未连接" : "ClawNet not connected"}</div>;
+
+    const viewBtnStyle: CSSProperties = { marginLeft: "auto", fontSize: "0.65rem", padding: "2px 10px", borderRadius: radius.pill, border: `1px solid ${colors.border}`, background: colors.accentBg, color: colors.primary, cursor: "pointer", fontWeight: 600, lineHeight: "1.6" };
 
     return (
         <div style={{ padding: "10px 14px" }}>
@@ -144,14 +155,35 @@ export function ClawNetResumePanel({ lang, clawNetRunning }: Props) {
                     {results.map((r: any, i: number) => (
                         <div key={i} style={cnCard}>
                             <div style={{ fontSize: "0.76rem", fontWeight: 600, color: colors.text }}>{r.title}</div>
-                            {r.body && <div style={{ fontSize: "0.72rem", color: colors.textSecondary, marginTop: "4px", maxHeight: "80px", overflow: "auto", whiteSpace: "pre-wrap" }}>{r.body}</div>}
-                            <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                            {r.body && <div style={{ fontSize: "0.72rem", color: colors.textSecondary, marginTop: "4px", maxHeight: "80px", overflow: "hidden", whiteSpace: "pre-wrap" }}>{r.body}</div>}
+                            <div style={{ display: "flex", gap: "8px", marginTop: "4px", alignItems: "center" }}>
                                 {r.author && <span style={{ fontSize: "0.65rem", color: colors.textMuted }}>{(r.author || "").slice(0, 12)}…</span>}
                                 {r.domains?.map((d: string) => <span key={d} style={{ fontSize: "0.65rem", padding: "1px 6px", background: colors.accentBg, borderRadius: radius.pill, color: colors.textSecondary }}>{d}</span>)}
+                                {r.body && <button onClick={() => setViewingEntry(r)} style={viewBtnStyle}>{zh ? "查看" : "View"}</button>}
                             </div>
                         </div>
                     ))}
                     {!searching && results.length === 0 && query && <div style={cnLabel}>{zh ? "无结果" : "No results"}</div>}
+                </div>
+            )}
+
+            {viewingEntry && (
+                <div role="dialog" aria-modal="true" onClick={() => setViewingEntry(null)} style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: colors.bg, borderRadius: radius.lg, maxWidth: "640px", width: "100%", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,0.25)" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${colors.border}` }}>
+                            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: colors.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{viewingEntry.title}</span>
+                            <button onClick={() => setViewingEntry(null)} aria-label="Close" style={{ fontSize: "0.78rem", padding: "4px 12px", borderRadius: radius.pill, border: `1px solid ${colors.border}`, background: "transparent", color: colors.textSecondary, cursor: "pointer", fontWeight: 600, flexShrink: 0, marginLeft: "12px" }}>✕</button>
+                        </div>
+                        <div style={{ padding: "16px", overflowY: "auto", flex: 1 }}>
+                            <div style={{ fontSize: "0.76rem", color: colors.text, whiteSpace: "pre-wrap", lineHeight: "1.7" }}>{viewingEntry.body}</div>
+                            {(viewingEntry.author || viewingEntry.domains?.length > 0) && (
+                                <div style={{ display: "flex", gap: "8px", marginTop: "12px", flexWrap: "wrap" }}>
+                                    {viewingEntry.author && <span style={{ fontSize: "0.65rem", color: colors.textMuted }}>👤 {viewingEntry.author}</span>}
+                                    {viewingEntry.domains?.map((d: string) => <span key={d} style={{ fontSize: "0.65rem", padding: "1px 6px", background: colors.accentBg, borderRadius: radius.pill, color: colors.textSecondary }}>{d}</span>)}
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
