@@ -167,7 +167,7 @@ func (h *SkillMarketHandlers) SubmitSkill(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// GetSubmissionStatus handles GET /api/v1/skills/submissions/{id}.
+// GetSubmissionStatus handles GET /api/v1/skill-submissions/{id}.
 func (h *SkillMarketHandlers) GetSubmissionStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {

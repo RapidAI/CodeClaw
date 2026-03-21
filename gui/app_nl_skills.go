@@ -92,6 +92,8 @@ type skillYAMLFile struct {
 	Triggers    []string          `yaml:"triggers"`
 	Steps       []skillYAMLStep   `yaml:"steps"`
 	Status      string            `yaml:"status"`
+	Platforms   []string          `yaml:"platforms"`    // "windows","linux","macos"; empty = universal
+	RequiresGUI bool              `yaml:"requires_gui"` // Linux 下是否需要 GUI 环境
 }
 
 type skillYAMLStep struct {
@@ -158,6 +160,9 @@ func (e *SkillExecutor) scanSkillYAMLFiles() []NLSkillEntry {
 			Steps:       steps,
 			Status:      status,
 			Source:      "file",
+			Platforms:   sf.Platforms,
+			RequiresGUI: sf.RequiresGUI,
+			SkillDir:    filepath.Join(skillsRoot, entry.Name()),
 			CreatedAt:   fileModTime(yamlPath),
 		})
 	}
@@ -709,6 +714,129 @@ func (a *App) CleanupStaleNLSkills() []string {
 	return a.skillExecutor.CleanupStaleSkills()
 }
 
+// ── Skill Runner Wails 绑定 ─────────────────────────────────────────────
+
+// RunNLSkillAsync 异步启动 skill 执行，返回 runID（Wails binding）。
+func (a *App) RunNLSkillAsync(skillName string) (string, error) {
+	if a.skillRunner == nil {
+		return "", fmt.Errorf("skill runner not initialized")
+	}
+	return a.skillRunner.StartRun(skillName)
+}
+
+// GetNLSkillRunStatus 获取 skill 执行状态（Wails binding）。
+func (a *App) GetNLSkillRunStatus(runID string) (*SkillRunStatus, error) {
+	if a.skillRunner == nil {
+		return nil, fmt.Errorf("skill runner not initialized")
+	}
+	return a.skillRunner.GetRunStatus(runID)
+}
+
+// CancelNLSkillRun 取消正在执行的 skill（Wails binding）。
+func (a *App) CancelNLSkillRun(runID string) error {
+	if a.skillRunner == nil {
+		return fmt.Errorf("skill runner not initialized")
+	}
+	return a.skillRunner.CancelRun(runID)
+}
+
+// UploadNLSkillToMarket 手动打包并上传 skill 到 SkillMarket（Wails binding）。
+func (a *App) UploadNLSkillToMarket(skillName string) (string, error) {
+	if a.skillExecutor == nil {
+		return "", fmt.Errorf("skill executor not initialized")
+	}
+	if a.skillMarketClient == nil {
+		return "", fmt.Errorf("skill market client not initialized")
+	}
+
+	// 打包 skill
+	zipPath, err := a.packageSkillForMarket(skillName)
+	if err != nil {
+		return "", fmt.Errorf("打包失败: %w", err)
+	}
+	defer os.Remove(zipPath)
+
+	// 获取用户 email
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return "", fmt.Errorf("加载配置失败: %w", err)
+	}
+	email := strings.TrimSpace(cfg.RemoteEmail)
+	if email == "" {
+		return "", fmt.Errorf("未配置 remote_email，无法上传到 SkillMarket")
+	}
+
+	// 上传
+	submissionID, err := a.skillMarketClient.SubmitSkill(context.Background(), zipPath, email)
+	if err != nil {
+		return "", fmt.Errorf("上传失败: %w", err)
+	}
+
+	// 触发 Gossip 自动发布
+	if a.gossipAutoPublish != nil {
+		go a.gossipAutoPublish.OnSkillUploaded(skillName, "")
+	}
+
+	return submissionID, nil
+}
+
+// packageSkillForMarket 将 skill 打包为 SkillMarket 规范的 zip 文件。
+// 对于 file-based skill，直接打包 skill 目录。
+// 对于 config-based skill，生成 skill.json + skill.yaml 到临时目录后打包。
+func (a *App) packageSkillForMarket(skillName string) (string, error) {
+	a.skillExecutor.mu.RLock()
+	var target *NLSkillEntry
+	for _, s := range a.skillExecutor.loadSkills() {
+		if s.Name == skillName {
+			cp := s
+			target = &cp
+			break
+		}
+	}
+	a.skillExecutor.mu.RUnlock()
+
+	if target == nil {
+		return "", fmt.Errorf("skill %q not found", skillName)
+	}
+
+	// 验证平台字段
+	if len(target.Platforms) == 0 {
+		target.Platforms = []string{"universal"}
+	}
+
+	tmpDir, err := os.MkdirTemp("", "skill-package-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// 如果是 file-based skill，复制整个 skill 目录内容
+	if target.SkillDir != "" {
+		if err := copyDirContents(target.SkillDir, tmpDir); err != nil {
+			return "", fmt.Errorf("复制 skill 目录失败: %w", err)
+		}
+	}
+
+	// 写入 skill.json（SkillMarket 标准格式）
+	// 清除运行时字段，避免泄露本机路径
+	target.SkillDir = ""
+	target.LastError = ""
+	skillJSON, err := json.MarshalIndent(target, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "skill.json"), skillJSON, 0644); err != nil {
+		return "", err
+	}
+
+	// 打包为 zip
+	zipPath := filepath.Join(os.TempDir(), fmt.Sprintf("skill-%s-%d.zip", toKebabCase(skillName), time.Now().UnixMilli()))
+	if err := zipDirectory(tmpDir, zipPath); err != nil {
+		return "", err
+	}
+	return zipPath, nil
+}
+
 // executeBashStep runs a shell command as a skill step.
 // Supports optional "working_dir" and "timeout" params.
 func executeBashStep(command string, params map[string]interface{}) (string, error) {
@@ -777,4 +905,86 @@ func executeBashStep(command string, params map[string]interface{}) (string, err
 		return "(completed, no output)", nil
 	}
 	return b.String(), nil
+}
+
+// ── 文件系统 helper ─────────────────────────────────────────────────────
+
+// copyDirContents 将 src 目录下的所有文件/子目录复制到 dst 目录。
+func copyDirContents(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+
+		if info.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
+}
+
+// zipDirectory 将 srcDir 目录打包为 zip 文件。
+func zipDirectory(srcDir, zipPath string) error {
+	outFile, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	zw := zip.NewWriter(outFile)
+	defer zw.Close()
+
+	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+
+		// 使用 forward slash 作为 zip 内路径分隔符
+		zipName := filepath.ToSlash(rel)
+		if info.IsDir() {
+			zipName += "/"
+		}
+
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = zipName
+		if !info.IsDir() {
+			header.Method = zip.Deflate
+		}
+
+		w, err := zw.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(w, f)
+		return err
+	})
 }

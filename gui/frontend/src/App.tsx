@@ -1551,7 +1551,6 @@ function App() {
     const [showToast, setShowToast] = useState(false);
     const [skills, setSkills] = useState<main.Skill[]>([]);
     const [showAddSkillModal, setShowAddSkillModal] = useState(false);
-    const [showAIPanel, setShowAIPanel] = useState(false);
     const [showHelpMenu, setShowHelpMenu] = useState(false);
     const aiAssistant = useAIAssistant();
     const [showRemoteActivationModal, setShowRemoteActivationModal] = useState(false);
@@ -1960,8 +1959,7 @@ function App() {
             if (cfg) {
                 // In lite mode, default to AI assistant panel; in pro mode, default to message tab
                 if (cfg.ui_mode !== 'pro') {
-                    setShowAIPanel(true);
-                    setNavTab("message"); // fallback navTab, won't be visible since AI panel is inline
+                    setNavTab("ai");
                 } else {
                     const tool = "message";
                     setNavTab(tool);
@@ -2237,9 +2235,12 @@ function App() {
         }
 
         if (config) {
-            const newConfig = new main.AppConfig({ ...config, active_tool: tool });
-            setConfig(newConfig);
-            SaveConfig(newConfig);
+            // Don't persist 'ai' as active_tool — it's a UI nav state, not a coding tool
+            if (tool !== 'ai') {
+                const newConfig = new main.AppConfig({ ...config, active_tool: tool });
+                setConfig(newConfig);
+                SaveConfig(newConfig);
+            }
 
             const toolCfg = (config as any)[tool];
             if (toolCfg && toolCfg.models) {
@@ -3175,12 +3176,12 @@ ${instruction}`;
                     </div>
 
                     <div
-                        className={`sidebar-item ${showAIPanel ? 'active' : ''}`}
-                        onClick={() => { setShowAIPanel(true); if (isLiteMode) setNavTab(''); }}
+                        className={`sidebar-item ${navTab === 'ai' ? 'active' : ''}`}
+                        onClick={() => { switchTool('ai'); }}
                         style={{
                             flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px',
                             borderLeft: 'none',
-                            borderRight: showAIPanel ? '3px solid var(--primary-color)' : '3px solid transparent',
+                            borderRight: navTab === 'ai' ? '3px solid var(--primary-color)' : '3px solid transparent',
                             justifyContent: 'center'
                         }}
                         title={lang === 'zh-Hans' ? 'AI 助手' : lang === 'zh-Hant' ? 'AI 助手' : 'AI Asst'}
@@ -3191,7 +3192,7 @@ ${instruction}`;
                             width: '2rem', height: '2rem',
                             border: '2px solid #e74c3c',
                             borderRadius: '50%',
-                            boxShadow: showAIPanel
+                            boxShadow: navTab === 'ai'
                                 ? '0 0 10px rgba(231,76,60,0.6), 0 0 20px rgba(231,76,60,0.3)'
                                 : '0 0 6px rgba(231,76,60,0.4), 0 0 12px rgba(231,76,60,0.15)',
                             transition: 'box-shadow 0.2s ease'
@@ -3203,7 +3204,7 @@ ${instruction}`;
 
                     <div
                         className={`sidebar-item ${navTab === 'skills' ? 'active' : ''}`}
-                        onClick={() => { setShowAIPanel(false); switchTool('skills'); }}
+                        onClick={() => { switchTool('skills'); }}
                         style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'skills' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                         title={t("skills")}
                     >
@@ -3212,7 +3213,7 @@ ${instruction}`;
                     </div>
                     <div
                         className={`sidebar-item ${navTab === 'mcp' ? 'active' : ''}`}
-                        onClick={() => { setShowAIPanel(false); switchTool('mcp'); }}
+                        onClick={() => { switchTool('mcp'); }}
                         style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'mcp' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                         title="MCP"
                     >
@@ -3222,7 +3223,7 @@ ${instruction}`;
 
                     <div
                         className={`sidebar-item ${navTab === 'clawnet' ? 'active' : ''}`}
-                        onClick={() => { setShowAIPanel(false); switchTool('clawnet'); }}
+                        onClick={() => { switchTool('clawnet'); }}
                         style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'clawnet' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                         title={lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet'}
                     >
@@ -3236,7 +3237,7 @@ ${instruction}`;
                     {isLiteMode && (
                         <div
                             className={`sidebar-item ${navTab === 'gossip' ? 'active' : ''}`}
-                            onClick={() => { setShowAIPanel(false); switchTool('gossip'); }}
+                            onClick={() => { switchTool('gossip'); }}
                             style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'gossip' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                             title={t("gossip")}
                         >
@@ -3247,7 +3248,7 @@ ${instruction}`;
 
                     <div
                         className={`sidebar-item ${navTab === 'settings' ? 'active' : ''}`}
-                        onClick={() => { setShowAIPanel(false); switchTool('settings'); }}
+                        onClick={() => { switchTool('settings'); }}
                         style={{ flexDirection: 'column', padding: '10px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'settings' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
                         title={t("settings")}
                     >
@@ -3292,7 +3293,7 @@ ${instruction}`;
                                                 style={{ padding: '8px 16px', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
                                                 onMouseEnter={(e) => (e.currentTarget.style.background = '#f3f4f6')}
                                                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                                                onClick={() => { setShowHelpMenu(false); setShowAIPanel(false); switchTool(nav); }}
+                                                onClick={() => { setShowHelpMenu(false); switchTool(nav); }}
                                             >
                                                 {icon} {t(key)}
                                             </div>
@@ -3467,9 +3468,9 @@ ${instruction}`;
             </div>
 
             <div className="main-container">
-                {/* Lite mode: inline AI assistant as main content */}
-                {isLiteMode && showAIPanel ? (
-                    <AIAssistantPanel onClose={() => { setShowAIPanel(false); switchTool('settings'); }} lang={lang} inline={true} {...aiAssistant} />
+                {/* AI assistant as main content (both lite and pro modes) */}
+                {navTab === 'ai' ? (
+                    <AIAssistantPanel onClose={() => { switchTool('settings'); }} lang={lang} inline={true} {...aiAssistant} />
                 ) : (
                 <><div className="top-header" style={{ '--wails-draggable': 'no-drag' } as any}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
@@ -3765,7 +3766,7 @@ ${instruction}`;
                         </div>
                     )}
                     {navTab === 'gossip' && (
-                        <GossipPanel hubUrl={config?.remote_hubcenter_url || ''} lang={lang} />
+                        <GossipPanel lang={lang} />
                     )}
                     {navTab === 'remote' && (
                         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -4097,7 +4098,7 @@ ${instruction}`;
                                     {t("uiModePro")}
                                 </label>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '3px', cursor: 'pointer', fontSize: '0.78rem' }}>
-                                    <input type="radio" name="uiMode" checked={isLiteMode} onChange={() => { if (config) { const c = new main.AppConfig({ ...config, ui_mode: 'lite' }); setConfig(c); SaveConfig(c); const currentTab: string = navTab; if (currentTab === 'remote' || currentTab === 'skills' || currentTab === 'mcp' || isToolTab(currentTab)) { setShowAIPanel(true); } if (settingsTab === 'display') { setSettingsTab('general'); } } }} />
+                                    <input type="radio" name="uiMode" checked={isLiteMode} onChange={() => { if (config) { const c = new main.AppConfig({ ...config, ui_mode: 'lite' }); setConfig(c); SaveConfig(c); const currentTab: string = navTab; if (currentTab === 'remote' || currentTab === 'skills' || currentTab === 'mcp' || isToolTab(currentTab)) { setNavTab('ai'); } if (settingsTab === 'display') { setSettingsTab('general'); } } }} />
                                     {t("uiModeLite")}
                                 </label>
                                 <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>
@@ -6944,8 +6945,6 @@ ${instruction}`;
                     </div>
                 </div>
             )}
-
-            {showAIPanel && !isLiteMode && <AIAssistantPanel onClose={() => setShowAIPanel(false)} lang={lang} {...aiAssistant} />}
 
             {showToast && (
                 <div className="toast">

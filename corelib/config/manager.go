@@ -95,7 +95,8 @@ func maskIfSensitive(key, value string) string {
 // GetConfig reads the specified section's configuration values.
 // ---------------------------------------------------------------------------
 
-func (m *Manager) GetConfig(section string) (string, error) {
+func (m *Manager) GetConfig(section string, unmasked ...bool) (string, error) {
+	raw := len(unmasked) > 0 && unmasked[0]
 	cfg, err := m.store.LoadConfig()
 	if err != nil {
 		return "", fmt.Errorf("failed to load config: %w", err)
@@ -108,37 +109,37 @@ func (m *Manager) GetConfig(section string) (string, error) {
 
 	switch sec {
 	case "claude":
-		return m.formatToolConfig("Claude", cfg.Claude), nil
+		return m.formatToolConfig("Claude", cfg.Claude, raw), nil
 	case "gemini":
-		return m.formatToolConfig("Gemini", cfg.Gemini), nil
+		return m.formatToolConfig("Gemini", cfg.Gemini, raw), nil
 	case "codex":
-		return m.formatToolConfig("Codex", cfg.Codex), nil
+		return m.formatToolConfig("Codex", cfg.Codex, raw), nil
 	case "opencode":
-		return m.formatToolConfig("OpenCode", cfg.Opencode), nil
+		return m.formatToolConfig("OpenCode", cfg.Opencode, raw), nil
 	case "codebuddy":
-		return m.formatToolConfig("CodeBuddy", cfg.CodeBuddy), nil
+		return m.formatToolConfig("CodeBuddy", cfg.CodeBuddy, raw), nil
 	case "iflow":
-		return m.formatToolConfig("iFlow", cfg.IFlow), nil
+		return m.formatToolConfig("iFlow", cfg.IFlow, raw), nil
 	case "kilo":
-		return m.formatToolConfig("Kilo", cfg.Kilo), nil
+		return m.formatToolConfig("Kilo", cfg.Kilo, raw), nil
 	case "cursor":
-		return m.formatToolConfig("Cursor", cfg.Cursor), nil
+		return m.formatToolConfig("Cursor", cfg.Cursor, raw), nil
 	case "remote":
-		return m.formatRemoteConfig(cfg), nil
+		return m.formatRemoteConfig(cfg, raw), nil
 	case "projects":
 		return m.formatProjectsConfig(cfg), nil
 	case "maclaw_llm":
-		return m.formatMaclawLLMConfig(cfg), nil
+		return m.formatMaclawLLMConfig(cfg, raw), nil
 	case "maclaw_role":
 		return m.formatMaclawRoleConfig(cfg), nil
 	case "proxy":
-		return m.formatProxyConfig(cfg), nil
+		return m.formatProxyConfig(cfg, raw), nil
 	case "general":
 		return m.formatGeneralConfig(cfg), nil
 	case "power":
 		return m.formatPowerConfig(cfg), nil
 	case "qqbot":
-		return m.formatQQBotConfig(cfg), nil
+		return m.formatQQBotConfig(cfg, raw), nil
 	case "skillmarket":
 		return m.formatSkillMarketConfig(cfg), nil
 	default:
@@ -166,26 +167,33 @@ func (m *Manager) configOverview(cfg corelib.AppConfig) string {
 	return b.String()
 }
 
-func (m *Manager) formatToolConfig(name string, tc corelib.ToolConfig) string {
+func (m *Manager) formatToolConfig(name string, tc corelib.ToolConfig, raw bool) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("=== %s 配置 ===\n", name))
 	b.WriteString(fmt.Sprintf("当前模型: %s\n", tc.CurrentModel))
 	for _, model := range tc.Models {
-		apiKey := maskIfSensitive("api_key", model.ApiKey)
+		apiKey := model.ApiKey
+		if !raw {
+			apiKey = maskIfSensitive("api_key", apiKey)
+		}
 		b.WriteString(fmt.Sprintf("  - %s: model_id=%s, url=%s, api_key=%s\n",
 			model.ModelName, model.ModelId, model.ModelUrl, apiKey))
 	}
 	return b.String()
 }
 
-func (m *Manager) formatRemoteConfig(cfg corelib.AppConfig) string {
+func (m *Manager) formatRemoteConfig(cfg corelib.AppConfig, raw bool) string {
 	var b strings.Builder
 	b.WriteString("=== 远程设置 ===\n")
 	b.WriteString(fmt.Sprintf("remote_enabled: %v\n", cfg.RemoteEnabled))
 	b.WriteString(fmt.Sprintf("remote_hub_url: %s\n", cfg.RemoteHubURL))
 	b.WriteString(fmt.Sprintf("remote_email: %s\n", cfg.RemoteEmail))
 	b.WriteString(fmt.Sprintf("remote_machine_id: %s\n", cfg.RemoteMachineID))
-	b.WriteString(fmt.Sprintf("remote_machine_token: %s\n", maskSensitive(cfg.RemoteMachineToken)))
+	token := cfg.RemoteMachineToken
+	if !raw {
+		token = maskSensitive(token)
+	}
+	b.WriteString(fmt.Sprintf("remote_machine_token: %s\n", token))
 	b.WriteString(fmt.Sprintf("remote_heartbeat_sec: %d\n", cfg.RemoteHeartbeatSec))
 	b.WriteString(fmt.Sprintf("default_launch_mode: %s\n", cfg.DefaultLaunchMode))
 	return b.String()
@@ -201,11 +209,15 @@ func (m *Manager) formatProjectsConfig(cfg corelib.AppConfig) string {
 	return b.String()
 }
 
-func (m *Manager) formatMaclawLLMConfig(cfg corelib.AppConfig) string {
+func (m *Manager) formatMaclawLLMConfig(cfg corelib.AppConfig, raw bool) string {
 	var b strings.Builder
 	b.WriteString("=== Maclaw LLM 配置 ===\n")
 	b.WriteString(fmt.Sprintf("maclaw_llm_url: %s\n", cfg.MaclawLLMUrl))
-	b.WriteString(fmt.Sprintf("maclaw_llm_key: %s\n", maskSensitive(cfg.MaclawLLMKey)))
+	llmKey := cfg.MaclawLLMKey
+	if !raw {
+		llmKey = maskSensitive(llmKey)
+	}
+	b.WriteString(fmt.Sprintf("maclaw_llm_key: %s\n", llmKey))
 	b.WriteString(fmt.Sprintf("maclaw_llm_model: %s\n", cfg.MaclawLLMModel))
 	proto := cfg.MaclawLLMProtocol
 	if proto == "" {
@@ -242,13 +254,17 @@ func (m *Manager) formatMaclawRoleConfig(cfg corelib.AppConfig) string {
 	return b.String()
 }
 
-func (m *Manager) formatProxyConfig(cfg corelib.AppConfig) string {
+func (m *Manager) formatProxyConfig(cfg corelib.AppConfig, raw bool) string {
 	var b strings.Builder
 	b.WriteString("=== 代理设置 ===\n")
 	b.WriteString(fmt.Sprintf("default_proxy_host: %s\n", cfg.DefaultProxyHost))
 	b.WriteString(fmt.Sprintf("default_proxy_port: %s\n", cfg.DefaultProxyPort))
 	b.WriteString(fmt.Sprintf("default_proxy_username: %s\n", cfg.DefaultProxyUsername))
-	b.WriteString(fmt.Sprintf("default_proxy_password: %s\n", maskSensitive(cfg.DefaultProxyPassword)))
+	pwd := cfg.DefaultProxyPassword
+	if !raw {
+		pwd = maskSensitive(pwd)
+	}
+	b.WriteString(fmt.Sprintf("default_proxy_password: %s\n", pwd))
 	return b.String()
 }
 
@@ -772,12 +788,16 @@ func (m *Manager) applyPowerChange(cfg *corelib.AppConfig, key, value string) (s
 	return "", fmt.Errorf("unsupported power key %q", key)
 }
 
-func (m *Manager) formatQQBotConfig(cfg corelib.AppConfig) string {
+func (m *Manager) formatQQBotConfig(cfg corelib.AppConfig, raw bool) string {
 	var b strings.Builder
 	b.WriteString("[QQ Bot]\n")
 	b.WriteString(fmt.Sprintf("  qqbot_enabled    = %v\n", cfg.QQBotEnabled))
 	b.WriteString(fmt.Sprintf("  qqbot_app_id     = %s\n", cfg.QQBotAppID))
-	b.WriteString(fmt.Sprintf("  qqbot_app_secret = %s\n", maskSensitive(cfg.QQBotAppSecret)))
+	secret := cfg.QQBotAppSecret
+	if !raw {
+		secret = maskSensitive(secret)
+	}
+	b.WriteString(fmt.Sprintf("  qqbot_app_secret = %s\n", secret))
 	return b.String()
 }
 

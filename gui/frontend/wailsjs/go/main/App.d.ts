@@ -397,3 +397,17 @@ export function RestartQQBot():Promise<string>;
 export function GetTelegramStatus():Promise<string>;
 
 export function RestartTelegram():Promise<string>;
+
+// Gossip bindings
+export function GossipSnapshot(arg1:string):Promise<any>;
+
+export function GossipPublish(arg1:string, arg2:string):Promise<any>;
+
+export function GossipComment(arg1:string, arg2:string, arg3:number):Promise<any>;
+
+export function GossipRate(arg1:string, arg2:number):Promise<any>;
+
+export function GossipGetComments(arg1:string, arg2:number):Promise<any>;
+
+// NL Skill upload binding
+export function UploadNLSkillToMarket(arg1:string):Promise<string>;

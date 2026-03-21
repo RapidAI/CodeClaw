@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 )
@@ -16,18 +17,18 @@ type SkillUsageRecord struct {
 
 // AutoUploadTrigger MaClaw 侧自动上传触发器。
 type AutoUploadTrigger struct {
-	mu      sync.Mutex
-	tracker map[string]*SkillUsageRecord // key: skill name
-	client  *SkillMarketClient
-	email   string
+	mu       sync.Mutex
+	tracker  map[string]*SkillUsageRecord // key: skill name
+	client   *SkillMarketClient
+	emailFn  func() string // 动态获取 email，避免配置变更后过期
 }
 
 // NewAutoUploadTrigger 创建自动上传触发器。
-func NewAutoUploadTrigger(client *SkillMarketClient, email string) *AutoUploadTrigger {
+func NewAutoUploadTrigger(client *SkillMarketClient, emailFn func() string) *AutoUploadTrigger {
 	return &AutoUploadTrigger{
 		tracker: make(map[string]*SkillUsageRecord),
 		client:  client,
-		email:   email,
+		emailFn: emailFn,
 	}
 }
 
@@ -83,6 +84,8 @@ func (t *AutoUploadTrigger) ShouldUpload(skillName string) bool {
 }
 
 // CheckAndTrigger 在 Skill 执行完成后调用，判断是否触发上传。
+// 注意：此方法会先打包再判断，适合外部直接调用。
+// SkillRunner 内部使用 RecordExecution + ShouldUpload + SubmitAndMark 分步调用以避免不必要的打包。
 func (t *AutoUploadTrigger) CheckAndTrigger(ctx context.Context, skillName, zipPath, localHash string, execResult *SkillExecutionResult) error {
 	t.RecordExecution(skillName, EvaluateSkillExecution(execResult), localHash)
 
@@ -90,14 +93,23 @@ func (t *AutoUploadTrigger) CheckAndTrigger(ctx context.Context, skillName, zipP
 		return nil
 	}
 
+	return t.SubmitAndMark(ctx, skillName, zipPath, localHash)
+}
+
+// SubmitAndMark 上传 zip 并标记已上传 hash。
+func (t *AutoUploadTrigger) SubmitAndMark(ctx context.Context, skillName, zipPath, localHash string) error {
+	email := t.emailFn()
+	if email == "" {
+		return fmt.Errorf("未配置 remote_email，跳过自动上传")
+	}
+
 	log.Printf("[auto-upload] triggering upload for skill %s", skillName)
-	submissionID, err := t.client.SubmitSkill(ctx, zipPath, t.email)
+	submissionID, err := t.client.SubmitSkill(ctx, zipPath, email)
 	if err != nil {
 		return err
 	}
 	log.Printf("[auto-upload] submitted skill %s, submission_id=%s", skillName, submissionID)
 
-	// 标记已上传
 	t.mu.Lock()
 	if rec, ok := t.tracker[skillName]; ok {
 		rec.LastUploaded = localHash

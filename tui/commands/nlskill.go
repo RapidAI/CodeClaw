@@ -1,8 +1,13 @@
 package commands
 
 import (
+	"bytes"
+	"context"
 	"flag"
 	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -212,36 +217,211 @@ func nlskillExecute(args []string) error {
 		return fmt.Errorf("NL 技能 '%s' 没有定义步骤", name)
 	}
 
+	// 平台兼容性检查
+	if err := tui_checkPlatformCompat(skill); err != nil {
+		return err
+	}
+
 	type stepResult struct {
 		Step   int    `json:"step"`
 		Action string `json:"action"`
 		Status string `json:"status"`
+		Output string `json:"output,omitempty"`
 		Error  string `json:"error,omitempty"`
 	}
 	var results []stepResult
+	success := true
+	hasFailure := false
 
 	for i, step := range skill.Steps {
 		fmt.Printf("[Step %d] %s ...\n", i+1, step.Action)
-		// In CLI mode, steps are logged but actual execution depends on the action type.
-		// This is a thin wrapper — real execution would be handled by the agent loop.
-		r := stepResult{Step: i + 1, Action: step.Action, Status: "executed"}
-		results = append(results, r)
-		// If step fails and on_error is "stop", halt
-		// (In this CLI stub, steps always succeed — real execution is in agent mode)
+
+		output, execErr := tui_executeStep(step, skill.SkillDir)
+		r := stepResult{Step: i + 1, Action: step.Action}
+
+		if execErr != nil {
+			r.Status = "failed"
+			r.Error = execErr.Error()
+			r.Output = output
+			results = append(results, r)
+			hasFailure = true
+			fmt.Printf("  ✗ %s\n", execErr.Error())
+			if step.OnError != "continue" {
+				success = false
+				break
+			}
+		} else {
+			r.Status = "success"
+			r.Output = output
+			results = append(results, r)
+			if output != "" {
+				// 只显示前 200 字符
+				display := output
+				if len(display) > 200 {
+					display = display[:200] + "..."
+				}
+				fmt.Printf("  ✓ %s\n", display)
+			} else {
+				fmt.Printf("  ✓ done\n")
+			}
+		}
 	}
 
 	// Update usage stats
+	if hasFailure {
+		success = false
+	}
 	skill.UsageCount++
 	skill.LastUsedAt = time.Now().Format(time.RFC3339)
+	if success {
+		skill.SuccessCount++
+		skill.LastError = ""
+	} else {
+		for _, r := range results {
+			if r.Error != "" {
+				skill.LastError = r.Error
+				break
+			}
+		}
+	}
 	_ = store.SaveConfig(cfg)
 
 	if *jsonOut {
 		return PrintJSON(map[string]interface{}{
 			"skill":   name,
 			"steps":   results,
-			"success": true,
+			"success": success,
 		})
 	}
-	fmt.Printf("✓ 技能 '%s' 执行完成 (%d 步)\n", name, len(results))
+	if success {
+		fmt.Printf("✓ 技能 '%s' 执行完成 (%d 步)\n", name, len(results))
+	} else {
+		fmt.Printf("✗ 技能 '%s' 执行失败\n", name)
+	}
 	return nil
+}
+
+// tui_checkPlatformCompat 检查当前平台是否匹配 skill 的 platforms 声明。
+func tui_checkPlatformCompat(skill *corelib.NLSkillEntry) error {
+	if len(skill.Platforms) == 0 {
+		return nil
+	}
+	currentOS := runtime.GOOS
+	platformName := currentOS
+	if platformName == "darwin" {
+		platformName = "macos"
+	}
+	matched := false
+	for _, p := range skill.Platforms {
+		if strings.EqualFold(strings.TrimSpace(p), platformName) {
+			matched = true
+			break
+		}
+		if strings.EqualFold(strings.TrimSpace(p), "universal") {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return fmt.Errorf("skill %q 不支持当前平台 %s（支持: %s）",
+			skill.Name, platformName, strings.Join(skill.Platforms, ", "))
+	}
+	if currentOS == "linux" && skill.RequiresGUI {
+		if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+			return fmt.Errorf("skill %q 需要 GUI 环境，但当前 Linux 未检测到 DISPLAY 或 WAYLAND_DISPLAY",
+				skill.Name)
+		}
+	}
+	return nil
+}
+
+// tui_executeStep 在 TUI 模式下执行单个 skill step。
+// TUI 模式只支持 bash 类型的 step，其他类型需要 GUI 环境。
+func tui_executeStep(step corelib.NLSkillStep, skillDir string) (string, error) {
+	switch step.Action {
+	case "bash":
+		command, _ := step.Params["command"].(string)
+		if command == "" {
+			return "", fmt.Errorf("missing command parameter")
+		}
+		return tui_executeBashStep(command, step.Params, skillDir)
+
+	case "create_session", "send_input", "call_mcp_tool":
+		return "", fmt.Errorf("action %q 仅在 GUI 模式下可用", step.Action)
+
+	default:
+		return "", fmt.Errorf("unknown action: %s", step.Action)
+	}
+}
+
+// tui_executeBashStep 在 TUI 模式下执行 bash 命令。
+func tui_executeBashStep(command string, params map[string]interface{}, skillDir string) (string, error) {
+	timeout := 30
+	if t, ok := params["timeout"].(float64); ok && t > 0 {
+		timeout = int(t)
+		if timeout > 120 {
+			timeout = 120
+		}
+	}
+
+	workDir, _ := params["working_dir"].(string)
+	if workDir == "" && skillDir != "" {
+		workDir = skillDir
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	var shellName string
+	var shellArgs []string
+	if runtime.GOOS == "windows" {
+		shellName = "powershell"
+		shellArgs = []string{"-NoProfile", "-NonInteractive", "-Command", command}
+	} else {
+		shellName = "bash"
+		shellArgs = []string{"-c", command}
+	}
+
+	cmd := exec.CommandContext(ctx, shellName, shellArgs...)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	var b strings.Builder
+	if stdout.Len() > 0 {
+		out := stdout.String()
+		if len(out) > 8192 {
+			out = out[:8192] + "\n... (truncated)"
+		}
+		b.WriteString(out)
+	}
+	if stderr.Len() > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		errOut := stderr.String()
+		if len(errOut) > 4096 {
+			errOut = errOut[:4096] + "\n... (truncated)"
+		}
+		b.WriteString("[stderr] ")
+		b.WriteString(errOut)
+	}
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			b.WriteString(fmt.Sprintf("\n[error] timeout after %ds", timeout))
+		} else {
+			b.WriteString(fmt.Sprintf("\n[error] %v", err))
+		}
+		return b.String(), err
+	}
+	if b.Len() == 0 {
+		return "(completed, no output)", nil
+	}
+	return b.String(), nil
 }

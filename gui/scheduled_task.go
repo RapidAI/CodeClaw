@@ -27,6 +27,7 @@ type ScheduledTask struct {
 	RunCount    int        `json:"run_count"`
 	LastResult  string     `json:"last_result,omitempty"`
 	LastError   string     `json:"last_error,omitempty"`
+	TaskType    string     `json:"task_type,omitempty"`
 }
 
 // TaskExecutor is called when a task fires. It receives the task action

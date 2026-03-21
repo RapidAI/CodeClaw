@@ -58,47 +58,47 @@ interface Theme {
     sendBtnBorder: string;
 }
 
-const darkTheme: Theme = {
-    bg: "#0c0c0c",
-    titleBarBg: "#1e1e1e",
-    titleBarBorder: "#333",
-    titleText: "#999",
-    text: "#d4d4d4",
-    textMuted: "#888",
-    inputBarBg: "#1a1a1a",
-    inputBarBorder: "#333",
-    inputText: "#d4d4d4",
-    codeBg: "#2a2a2a",
-    codeText: "#ce9178",
-    codeBlockBg: "#1a1a1a",
-    codeBlockBorder: "#333",
-    codeBlockLang: "#555",
-    borderLeft: "#333",
-    responseBorderLeft: "#333",
-    headingColor: "#569cd6",
-    linkColor: "#569cd6",
-    pathColor: "#4ec9b0",
-    promptColor: "#4ec9b0",
-    userColor: "#4ec9b0",
-    divider: "#333",
-    fieldBg: "#1a1a1a",
-    fieldBorder: "#333",
-    fieldLabel: "#888",
-    errorText: "#f44747",
-    errorBg: "rgba(244, 71, 71, 0.08)",
-    errorBorder: "#f44747",
-    emptyHint: "#555",
-    boldColor: "#e0e0e0",
-    italicColor: "#c5c5c5",
-    bulletColor: "#808080",
-    quoteBorder: "#555",
-    quoteText: "#9a9a9a",
-    btnColor: "#569cd6",
-    btnBorder: "#569cd6",
-    actionBtnColor: "#888",
-    closeBtnColor: "#ccc",
-    sendBtnColor: "#569cd6",
-    sendBtnBorder: "#569cd6",
+const overlayTheme: Theme = {
+    bg: "#eef0f5",
+    titleBarBg: "#e2e4ea",
+    titleBarBorder: "#c8cad0",
+    titleText: "#555",
+    text: "#2d2d2d",
+    textMuted: "#777",
+    inputBarBg: "#ffffff",
+    inputBarBorder: "#6366f1",
+    inputText: "#222",
+    codeBg: "#e4e6ec",
+    codeText: "#b5314a",
+    codeBlockBg: "#e8eaf0",
+    codeBlockBorder: "#c8cad0",
+    codeBlockLang: "#999",
+    borderLeft: "#c8cad0",
+    responseBorderLeft: "#b4b6d4",
+    headingColor: "#5558d6",
+    linkColor: "#5558d6",
+    pathColor: "#059669",
+    promptColor: "#5558d6",
+    userColor: "#5558d6",
+    divider: "#d0d2d8",
+    fieldBg: "#e8eaf0",
+    fieldBorder: "#c8cad0",
+    fieldLabel: "#777",
+    errorText: "#dc2626",
+    errorBg: "rgba(220, 38, 38, 0.06)",
+    errorBorder: "#dc2626",
+    emptyHint: "#999",
+    boldColor: "#1a1a1a",
+    italicColor: "#333",
+    bulletColor: "#888",
+    quoteBorder: "#b4b6d4",
+    quoteText: "#666",
+    btnColor: "#5558d6",
+    btnBorder: "#5558d6",
+    actionBtnColor: "#777",
+    closeBtnColor: "#888",
+    sendBtnColor: "#fff",
+    sendBtnBorder: "#5558d6",
 };
 
 const lightTheme: Theme = {
@@ -152,8 +152,9 @@ const overlayStyle: React.CSSProperties = {
     zIndex: 10000,
     display: "flex",
     flexDirection: "column",
-    background: darkTheme.bg,
+    background: overlayTheme.bg,
     textAlign: "left",
+    boxShadow: "0 0 40px rgba(0,0,0,0.08)",
 };
 
 const dotBase: React.CSSProperties = {
@@ -485,7 +486,7 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, sendMessage
     const userScrolledUpRef = useRef(false);
     const prevMsgCountRef = useRef(0);
 
-    const t = inline ? lightTheme : darkTheme;
+    const t = inline ? lightTheme : overlayTheme;
 
     const title = lang === "en" ? "AI Assistant" : "AI 助手";
     const thinkingText = lang === "en" ? "Thinking..." : "正在思考...";
@@ -619,10 +620,11 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, sendMessage
 
             {/* ── Input bar ── */}
             <div style={{
-                display: "flex", alignItems: "center", gap: "6px",
-                padding: "6px 10px", paddingBottom: "max(6px, env(safe-area-inset-bottom))",
-                background: t.inputBarBg, borderTop: `1px solid ${t.inputBarBorder}`,
+                display: "flex", alignItems: "center", gap: "8px",
+                padding: "8px 12px", paddingBottom: "max(8px, env(safe-area-inset-bottom))",
+                background: t.inputBarBg, borderTop: inline ? `1px solid ${t.inputBarBorder}` : "none",
                 flexShrink: 0,
+                ...(inline ? {} : { margin: "0 10px 10px 10px", borderRadius: "8px", border: `1.5px solid ${t.inputBarBorder}` }),
             }}>
                 <span style={{
                     color: t.promptColor, fontFamily: "Consolas, monospace",
@@ -655,7 +657,13 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, sendMessage
                 <button
                     onClick={handleSend}
                     disabled={sending || !inputValue.trim()}
-                    style={{ ...baseInputBtnStyle, color: t.sendBtnColor, borderColor: t.sendBtnBorder }}
+                    style={{
+                        ...baseInputBtnStyle,
+                        ...(inline
+                            ? { color: t.sendBtnColor, borderColor: t.sendBtnBorder }
+                            : { color: t.sendBtnColor, background: t.sendBtnBorder, borderColor: t.sendBtnBorder, borderRadius: "6px" }),
+                        opacity: (sending || !inputValue.trim()) ? 0.5 : 1,
+                    }}
                     title={lang === "en" ? "Send" : "发送"}
                 >
                     {sending ? "…" : "⏎"}

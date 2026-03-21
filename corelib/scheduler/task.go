@@ -10,6 +10,16 @@ import (
 	"time"
 )
 
+// Task type constants.
+const (
+	TaskTypeReminder = "reminder" // 提醒类：错过就跳过，等下次
+	TaskTypeProcess  = "process"  // 处理类：错过且距下次>1h则补做
+)
+
+// missedRunCatchUpThreshold is the minimum gap between a missed run and the
+// next scheduled run that triggers a catch-up execution for "process" tasks.
+const missedRunCatchUpThreshold = 1 * time.Hour
+
 // ScheduledTask represents a single scheduled task.
 type ScheduledTask struct {
 	ID         string     `json:"id"`
@@ -21,6 +31,7 @@ type ScheduledTask struct {
 	DayOfMonth int        `json:"day_of_month"`          // -1=any, 1-31
 	StartDate  string     `json:"start_date,omitempty"`  // "2006-01-02", empty=no limit
 	EndDate    string     `json:"end_date,omitempty"`    // "2006-01-02", empty=no limit
+	TaskType   string     `json:"task_type,omitempty"`   // "reminder" (default) or "process"
 	Status     string     `json:"status"`                // "active", "paused", "expired"
 	CreatedAt  time.Time  `json:"created_at"`
 	LastRunAt  *time.Time `json:"last_run_at,omitempty"`
@@ -37,13 +48,14 @@ type TaskExecutor func(task *ScheduledTask) (result string, err error)
 // Manager manages scheduled tasks with JSON persistence
 // and a background ticker that fires due tasks.
 type Manager struct {
-	mu       sync.RWMutex
-	tasks    []ScheduledTask
-	path     string
-	stopCh   chan struct{}
-	running  bool
-	executor TaskExecutor
-	onChange func() // optional callback after task state changes (fire/expire)
+	mu              sync.RWMutex
+	tasks           []ScheduledTask
+	path            string
+	stopCh          chan struct{}
+	running         bool
+	executor        TaskExecutor
+	onChange        func() // optional callback after task state changes (fire/expire)
+	pendingCatchUps []string // task IDs that need catch-up fire on Start()
 }
 
 // NewManager creates a manager persisting to the given path.
@@ -75,6 +87,12 @@ func NewManager(path string) (*Manager, error) {
 	}
 	m.tasks = active
 	_ = m.save()
+
+	// Collect process-type tasks that missed a run and need catch-up.
+	// We do this after save so the task list is clean. The actual catch-up
+	// fires are deferred until Start() is called (executor must be set first).
+	m.pendingCatchUps = m.detectMissedRuns(now)
+
 	return m, nil
 }
 
@@ -101,7 +119,16 @@ func (m *Manager) Start() {
 		return
 	}
 	m.running = true
+	catchUps := m.pendingCatchUps
+	m.pendingCatchUps = nil
+	executor := m.executor
 	m.mu.Unlock()
+
+	// Fire catch-up runs for process-type tasks that missed execution.
+	for _, id := range catchUps {
+		go m.fireByID(id, executor)
+	}
+
 	go m.loop()
 	fmt.Println("[ScheduledTaskManager] started")
 }
@@ -274,6 +301,9 @@ func (m *Manager) Add(t ScheduledTask) (string, error) {
 	if t.Minute < 0 || t.Minute > 59 {
 		return "", fmt.Errorf("scheduler: minute must be 0-59")
 	}
+	if t.TaskType != "" && t.TaskType != TaskTypeReminder && t.TaskType != TaskTypeProcess {
+		return "", fmt.Errorf("scheduler: task_type must be %q or %q", TaskTypeReminder, TaskTypeProcess)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -424,6 +454,13 @@ func (m *Manager) Update(id string, args map[string]interface{}) error {
 		if v, ok := args["end_date"].(string); ok {
 			m.tasks[i].EndDate = v
 		}
+		if v, ok := args["task_type"].(string); ok {
+			if v != "" && v != TaskTypeReminder && v != TaskTypeProcess {
+				m.mu.Unlock()
+				return fmt.Errorf("scheduler: task_type must be %q or %q", TaskTypeReminder, TaskTypeProcess)
+			}
+			m.tasks[i].TaskType = v
+		}
 		now := time.Now()
 		if m.tasks[i].Status == "active" {
 			m.tasks[i].NextRunAt = m.calcNext(&m.tasks[i], now)
@@ -522,6 +559,58 @@ func (m *Manager) fireManual(id string, executor TaskExecutor) {
 	if cb != nil {
 		cb()
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Missed-run detection (catch-up for "process" tasks)
+// ---------------------------------------------------------------------------
+
+// detectMissedRuns checks active tasks for missed executions. For "process"
+// type tasks, if the gap between now and the next scheduled run exceeds
+// missedRunCatchUpThreshold (1 hour), the task ID is returned for catch-up.
+// "reminder" tasks (or empty TaskType) are always skipped — miss is OK.
+func (m *Manager) detectMissedRuns(now time.Time) []string {
+	var ids []string
+	for i := range m.tasks {
+		t := &m.tasks[i]
+		if t.Status != "active" || t.TaskType != TaskTypeProcess {
+			continue
+		}
+		// Determine the most recent time this task should have run before now.
+		missed := m.lastScheduledBefore(t, now)
+		if missed == nil {
+			continue
+		}
+		// If the task already ran at or after that time, no miss.
+		if t.LastRunAt != nil && !t.LastRunAt.Before(*missed) {
+			continue
+		}
+		// Task never ran, or last run was before the missed slot → missed.
+		// Check if the gap to the next run is large enough to warrant catch-up.
+		if t.NextRunAt != nil && t.NextRunAt.Sub(now) > missedRunCatchUpThreshold {
+			fmt.Printf("[ScheduledTaskManager] process task %s (%s) missed run at %s, scheduling catch-up\n",
+				t.ID, t.Name, missed.Format("2006-01-02 15:04"))
+			ids = append(ids, t.ID)
+		}
+	}
+	return ids
+}
+
+// lastScheduledBefore returns the most recent scheduled execution time
+// strictly before `before` for the given task, or nil if none exists.
+func (m *Manager) lastScheduledBefore(t *ScheduledTask, before time.Time) *time.Time {
+	// Walk backwards from `before` day by day (up to 400 days).
+	for d := 0; d < 400; d++ {
+		day := before.AddDate(0, 0, -d)
+		candidate := time.Date(day.Year(), day.Month(), day.Day(), t.Hour, t.Minute, 0, 0, time.Local)
+		if !candidate.Before(before) {
+			continue
+		}
+		if m.matchesDay(t, candidate) && m.inDateRange(t, candidate) {
+			return &candidate
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

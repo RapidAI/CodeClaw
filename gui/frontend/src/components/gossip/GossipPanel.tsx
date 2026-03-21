@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { GossipSnapshot, GossipPublish, GossipComment, GossipRate, GossipGetComments } from '../../../wailsjs/go/main/App';
 
 interface GossipPost {
     id: string;
@@ -11,8 +12,15 @@ interface GossipPost {
     created_at: string;
 }
 
+interface GossipCommentData {
+    id: string;
+    nickname: string;
+    content: string;
+    rating: number;
+    created_at: string;
+}
+
 interface GossipPanelProps {
-    hubUrl: string;
     lang: string;
 }
 
@@ -32,7 +40,7 @@ const categoryLabel = (lang: string, cat: string) => {
     return map[cat]?.[lang?.startsWith('zh') ? 'zh' : 'en'] ?? cat;
 };
 
-export function GossipPanel({ hubUrl, lang }: GossipPanelProps) {
+export function GossipPanel({ lang }: GossipPanelProps) {
     const [posts, setPosts] = useState<GossipPost[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -41,26 +49,95 @@ export function GossipPanel({ hubUrl, lang }: GossipPanelProps) {
     const [page, setPage] = useState(1);
     const etagRef = useRef('');
 
+    // Publish form state
+    const [showPublish, setShowPublish] = useState(false);
+    const [publishContent, setPublishContent] = useState('');
+    const [publishCategory, setPublishCategory] = useState('news');
+    const [publishing, setPublishing] = useState(false);
+    const [publishError, setPublishError] = useState('');
+
+    // Per-post comment/rating state
+    const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
+    const [postComments, setPostComments] = useState<Record<string, GossipCommentData[]>>({});
+    const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
+    const [commentErrors, setCommentErrors] = useState<Record<string, string>>({});
+    const [ratingErrors, setRatingErrors] = useState<Record<string, string>>({});
+
     const fetchSnapshot = useCallback(async (isPolling = false) => {
-        if (!hubUrl) return;
         if (!isPolling) setLoading(true);
         try {
-            const headers: Record<string, string> = {};
-            if (etagRef.current) headers['If-None-Match'] = etagRef.current;
-            const resp = await fetch(`${hubUrl.replace(/\/+$/, '')}/api/gossip/snapshot`, { headers });
-            if (resp.status === 304) return; // unchanged
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const etag = resp.headers.get('ETag');
-            if (etag) etagRef.current = etag;
-            const data = await resp.json();
-            setPosts(data.posts || []);
+            const result = await GossipSnapshot(etagRef.current);
+            if (!result.changed) return; // equivalent to 304
+            if (result.etag) etagRef.current = result.etag;
+            setPosts(result.posts || []);
             setError('');
         } catch (err: any) {
             if (!isPolling) setError(err.message || 'Failed to load');
         } finally {
             if (!isPolling) setLoading(false);
         }
-    }, [hubUrl]);
+    }, []);
+
+    const handlePublish = useCallback(async () => {
+        if (!publishContent.trim() || publishContent.length > 2000) return;
+        setPublishing(true);
+        setPublishError('');
+        try {
+            await GossipPublish(publishContent, publishCategory);
+            setPublishContent('');
+            setShowPublish(false);
+            etagRef.current = '';
+            fetchSnapshot();
+        } catch (err: any) {
+            setPublishError(err.message || t(lang, '发布失败', 'Publish failed'));
+        } finally {
+            setPublishing(false);
+        }
+    }, [publishContent, publishCategory, fetchSnapshot, lang]);
+
+    const fetchComments = useCallback(async (postID: string) => {
+        try {
+            const result = await GossipGetComments(postID, 1);
+            setPostComments(prev => ({ ...prev, [postID]: result.comments || [] }));
+            setCommentErrors(prev => ({ ...prev, [postID]: '' }));
+        } catch (err: any) {
+            setCommentErrors(prev => ({ ...prev, [postID]: err.message || t(lang, '加载评论失败', 'Failed to load comments') }));
+        }
+    }, [lang]);
+
+    const toggleComments = useCallback((postID: string) => {
+        setExpandedComments(prev => {
+            const next = { ...prev, [postID]: !prev[postID] };
+            if (next[postID]) fetchComments(postID);
+            return next;
+        });
+    }, [fetchComments]);
+
+    const handleComment = useCallback(async (postID: string) => {
+        const content = (commentInputs[postID] || '').trim();
+        if (!content || content.length > 1000) return;
+        setCommentErrors(prev => ({ ...prev, [postID]: '' }));
+        try {
+            await GossipComment(postID, content, 0);
+            setCommentInputs(prev => ({ ...prev, [postID]: '' }));
+            fetchComments(postID);
+            etagRef.current = '';
+            fetchSnapshot();
+        } catch (err: any) {
+            setCommentErrors(prev => ({ ...prev, [postID]: err.message || t(lang, '评论失败', 'Comment failed') }));
+        }
+    }, [commentInputs, fetchComments, fetchSnapshot, lang]);
+
+    const handleRate = useCallback(async (postID: string, rating: number) => {
+        setRatingErrors(prev => ({ ...prev, [postID]: '' }));
+        try {
+            await GossipRate(postID, rating);
+            etagRef.current = '';
+            fetchSnapshot();
+        } catch (err: any) {
+            setRatingErrors(prev => ({ ...prev, [postID]: err.message || t(lang, '评分失败', 'Rating failed') }));
+        }
+    }, [fetchSnapshot, lang]);
 
     // Initial fetch
     useEffect(() => {
@@ -69,10 +146,9 @@ export function GossipPanel({ hubUrl, lang }: GossipPanelProps) {
 
     // Polling
     useEffect(() => {
-        if (!hubUrl) return;
         const timer = setInterval(() => fetchSnapshot(true), POLL_INTERVAL);
         return () => clearInterval(timer);
-    }, [hubUrl, fetchSnapshot]);
+    }, [fetchSnapshot]);
 
     // Filtered + sorted + paginated
     const filtered = useMemo(() => {
@@ -97,12 +173,6 @@ export function GossipPanel({ hubUrl, lang }: GossipPanelProps) {
 
     // Reset page when search/sort changes
     useEffect(() => { setPage(1); }, [search, sort]);
-
-    if (!hubUrl) {
-        return <div style={{ padding: '40px 20px', textAlign: 'center', color: '#9ca3af', fontSize: '0.85rem' }}>
-            {t(lang, '请先配置 Hub Center 地址', 'Please configure Hub Center URL first')}
-        </div>;
-    }
 
     return (
         <div style={{ padding: '0 15px', width: '100%', boxSizing: 'border-box' }}>
@@ -130,7 +200,62 @@ export function GossipPanel({ hubUrl, lang }: GossipPanelProps) {
                 >
                     {t(lang, '刷新', 'Refresh')}
                 </button>
+                <button
+                    onClick={() => setShowPublish(v => !v)}
+                    style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid #d1d5db', background: showPublish ? '#eef2ff' : '#fff', fontSize: '0.8rem', cursor: 'pointer' }}
+                >
+                    {t(lang, '发布', 'Publish')}
+                </button>
             </div>
+
+            {/* Publish Form */}
+            {showPublish && (
+                <div style={{ marginBottom: '12px', padding: '12px 14px', borderRadius: '10px', background: '#f9fafb', border: '1px solid #e5e7eb' }}>
+                    <textarea
+                        value={publishContent}
+                        onChange={e => setPublishContent(e.target.value)}
+                        placeholder={t(lang, '写点什么八卦...', 'Write some gossip...')}
+                        style={{
+                            width: '100%', minHeight: '80px', padding: '8px 10px', borderRadius: '6px',
+                            border: '1px solid #d1d5db', fontSize: '0.8rem', resize: 'vertical',
+                            outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit'
+                        }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px', flexWrap: 'wrap' }}>
+                        <select
+                            value={publishCategory}
+                            onChange={e => setPublishCategory(e.target.value)}
+                            style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.8rem', outline: 'none', cursor: 'pointer' }}
+                        >
+                            <option value="owner">{categoryLabel(lang, 'owner')}</option>
+                            <option value="project">{categoryLabel(lang, 'project')}</option>
+                            <option value="news">{categoryLabel(lang, 'news')}</option>
+                        </select>
+                        <span style={{
+                            fontSize: '0.7rem',
+                            color: publishContent.length > 2000 ? '#ef4444' : '#6b7280'
+                        }}>
+                            {publishContent.length}/2000
+                        </span>
+                        <button
+                            onClick={handlePublish}
+                            disabled={publishing || !publishContent.trim() || publishContent.length > 2000}
+                            style={{
+                                marginLeft: 'auto', padding: '5px 16px', borderRadius: '6px',
+                                border: '1px solid #d1d5db', fontSize: '0.8rem', cursor: 'pointer',
+                                background: (!publishContent.trim() || publishContent.length > 2000) ? '#f3f4f6' : '#4f46e5',
+                                color: (!publishContent.trim() || publishContent.length > 2000) ? '#9ca3af' : '#fff',
+                                opacity: publishing ? 0.6 : 1
+                            }}
+                        >
+                            {publishing ? t(lang, '发布中...', 'Publishing...') : t(lang, '提交', 'Submit')}
+                        </button>
+                    </div>
+                    {publishError && (
+                        <div style={{ marginTop: '8px', fontSize: '0.75rem', color: '#ef4444' }}>{publishError}</div>
+                    )}
+                </div>
+            )}
 
             {/* Status */}
             {loading && <div style={{ textAlign: 'center', padding: '20px', color: '#6b7280', fontSize: '0.8rem' }}>{t(lang, '加载中...', 'Loading...')}</div>}
@@ -170,6 +295,113 @@ export function GossipPanel({ hubUrl, lang }: GossipPanelProps) {
                         <span>⭐ {p.score > 0 ? (p.score / Math.max(p.votes, 1)).toFixed(1) : '-'}</span>
                         <span>👥 {p.votes} {t(lang, '票', 'votes')}</span>
                     </div>
+
+                    {/* Comment button + Rating stars */}
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '8px', fontSize: '0.75rem' }}>
+                        <button
+                            onClick={() => toggleComments(p.id)}
+                            style={{
+                                padding: '3px 10px', borderRadius: '4px', border: '1px solid #d1d5db',
+                                background: expandedComments[p.id] ? '#eef2ff' : '#fff',
+                                fontSize: '0.75rem', cursor: 'pointer', color: '#4f46e5'
+                            }}
+                        >
+                            {t(lang, '评论', 'Comment')}
+                        </button>
+                        {p.locked ? (
+                            <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>🔒 {t(lang, '已锁定', 'Locked')}</span>
+                        ) : (
+                            <span style={{ display: 'flex', gap: '2px', cursor: 'pointer' }}>
+                                {[1, 2, 3, 4, 5].map(star => (
+                                    <span
+                                        key={star}
+                                        onClick={() => handleRate(p.id, star)}
+                                        style={{ fontSize: '0.9rem', cursor: 'pointer' }}
+                                        title={`${t(lang, '评分', 'Rate')} ${star}`}
+                                    >
+                                        {star <= Math.round(p.score / Math.max(p.votes, 1)) ? '★' : '☆'}
+                                    </span>
+                                ))}
+                            </span>
+                        )}
+                        {ratingErrors[p.id] && (
+                            <span style={{ fontSize: '0.7rem', color: '#ef4444' }}>{ratingErrors[p.id]}</span>
+                        )}
+                    </div>
+
+                    {/* Expanded comment area */}
+                    {expandedComments[p.id] && (
+                        <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: '8px', background: '#f9fafb', border: '1px solid #e5e7eb' }}>
+                            {/* Comments list */}
+                            {(postComments[p.id] || []).length > 0 ? (
+                                <div style={{ marginBottom: '8px' }}>
+                                    {(postComments[p.id] || []).map(c => (
+                                        <div key={c.id} style={{ marginBottom: '6px', fontSize: '0.75rem', lineHeight: 1.5 }}>
+                                            <span style={{ fontWeight: 600, color: '#4f46e5' }}>{c.nickname}</span>
+                                            <span style={{ color: '#374151', marginLeft: '6px' }}>{c.content}</span>
+                                            {c.rating > 0 && (
+                                                <span style={{ marginLeft: '6px', color: '#f59e0b' }}>
+                                                    {[1, 2, 3, 4, 5].map(s => (
+                                                        <span key={s}>{s <= c.rating ? '★' : '☆'}</span>
+                                                    ))}
+                                                </span>
+                                            )}
+                                            <span style={{ marginLeft: '8px', fontSize: '0.65rem', color: '#9ca3af' }}>
+                                                {new Date(c.created_at).toLocaleString()}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: '8px' }}>
+                                    {t(lang, '暂无评论', 'No comments yet')}
+                                </div>
+                            )}
+
+                            {/* Comment input (hidden if locked) */}
+                            {!p.locked && (
+                                <>
+                                    <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px' }}>
+                                        <textarea
+                                            value={commentInputs[p.id] || ''}
+                                            onChange={e => setCommentInputs(prev => ({ ...prev, [p.id]: e.target.value }))}
+                                            placeholder={t(lang, '写评论...', 'Write a comment...')}
+                                            style={{
+                                                width: '100%', minHeight: '50px', padding: '6px 8px', borderRadius: '6px',
+                                                border: '1px solid #d1d5db', fontSize: '0.75rem', resize: 'vertical',
+                                                outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit'
+                                            }}
+                                        />
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
+                                            <span style={{
+                                                fontSize: '0.65rem',
+                                                color: (commentInputs[p.id] || '').length > 1000 ? '#ef4444' : '#6b7280'
+                                            }}>
+                                                {(commentInputs[p.id] || '').length}/1000
+                                            </span>
+                                            <button
+                                                onClick={() => handleComment(p.id)}
+                                                disabled={!(commentInputs[p.id] || '').trim() || (commentInputs[p.id] || '').length > 1000}
+                                                style={{
+                                                    padding: '4px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
+                                                    fontSize: '0.75rem', cursor: 'pointer',
+                                                    background: (!(commentInputs[p.id] || '').trim() || (commentInputs[p.id] || '').length > 1000) ? '#f3f4f6' : '#4f46e5',
+                                                    color: (!(commentInputs[p.id] || '').trim() || (commentInputs[p.id] || '').length > 1000) ? '#9ca3af' : '#fff'
+                                                }}
+                                            >
+                                                {t(lang, '提交', 'Submit')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+
+                            {/* Error message */}
+                            {commentErrors[p.id] && (
+                                <div style={{ marginTop: '6px', fontSize: '0.7rem', color: '#ef4444' }}>{commentErrors[p.id]}</div>
+                            )}
+                        </div>
+                    )}
                 </div>
             ))}
 

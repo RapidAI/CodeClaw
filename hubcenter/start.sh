@@ -11,6 +11,8 @@ LOG_FILE="$LOG_DIR/maclaw-hubcenter.out.log"
 
 mkdir -p "$APP_DIR/data" "$LOG_DIR"
 
+cd "$APP_DIR"
+
 if [ ! -f "$CONFIG_PATH" ] && [ -f "$EXAMPLE_CONFIG_PATH" ]; then
   cp -f "$EXAMPLE_CONFIG_PATH" "$CONFIG_PATH"
 fi

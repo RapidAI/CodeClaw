@@ -4031,7 +4031,7 @@ func (h *IMMessageHandler) toolGetConfig(args map[string]interface{}) string {
 	}
 
 	section := stringVal(args, "section")
-	result, err := h.configManager.GetConfig(section)
+	result, err := h.configManager.GetConfig(section, true)
 	if err != nil {
 		return fmt.Sprintf("读取配置失败: %s", err.Error())
 	}
@@ -4277,6 +4277,7 @@ func (h *IMMessageHandler) toolCreateScheduledTask(args map[string]interface{}) 
 		DayOfMonth: dom,
 		StartDate:  stringVal(args, "start_date"),
 		EndDate:    stringVal(args, "end_date"),
+		TaskType:   stringVal(args, "task_type"),
 	}
 
 	id, err := h.scheduledTaskManager.Add(t)

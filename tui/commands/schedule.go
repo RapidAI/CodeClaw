@@ -54,13 +54,17 @@ func scheduleList(mgr *scheduler.Manager, args []string) error {
 		fmt.Println("No scheduled tasks.")
 		return nil
 	}
-	fmt.Printf("%-20s %-20s %-8s %-8s %-6s %s\n", "ID", "NAME", "STATUS", "TIME", "RUNS", "ACTION")
-	fmt.Println(strings.Repeat("-", 90))
+	fmt.Printf("%-20s %-20s %-8s %-8s %-8s %-6s %s\n", "ID", "NAME", "TYPE", "STATUS", "TIME", "RUNS", "ACTION")
+	fmt.Println(strings.Repeat("-", 100))
 	for _, t := range tasks {
 		action := TruncateDisplay(t.Action, 30)
 		timeStr := fmt.Sprintf("%02d:%02d", t.Hour, t.Minute)
-		fmt.Printf("%-20s %-20s %-8s %-8s %-6d %s\n",
-			TruncateDisplay(t.ID, 20), TruncateDisplay(t.Name, 20), t.Status, timeStr, t.RunCount, action)
+		taskType := t.TaskType
+		if taskType == "" {
+			taskType = "reminder"
+		}
+		fmt.Printf("%-20s %-20s %-8s %-8s %-8s %-6d %s\n",
+			TruncateDisplay(t.ID, 20), TruncateDisplay(t.Name, 20), taskType, t.Status, timeStr, t.RunCount, action)
 	}
 	return nil
 }
@@ -75,11 +79,12 @@ func scheduleCreate(mgr *scheduler.Manager, args []string) error {
 	dom := fs.Int("day-of-month", -1, "每月几号 1-31, -1=不限")
 	startDate := fs.String("start-date", "", "开始日期 YYYY-MM-DD")
 	endDate := fs.String("end-date", "", "结束日期 YYYY-MM-DD")
+	taskType := fs.String("type", "", "任务类型: reminder(提醒,默认) 或 process(处理)")
 	jsonOut := fs.Bool("json", false, "JSON 格式输出")
 	fs.Parse(args)
 
 	if *name == "" || *action == "" {
-		return NewUsageError("usage: schedule create --name <name> --action <text> [--hour H] [--minute M]")
+		return NewUsageError("usage: schedule create --name <name> --action <text> [--hour H] [--minute M] [--type reminder|process]")
 	}
 
 	task := scheduler.ScheduledTask{
@@ -91,6 +96,7 @@ func scheduleCreate(mgr *scheduler.Manager, args []string) error {
 		DayOfMonth: *dom,
 		StartDate:  *startDate,
 		EndDate:    *endDate,
+		TaskType:   *taskType,
 	}
 	id, err := mgr.Add(task)
 	if err != nil {

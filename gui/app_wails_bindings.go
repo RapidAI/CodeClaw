@@ -380,7 +380,7 @@ func (a *App) ListScheduledTasks() []ScheduledTask {
 }
 
 // CreateScheduledTask creates a new scheduled task (Wails binding).
-func (a *App) CreateScheduledTask(name, action string, hour, minute, dayOfWeek, dayOfMonth int, startDate, endDate string) (string, error) {
+func (a *App) CreateScheduledTask(name, action string, hour, minute, dayOfWeek, dayOfMonth int, startDate, endDate, taskType string) (string, error) {
 	a.ensureRemoteInfra()
 	if a.scheduledTaskManager == nil {
 		return "", fmt.Errorf("scheduled task manager not initialized")
@@ -394,6 +394,7 @@ func (a *App) CreateScheduledTask(name, action string, hour, minute, dayOfWeek, 
 		DayOfMonth: dayOfMonth,
 		StartDate:  startDate,
 		EndDate:    endDate,
+		TaskType:   taskType,
 	})
 }
 

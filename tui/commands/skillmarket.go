@@ -214,7 +214,7 @@ func smStatus(args []string) error {
 	submissionID := fs.Arg(0)
 
 	base := resolveHubCenterURL()
-	endpoint := base + "/api/v1/skills/submissions/" + submissionID
+	endpoint := base + "/api/v1/skill-submissions/" + submissionID
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

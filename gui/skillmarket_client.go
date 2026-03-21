@@ -116,7 +116,7 @@ func (c *SkillMarketClient) GetSubmissionStatus(ctx context.Context, submissionI
 		Status   string `json:"status"`
 		ErrorMsg string `json:"error_msg"`
 	}
-	if err := c.getJSON(ctx, base+"/api/v1/skills/submissions/"+submissionID, &result); err != nil {
+	if err := c.getJSON(ctx, base+"/api/v1/skill-submissions/"+submissionID, &result); err != nil {
 		return "", "", err
 	}
 	return result.Status, result.ErrorMsg, nil

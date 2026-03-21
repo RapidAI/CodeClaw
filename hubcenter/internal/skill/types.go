@@ -29,6 +29,8 @@ type HubSkillMeta struct {
 	SecurityLabels     []string `json:"security_labels,omitempty"`     // 安全标签
 	Permissions        []string `json:"permissions,omitempty"`         // 声明的权限
 	RequiredEnv        []string `json:"required_env,omitempty"`        // 需要的环境变量/API Key
+	Platforms          []string `json:"platforms,omitempty"`           // "windows","linux","macos"; empty = universal
+	RequiresGUI        bool     `json:"requires_gui,omitempty"`        // Linux 下是否需要 GUI 环境
 }
 
 // SkillRating 记录单个 MaClaw 对 Skill 的评分。

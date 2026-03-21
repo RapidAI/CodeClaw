@@ -114,11 +114,14 @@ type NLSkillEntry struct {
 	Steps         []NLSkillStep `json:"steps"`
 	Status        string        `json:"status"` // "active", "disabled"
 	CreatedAt     string        `json:"created_at"`
-	Source        string        `json:"source"`         // "manual" | "learned" | "hub" | "crafted"
+	Source        string        `json:"source"`         // "manual" | "learned" | "hub" | "crafted" | "file" | "zip_import"
 	SourceProject string        `json:"source_project"`
 	HubSkillID    string        `json:"hub_skill_id,omitempty"`
 	HubVersion    string        `json:"hub_version,omitempty"`
 	TrustLevel    string        `json:"trust_level,omitempty"`
+	Platforms     []string      `json:"platforms,omitempty"`    // "windows","linux","macos"; empty = universal
+	RequiresGUI   bool          `json:"requires_gui,omitempty"` // Linux 下是否需要 GUI 环境
+	SkillDir      string        `json:"skill_dir,omitempty"`    // 自包含 skill 目录的绝对路径（运行时填充）
 	UsageCount    int           `json:"usage_count"`
 	SuccessCount  int           `json:"success_count"`
 	LastUsedAt    string        `json:"last_used_at,omitempty"`

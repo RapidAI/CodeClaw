@@ -43,6 +43,11 @@ type App struct {
 	mcpRegistry       *MCPRegistry
 	localMCPManager   *LocalMCPManager
 	skillExecutor     *SkillExecutor
+	skillRunner       *SkillRunner
+	skillMarketClient *SkillMarketClient
+	gossipClient      *GossipClient
+	autoUploadTrigger *AutoUploadTrigger
+	gossipAutoPublish *AutoPublishTrigger
 	// Maclaw capability evolution components
 	riskAssessor        *RiskAssessor
 	policyEngine        *PolicyEngine
@@ -135,7 +140,33 @@ func (a *App) initRemoteInfra() {
 	if a.skillExecutor == nil {
 		a.skillExecutor = NewSkillExecutor(a, a.mcpRegistry, a.remoteSessions)
 	}
-	// Initialize Maclaw capability evolution components
+	if a.skillMarketClient == nil {
+		a.skillMarketClient = NewSkillMarketClient(a)
+	}
+	if a.gossipClient == nil {
+		a.gossipClient = NewGossipClient(a)
+	}
+	if a.gossipAutoPublish == nil && a.gossipClient != nil {
+		a.gossipAutoPublish = NewAutoPublishTrigger(a.gossipClient, func() bool {
+			if cfg, err := a.LoadConfig(); err == nil {
+				return cfg.GossipAutoPublish
+			}
+			return false
+		})
+	}
+	if a.autoUploadTrigger == nil && a.skillMarketClient != nil {
+		a.autoUploadTrigger = NewAutoUploadTrigger(a.skillMarketClient, func() string {
+			if cfg, err := a.LoadConfig(); err == nil {
+				return strings.TrimSpace(cfg.RemoteEmail)
+			}
+			return ""
+		})
+	}
+	if a.skillRunner == nil && a.skillExecutor != nil {
+		a.skillRunner = NewSkillRunner(a.skillExecutor)
+		a.skillRunner.uploadTrigger = a.autoUploadTrigger
+		a.skillRunner.packageFn = a.packageSkillForMarket
+	}
 	if a.riskAssessor == nil {
 		a.riskAssessor = &RiskAssessor{}
 	}

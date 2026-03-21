@@ -23,6 +23,10 @@ type SkillMetadata struct {
 	// PricingMode 定价模式 (Req 36): auto|free|fixed
 	PricingMode string `yaml:"pricing_mode,omitempty" json:"pricing_mode,omitempty"`
 
+	// 平台兼容性
+	Platforms   []string `yaml:"platforms,omitempty" json:"platforms,omitempty"`     // "windows","linux","macos"; empty = universal
+	RequiresGUI bool     `yaml:"requires_gui,omitempty" json:"requires_gui,omitempty"` // Linux 下是否需要 GUI 环境
+
 	// Extra 保留未识别字段，确保 round-trip 安全。
 	Extra map[string]any `yaml:"-" json:"-"`
 }
@@ -50,7 +54,7 @@ func ParseSkillYAML(data []byte) (*SkillMetadata, error) {
 		"name": true, "description": true, "tags": true,
 		"triggers": true, "version": true, "author": true,
 		"price": true, "permissions": true, "required_env": true,
-		"pricing_mode": true,
+		"pricing_mode": true, "platforms": true, "requires_gui": true,
 	}
 	extra := make(map[string]any)
 	for k, v := range raw {

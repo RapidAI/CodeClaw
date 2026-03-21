@@ -3,7 +3,6 @@ package commands
 import (
 	"flag"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/RapidAI/CodeClaw/corelib/remote"
@@ -36,10 +35,9 @@ func toolRecommend(args []string) error {
 	}
 
 	// 检测已安装的工具
-	knownTools := []string{"claude", "codex", "gemini", "cursor", "opencode", "iflow", "kilo"}
 	var installed []string
-	for _, t := range knownTools {
-		if _, err := exec.LookPath(t); err == nil {
+	for _, t := range remote.ToolOrder {
+		if _, found := remote.ResolveToolPath(t); found {
 			installed = append(installed, t)
 		}
 	}
@@ -65,6 +63,7 @@ func toolRecommend(args []string) error {
 }
 
 // DetectedTool 检测到的工具信息（供 TUI 视图复用）。
+// 保留类型别名以兼容现有 TUI 视图代码。
 type DetectedTool struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
@@ -72,23 +71,17 @@ type DetectedTool struct {
 	Path        string `json:"path,omitempty"`
 }
 
-// DetectTools 检测所有已知工具的安装状态。
+// DetectTools 检测所有已知工具的安装状态（使用 ~/.cceasy/tools 私有目录）。
 func DetectTools() []DetectedTool {
-	var tools []DetectedTool
-	for _, name := range remote.ToolOrder {
-		meta, ok := remote.BuiltinToolInfos[name]
-		if !ok {
-			continue
+	coreTools := remote.DetectAllTools()
+	tools := make([]DetectedTool, len(coreTools))
+	for i, ct := range coreTools {
+		tools[i] = DetectedTool{
+			Name:        ct.Name,
+			DisplayName: ct.DisplayName,
+			Available:   ct.Installed,
+			Path:        ct.Path,
 		}
-		dt := DetectedTool{
-			Name:        name,
-			DisplayName: meta.DisplayName,
-		}
-		if path, err := exec.LookPath(meta.BinaryName); err == nil {
-			dt.Available = true
-			dt.Path = path
-		}
-		tools = append(tools, dt)
 	}
 	return tools
 }

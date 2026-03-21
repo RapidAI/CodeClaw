@@ -208,7 +208,7 @@ func (h *TUIAgentHandler) toolGetConfig(args map[string]interface{}) string {
 	if section == "" {
 		section = "all"
 	}
-	result, err := mgr.GetConfig(section)
+	result, err := mgr.GetConfig(section, true)
 	if err != nil {
 		return fmt.Sprintf("读取配置失败: %v", err)
 	}
@@ -388,6 +388,7 @@ func (h *TUIAgentHandler) toolCreateScheduledTask(args map[string]interface{}) s
 		Minute:     intArg(args, "minute", 0),
 		DayOfWeek:  intArg(args, "day_of_week", -1),
 		DayOfMonth: intArg(args, "day_of_month", -1),
+		TaskType:   stringArg(args, "task_type"),
 	}
 	id, err := h.schedulerMgr.Add(task)
 	if err != nil {
@@ -410,7 +411,11 @@ func (h *TUIAgentHandler) toolListScheduledTasks() string {
 		if t.NextRunAt != nil {
 			next = t.NextRunAt.Format("2006-01-02 15:04")
 		}
-		sb.WriteString(fmt.Sprintf("ID: %s  名称: %s  状态: %s  下次: %s\n", t.ID, t.Name, t.Status, next))
+		taskType := t.TaskType
+		if taskType == "" {
+			taskType = "reminder"
+		}
+		sb.WriteString(fmt.Sprintf("ID: %s  名称: %s  类型: %s  状态: %s  下次: %s\n", t.ID, t.Name, taskType, t.Status, next))
 	}
 	return sb.String()
 }

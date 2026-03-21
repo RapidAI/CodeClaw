@@ -905,3 +905,29 @@ export function GetTelegramStatus() {
 export function RestartTelegram() {
   return window['go']['main']['App']['RestartTelegram']();
 }
+
+// Gossip bindings
+export function GossipSnapshot(arg1) {
+  return window['go']['main']['App']['GossipSnapshot'](arg1);
+}
+
+export function GossipPublish(arg1, arg2) {
+  return window['go']['main']['App']['GossipPublish'](arg1, arg2);
+}
+
+export function GossipComment(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GossipComment'](arg1, arg2, arg3);
+}
+
+export function GossipRate(arg1, arg2) {
+  return window['go']['main']['App']['GossipRate'](arg1, arg2);
+}
+
+export function GossipGetComments(arg1, arg2) {
+  return window['go']['main']['App']['GossipGetComments'](arg1, arg2);
+}
+
+// NL Skill upload binding
+export function UploadNLSkillToMarket(arg1) {
+  return window['go']['main']['App']['UploadNLSkillToMarket'](arg1);
+}

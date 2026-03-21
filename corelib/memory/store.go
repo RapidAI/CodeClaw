@@ -194,6 +194,7 @@ func (s *Store) RecallForProject(userMessage, projectPath string) []Entry {
 	projectLower := strings.ToLower(projectPath)
 	now := time.Now()
 
+	var selfIdentity []Entry
 	var userFacts []Entry
 	type scored struct {
 		entry Entry
@@ -202,6 +203,10 @@ func (s *Store) RecallForProject(userMessage, projectPath string) []Entry {
 	var others []scored
 
 	for _, e := range s.entries {
+		if e.Category == CategorySelfIdentity {
+			selfIdentity = append(selfIdentity, e)
+			continue
+		}
 		if e.Category == CategoryUserFact {
 			userFacts = append(userFacts, e)
 			continue
@@ -239,6 +244,14 @@ func (s *Store) RecallForProject(userMessage, projectPath string) []Entry {
 
 	var result []Entry
 	tokenBudget := maxTokens
+
+	// Self-identity memories are always recalled first — highest priority.
+	// They are never skipped due to token budget constraints.
+	for _, e := range selfIdentity {
+		tokens := len(e.Content) / 4
+		tokenBudget -= tokens
+		result = append(result, e)
+	}
 
 	for _, e := range userFacts {
 		if len(result) >= maxEntries {
@@ -349,27 +362,48 @@ func (s *Store) evictLRU() {
 		return
 	}
 
-	excess := len(s.entries) - s.maxItems
+	// Separate protected (self_identity) entries — they are never evicted.
+	var protectedEntries []Entry
+	var evictable []Entry
+	for _, e := range s.entries {
+		if e.Category.IsProtected() {
+			protectedEntries = append(protectedEntries, e)
+		} else {
+			evictable = append(evictable, e)
+		}
+	}
 
-	indices := make([]int, len(s.entries))
+	target := s.maxItems - len(protectedEntries)
+	if target < 0 {
+		// Protected entries alone exceed maxItems — nothing else can be kept.
+		fmt.Printf("[memory_store] WARNING: %d protected entries exceed maxItems (%d)\n", len(protectedEntries), s.maxItems)
+		target = 0
+	}
+	if len(evictable) <= target {
+		return
+	}
+
+	indices := make([]int, len(evictable))
 	for i := range indices {
 		indices[i] = i
 	}
 	sort.SliceStable(indices, func(a, b int) bool {
-		ea, eb := s.entries[indices[a]], s.entries[indices[b]]
+		ea, eb := evictable[indices[a]], evictable[indices[b]]
 		if ea.AccessCount != eb.AccessCount {
 			return ea.AccessCount < eb.AccessCount
 		}
 		return ea.UpdatedAt.Before(eb.UpdatedAt)
 	})
 
+	excess := len(evictable) - target
 	remove := make(map[int]struct{}, excess)
 	for i := 0; i < excess; i++ {
 		remove[indices[i]] = struct{}{}
 	}
 
 	kept := make([]Entry, 0, s.maxItems)
-	for i, e := range s.entries {
+	kept = append(kept, protectedEntries...)
+	for i, e := range evictable {
 		if _, ok := remove[i]; !ok {
 			kept = append(kept, e)
 		}

@@ -84,6 +84,9 @@ func (mc *Compressor) Compress(ctx context.Context) (*CompressResult, error) {
 		mc.store.mu.RLock()
 		var candidates []Entry
 		for _, e := range mc.store.entries {
+			if e.Category.IsProtected() {
+				continue
+			}
 			if len([]rune(e.Content)) >= mc.minContentLen {
 				candidates = append(candidates, e)
 			}
@@ -234,6 +237,10 @@ func (mc *Compressor) mergeSemanticDuplicates(ctx context.Context) (int, error) 
 	mc.store.mu.RUnlock()
 
 	for cat := range catSet {
+		// Never merge protected categories (e.g. self_identity).
+		if cat.IsProtected() {
+			continue
+		}
 		mc.store.mu.RLock()
 		var entries []Entry
 		for _, e := range mc.store.entries {

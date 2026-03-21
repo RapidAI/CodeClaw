@@ -190,7 +190,7 @@ func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryS
 	// SkillMarket API
 	if smHandlers != nil {
 		mux.HandleFunc("POST /api/v1/skills/submit", smHandlers.SubmitSkill)
-		mux.HandleFunc("GET /api/v1/skills/submissions/{id}", smHandlers.GetSubmissionStatus)
+		mux.HandleFunc("GET /api/v1/skill-submissions/{id}", smHandlers.GetSubmissionStatus)
 		mux.HandleFunc("POST /api/v1/account/ensure", smHandlers.EnsureAccount)
 		mux.HandleFunc("GET /api/v1/account/{email}", smHandlers.GetAccount)
 		mux.HandleFunc("POST /api/v1/account/verify", smHandlers.VerifyAccount)

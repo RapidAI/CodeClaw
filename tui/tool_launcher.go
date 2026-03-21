@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/RapidAI/CodeClaw/corelib"
+	"github.com/RapidAI/CodeClaw/corelib/remote"
 	"github.com/RapidAI/CodeClaw/corelib/tool"
 	"github.com/RapidAI/CodeClaw/tui/commands"
 	tea "github.com/charmbracelet/bubbletea"
@@ -116,11 +117,15 @@ func (l *TUIToolLauncher) LaunchToolByName(ctx context.Context, toolName, projec
 	}
 
 	tn := normalizeToolName(toolName)
+	toolPath, found := remote.ResolveToolPath(tn)
+	if !found {
+		return fmt.Errorf("工具 %s 未安装（在 %s 中未找到）", tn, remote.ToolsDir())
+	}
 	args := buildToolArgs(tn, projectDir, yoloMode, adminMode)
 
 	opts := tool.LaunchOptions{
 		ProjectDir: projectDir,
-		Tool:       tn,
+		Tool:       toolPath,
 		Env:        env,
 		Args:       args,
 		YoloMode:   yoloMode,

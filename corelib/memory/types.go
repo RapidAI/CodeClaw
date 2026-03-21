@@ -6,6 +6,7 @@ import "time"
 type Category string
 
 const (
+	CategorySelfIdentity        Category = "self_identity"
 	CategoryUserFact            Category = "user_fact"
 	CategoryPreference          Category = "preference"
 	CategoryProjectKnowledge    Category = "project_knowledge"
@@ -13,6 +14,11 @@ const (
 	CategoryConversationSummary Category = "conversation_summary"
 	CategorySessionCheckpoint   Category = "session_checkpoint"
 )
+
+// IsProtected returns true for categories that must never be evicted or compressed.
+func (c Category) IsProtected() bool {
+	return c == CategorySelfIdentity
+}
 
 // Entry represents a single memory record.
 type Entry struct {

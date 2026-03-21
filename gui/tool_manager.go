@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/RapidAI/CodeClaw/corelib/remote"
 )
 
 type ToolStatus struct {
@@ -35,98 +37,8 @@ func (tm *ToolManager) GetToolStatus(name string) ToolStatus {
 
 	tm.app.log(fmt.Sprintf("GetToolStatus: Checking tool '%s'", name))
 
-	binaryNames := []string{name}
-	if name == "claude" {
-		binaryNames = append(binaryNames, "claude-code")
-	}
-	if name == "codex" {
-		binaryNames = append(binaryNames, "openai")
-	}
-	if name == "opencode" && runtime.GOOS == "windows" {
-		binaryNames = append(binaryNames, "opencode-windows-x64")
-	}
-	if name == "codebuddy" {
-		binaryNames = []string{"codebuddy", "codebuddy-code"}
-	}
-	if name == "iflow" {
-		binaryNames = []string{"iflow"}
-	}
-	if name == "kilo" {
-		binaryNames = []string{"kilo", "kilocode"}
-	}
-	if name == "cursor" {
-		binaryNames = []string{"cursor-agent", "agent"}
-	}
-	if name == "gemini" {
-		binaryNames = []string{"gemini"}
-	}
-
-	tm.app.log(fmt.Sprintf("GetToolStatus: Looking for binary names: %v", binaryNames))
-
-	var path string
-
-	// ONLY check private ~/.cceasy directory, do NOT check system PATH
-	home, _ := os.UserHomeDir()
-
-	for _, bn := range binaryNames {
-		if runtime.GOOS == "windows" {
-			// Check prefix root and bin folder
-			// Prioritize .cmd, .exe, .bat.
-			// Also check .ps1 and extensionless (shell scripts) as fallback
-			possiblePaths := []string{
-				filepath.Join(home, ".cceasy", "tools", bn+".cmd"),
-				filepath.Join(home, ".cceasy", "tools", bn+".exe"),
-				filepath.Join(home, ".cceasy", "tools", bn+".bat"),
-				filepath.Join(home, ".cceasy", "tools", bn+".ps1"),
-				filepath.Join(home, ".cceasy", "tools", "bin", bn+".cmd"),
-				filepath.Join(home, ".cceasy", "tools", "bin", bn+".exe"),
-				filepath.Join(home, ".cceasy", "tools", bn),
-				filepath.Join(home, ".cceasy", "tools", "bin", bn),
-			}
-
-			// Special case for opencode specific binary path
-			if name == "opencode" {
-				possiblePaths = append(possiblePaths, filepath.Join(home, ".cceasy", "tools", "node_modules", "opencode-windows-x64", "bin", "opencode.exe"))
-			}
-
-			// Generic node_modules check using package name
-			if pkgName := tm.GetPackageName(name); pkgName != "" {
-				base := filepath.Join(home, ".cceasy", "tools", "node_modules", pkgName, "bin", bn)
-				possiblePaths = append(possiblePaths, base)
-				possiblePaths = append(possiblePaths, base+".js")
-			}
-
-			for _, p := range possiblePaths {
-				if info, err := os.Stat(p); err == nil && !info.IsDir() {
-					path = p
-					break
-				}
-			}
-		} else {
-			// Check both the tools root (native installs like claude) and bin/ (npm installs)
-			toolsRoot := filepath.Join(home, ".cceasy", "tools", bn)
-			localBin := filepath.Join(home, ".cceasy", "tools", "bin", bn)
-			if info, err := os.Stat(toolsRoot); err == nil && !info.IsDir() {
-				path = toolsRoot
-			} else if _, err := os.Stat(localBin); err == nil {
-				path = localBin
-			} else {
-				// Fallback: Check node_modules bin directly
-				if pkgName := tm.GetPackageName(name); pkgName != "" {
-					modBin := filepath.Join(home, ".cceasy", "tools", "node_modules", pkgName, "bin", bn)
-					if _, err := os.Stat(modBin); err == nil {
-						path = modBin
-					}
-				}
-			}
-		}
-
-		if path != "" {
-			break
-		}
-	}
-
-	if path == "" {
+	path, found := remote.ResolveToolPath(name)
+	if !found {
 		tm.app.log(fmt.Sprintf("GetToolStatus: Tool '%s' NOT found", name))
 		return status
 	}
@@ -142,6 +54,7 @@ func (tm *ToolManager) GetToolStatus(name string) ToolStatus {
 
 	return status
 }
+
 
 func (tm *ToolManager) getToolVersion(name, path string) (string, error) {
 	var cmd *exec.Cmd
@@ -880,29 +793,7 @@ func (tm *ToolManager) installCursorAgent() error {
 }
 
 func (tm *ToolManager) GetPackageName(name string) string {
-	switch name {
-	case "claude":
-		return "" // Claude Code uses native binary distribution, not npm
-	case "gemini":
-		return "@google/gemini-cli"
-	case "codex":
-		return "@openai/codex"
-	case "opencode":
-		if runtime.GOOS == "windows" {
-			return "opencode-windows-x64"
-		}
-		return "opencode-ai"
-	case "codebuddy":
-		return "@tencent-ai/codebuddy-code"
-	case "iflow":
-		return "@iflow-ai/iflow-cli"
-	case "kilo":
-		return "@kilocode/cli"
-	case "cursor":
-		return "" // Cursor Agent is not an npm package
-	default:
-		return ""
-	}
+	return remote.PackageName(name)
 }
 
 func (tm *ToolManager) getNpmPath() string {

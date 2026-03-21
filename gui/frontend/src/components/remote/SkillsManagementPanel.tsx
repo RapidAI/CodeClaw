@@ -11,6 +11,7 @@ import {
     UpdateHubSkill,
     ExportLearnedSkillsZip,
     ImportLearnedSkillsZip,
+    UploadNLSkillToMarket,
 } from "../../../wailsjs/go/main/App";
 
 interface NLSkillStep {
@@ -107,6 +108,7 @@ export function SkillsManagementPanel({ translate }: Props) {
     const [learnedExporting, setLearnedExporting] = useState(false);
     const [learnedImporting, setLearnedImporting] = useState(false);
     const [importReport, setImportReport] = useState<{ restored: number; skipped: number; failed: number; details: string[] } | null>(null);
+    const [uploadingSkill, setUploadingSkill] = useState<string | null>(null);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -784,6 +786,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                                         <th style={thStyle}>来源</th>
                                         <th style={thStyle}>使用统计</th>
                                         <th style={thStyle}>状态</th>
+                                        <th style={thStyle}>操作</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -812,6 +815,26 @@ export function SkillsManagementPanel({ translate }: Props) {
                                                 <span style={{ ...statusBadgeStyle, ...(s.status === "active" ? activeBadge : disabledBadge) }}>
                                                     {s.status === "active" ? "启用" : s.status}
                                                 </span>
+                                            </td>
+                                            <td style={tdStyle}>
+                                                <button
+                                                    className="btn-secondary"
+                                                    style={{ fontSize: "0.7rem", padding: "2px 8px" }}
+                                                    disabled={uploadingSkill === s.name}
+                                                    onClick={async () => {
+                                                        setUploadingSkill(s.name);
+                                                        try {
+                                                            const sid = await UploadNLSkillToMarket(s.name);
+                                                            alert(`上传成功，提交ID: ${sid}`);
+                                                        } catch (e: any) {
+                                                            alert(`上传失败: ${e?.message || e}`);
+                                                        } finally {
+                                                            setUploadingSkill(null);
+                                                        }
+                                                    }}
+                                                >
+                                                    {uploadingSkill === s.name ? "上传中..." : "⬆ 上传"}
+                                                </button>
                                             </td>
                                         </tr>
                                     ))}

@@ -100,6 +100,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(exitCodeForError(err))
 		}
+	case "gossip":
+		if err := commands.RunGossip(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(exitCodeForError(err))
+		}
 	case "--version", "-v":
 		fmt.Printf("maclaw-tui %s\n", version)
 	case "--help", "-h":
@@ -152,6 +157,7 @@ Commands:
   swarm         Swarm 多任务编排（create/status/cancel/resume/list）
   llm           LLM 管理（test/ping/providers/status/set-provider/set-max-iterations/get-max-iterations）
   system        系统信息（info/python-envs）
+  gossip        八卦社区（browse/publish/comment/rate/comments）
 
 Flags:
   --no-tui      批处理模式（无交互 UI）

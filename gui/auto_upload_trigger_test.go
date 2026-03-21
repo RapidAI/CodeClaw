@@ -5,7 +5,7 @@ import "testing"
 // ── Task 21.7: Auto Upload Trigger 单元测试 ─────────────────────────────
 
 func TestShouldUpload_MeetsAllConditions(t *testing.T) {
-	trigger := NewAutoUploadTrigger(nil, "dev@test.com")
+	trigger := NewAutoUploadTrigger(nil, func() string { return "dev@test.com" })
 
 	// 记录 3 次执行，评分都是 +2，有变更
 	trigger.RecordExecution("my-skill", 2, "hash-v2")
@@ -18,7 +18,7 @@ func TestShouldUpload_MeetsAllConditions(t *testing.T) {
 }
 
 func TestShouldUpload_InsufficientExecCount(t *testing.T) {
-	trigger := NewAutoUploadTrigger(nil, "dev@test.com")
+	trigger := NewAutoUploadTrigger(nil, func() string { return "dev@test.com" })
 
 	// 只执行 2 次（不足 3 次）
 	trigger.RecordExecution("my-skill", 2, "hash-v2")
@@ -30,7 +30,7 @@ func TestShouldUpload_InsufficientExecCount(t *testing.T) {
 }
 
 func TestShouldUpload_LowRating(t *testing.T) {
-	trigger := NewAutoUploadTrigger(nil, "dev@test.com")
+	trigger := NewAutoUploadTrigger(nil, func() string { return "dev@test.com" })
 
 	// 3 次执行但评分低
 	trigger.RecordExecution("my-skill", 0, "hash-v2")
@@ -44,7 +44,7 @@ func TestShouldUpload_LowRating(t *testing.T) {
 }
 
 func TestShouldUpload_NoChange(t *testing.T) {
-	trigger := NewAutoUploadTrigger(nil, "dev@test.com")
+	trigger := NewAutoUploadTrigger(nil, func() string { return "dev@test.com" })
 
 	// 3 次执行，评分好，但已上传过且无变更
 	trigger.RecordExecution("my-skill", 2, "hash-v1")
@@ -62,14 +62,14 @@ func TestShouldUpload_NoChange(t *testing.T) {
 }
 
 func TestShouldUpload_UnknownSkill(t *testing.T) {
-	trigger := NewAutoUploadTrigger(nil, "dev@test.com")
+	trigger := NewAutoUploadTrigger(nil, func() string { return "dev@test.com" })
 	if trigger.ShouldUpload("nonexistent") {
 		t.Error("should not upload: unknown skill")
 	}
 }
 
 func TestShouldUpload_EmptyHash(t *testing.T) {
-	trigger := NewAutoUploadTrigger(nil, "dev@test.com")
+	trigger := NewAutoUploadTrigger(nil, func() string { return "dev@test.com" })
 
 	trigger.RecordExecution("my-skill", 2, "")
 	trigger.RecordExecution("my-skill", 2, "")
@@ -81,7 +81,7 @@ func TestShouldUpload_EmptyHash(t *testing.T) {
 }
 
 func TestRecordExecution_RecentScoresCapped(t *testing.T) {
-	trigger := NewAutoUploadTrigger(nil, "dev@test.com")
+	trigger := NewAutoUploadTrigger(nil, func() string { return "dev@test.com" })
 
 	// 记录 15 次，应只保留最近 10 次
 	for i := 0; i < 15; i++ {
