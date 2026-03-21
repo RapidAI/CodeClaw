@@ -159,6 +159,7 @@ export namespace main {
 	    qqbot_app_id: string;
 	    qqbot_app_secret: string;
 	    ui_mode: string;
+	    gossip_auto_publish: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -234,6 +235,7 @@ export namespace main {
 	        this.qqbot_app_id = source["qqbot_app_id"];
 	        this.qqbot_app_secret = source["qqbot_app_secret"];
 	        this.ui_mode = source["ui_mode"];
+	        this.gossip_auto_publish = source["gossip_auto_publish"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
