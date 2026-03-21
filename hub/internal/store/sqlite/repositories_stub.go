@@ -221,13 +221,14 @@ func (r *userRepo) Create(ctx context.Context, user *store.User) error {
 func (r *userRepo) GetByID(ctx context.Context, id string) (*store.User, error) {
 	row := r.readDB.QueryRowContext(
 		ctx,
-		`SELECT id, email, sn, status, enrollment_status, created_at, updated_at
+		`SELECT id, email, sn, status, enrollment_status, smart_route, created_at, updated_at
 		 FROM users WHERE id = ?`,
 		id,
 	)
 
 	var (
 		user                 store.User
+		smartRoute           int
 		createdAt, updatedAt string
 	)
 	if err := row.Scan(
@@ -236,6 +237,7 @@ func (r *userRepo) GetByID(ctx context.Context, id string) (*store.User, error) 
 		&user.SN,
 		&user.Status,
 		&user.EnrollmentStatus,
+		&smartRoute,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -245,6 +247,7 @@ func (r *userRepo) GetByID(ctx context.Context, id string) (*store.User, error) 
 		return nil, err
 	}
 
+	user.SmartRoute = smartRoute != 0
 	user.CreatedAt = mustParseTime(createdAt)
 	user.UpdatedAt = mustParseTime(updatedAt)
 	return &user, nil
@@ -253,13 +256,14 @@ func (r *userRepo) GetByID(ctx context.Context, id string) (*store.User, error) 
 func (r *userRepo) GetByEmail(ctx context.Context, email string) (*store.User, error) {
 	row := r.readDB.QueryRowContext(
 		ctx,
-		`SELECT id, email, sn, status, enrollment_status, created_at, updated_at
+		`SELECT id, email, sn, status, enrollment_status, smart_route, created_at, updated_at
 		 FROM users WHERE email = ?`,
 		email,
 	)
 
 	var (
 		user                 store.User
+		smartRoute           int
 		createdAt, updatedAt string
 	)
 	if err := row.Scan(
@@ -268,6 +272,7 @@ func (r *userRepo) GetByEmail(ctx context.Context, email string) (*store.User, e
 		&user.SN,
 		&user.Status,
 		&user.EnrollmentStatus,
+		&smartRoute,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -277,6 +282,7 @@ func (r *userRepo) GetByEmail(ctx context.Context, email string) (*store.User, e
 		return nil, err
 	}
 
+	user.SmartRoute = smartRoute != 0
 	user.CreatedAt = mustParseTime(createdAt)
 	user.UpdatedAt = mustParseTime(updatedAt)
 	return &user, nil
@@ -285,7 +291,7 @@ func (r *userRepo) GetByEmail(ctx context.Context, email string) (*store.User, e
 func (r *userRepo) List(ctx context.Context) ([]*store.User, error) {
 	rows, err := r.readDB.QueryContext(
 		ctx,
-		`SELECT id, email, sn, status, enrollment_status, created_at, updated_at
+		`SELECT id, email, sn, status, enrollment_status, smart_route, created_at, updated_at
 		 FROM users
 		 ORDER BY updated_at DESC, email ASC`,
 	)
@@ -298,6 +304,7 @@ func (r *userRepo) List(ctx context.Context) ([]*store.User, error) {
 	for rows.Next() {
 		var (
 			user                 store.User
+			smartRoute           int
 			createdAt, updatedAt string
 		)
 		if err := rows.Scan(
@@ -306,11 +313,13 @@ func (r *userRepo) List(ctx context.Context) ([]*store.User, error) {
 			&user.SN,
 			&user.Status,
 			&user.EnrollmentStatus,
+			&smartRoute,
 			&createdAt,
 			&updatedAt,
 		); err != nil {
 			return nil, err
 		}
+		user.SmartRoute = smartRoute != 0
 		user.CreatedAt = mustParseTime(createdAt)
 		user.UpdatedAt = mustParseTime(updatedAt)
 		items = append(items, &user)
@@ -320,6 +329,15 @@ func (r *userRepo) List(ctx context.Context) ([]*store.User, error) {
 
 func (r *userRepo) DeleteByEmail(ctx context.Context, email string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM users WHERE email = ?`, email)
+	return err
+}
+
+func (r *userRepo) UpdateSmartRoute(ctx context.Context, userID string, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := r.db.ExecContext(ctx, `UPDATE users SET smart_route = ? WHERE id = ?`, v, userID)
 	return err
 }
 

@@ -108,6 +108,9 @@ func RunMigrations(db *sql.DB) error {
 	if err := ensureInvitationCodeRequiredColumn(db); err != nil {
 		return err
 	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_gossip_comments_unique_rating ON gossip_comments(post_id, machine_id) WHERE rating > 0`); err != nil {
+		return fmt.Errorf("create gossip rating unique index: %w", err)
+	}
 	return nil
 }
 

@@ -32,6 +32,7 @@ func NewRouter(
 	openclawIMPlugin *im.WebhookIMPlugin,
 	qqbotPlugin *qqbot.Plugin,
 	hubLLMStatusFn func() string,
+	convStatsFn func() (int, int),
 	staticDir string,
 	routePrefix string,
 	bridgeDir string,
@@ -126,6 +127,20 @@ func NewRouter(
 	mux.HandleFunc("PUT /api/admin/hub_llm_config", RequireAdmin(admins, UpdateHubLLMConfigHandler(system)))
 	mux.HandleFunc("POST /api/admin/hub_llm_test", RequireAdmin(admins, TestHubLLMHandler(system)))
 	mux.HandleFunc("GET /api/admin/hub_llm_status", RequireAdmin(admins, HubLLMStatusHandler(hubLLMStatusFn)))
+	// Smart route permission
+	mux.HandleFunc("POST /api/admin/users/smart_route", RequireAdmin(admins, UpdateUserSmartRouteHandler(identity.UsersRepo())))
+	mux.HandleFunc("GET /api/admin/smart_route_all", RequireAdmin(admins, GetSmartRouteAllHandler(system)))
+	mux.HandleFunc("PUT /api/admin/smart_route_all", RequireAdmin(admins, UpdateSmartRouteAllHandler(system)))
+	// Conversation stats
+	if convStatsFn != nil {
+		mux.HandleFunc("GET /api/admin/conversation_stats", RequireAdmin(admins, func(w http.ResponseWriter, r *http.Request) {
+			contexts, rounds := convStatsFn()
+			writeJSON(w, http.StatusOK, map[string]any{
+				"active_contexts": contexts,
+				"total_rounds":    rounds,
+			})
+		}))
+	}
 
 	mux.HandleFunc("GET /api/admin/settings/qqbot", RequireAdmin(admins, GetQQBotConfigHandler(system)))
 	mux.HandleFunc("POST /api/admin/settings/qqbot", RequireAdmin(admins, UpdateQQBotConfigHandler(system, qqbotPlugin)))

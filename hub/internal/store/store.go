@@ -29,6 +29,7 @@ type User struct {
 	SN               string
 	Status           string
 	EnrollmentStatus string
+	SmartRoute       bool
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -151,6 +152,7 @@ type UserRepository interface {
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	List(ctx context.Context) ([]*User, error)
 	DeleteByEmail(ctx context.Context, email string) error
+	UpdateSmartRoute(ctx context.Context, userID string, enabled bool) error
 }
 
 type EnrollmentRepository interface {

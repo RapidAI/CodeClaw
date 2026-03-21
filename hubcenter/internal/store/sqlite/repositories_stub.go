@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/store"
@@ -845,6 +846,68 @@ func (r *gossipRepo) UpdatePostScore(ctx context.Context, postID string) error {
 		`UPDATE gossip_posts SET score = COALESCE((SELECT SUM(rating) FROM gossip_comments WHERE post_id = ? AND rating > 0), 0),
 		 votes = COALESCE((SELECT COUNT(*) FROM gossip_comments WHERE post_id = ? AND rating > 0), 0) WHERE id = ?`,
 		postID, postID, postID)
+}
+
+// RateComment performs an atomic check-insert-update in a single transaction
+// on the write connection, bypassing the batcher to eliminate the race window.
+func (r *gossipRepo) RateComment(ctx context.Context, comment *store.GossipComment) error {
+	// Use a raw connection with BEGIN IMMEDIATE to acquire the write lock
+	// upfront, serializing concurrent rating attempts and preventing
+	// deadlocks with the batcher's flush transactions.
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	// Check if already rated within the write connection
+	var count int
+	if err := conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM gossip_comments WHERE post_id = ? AND machine_id = ? AND rating > 0`,
+		comment.PostID, comment.MachineID).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return store.ErrAlreadyRated
+	}
+
+	// Insert the rating comment — unique index acts as final safety net
+	if _, err := conn.ExecContext(ctx,
+		`INSERT INTO gossip_comments (id, post_id, machine_id, user_email, nickname, content, rating, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		comment.ID, comment.PostID, comment.MachineID, comment.UserEmail,
+		comment.Nickname, comment.Content, comment.Rating, comment.CreatedAt.Format(time.RFC3339)); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return store.ErrAlreadyRated
+		}
+		return err
+	}
+
+	// Update post score and votes in the same transaction
+	if _, err := conn.ExecContext(ctx,
+		`UPDATE gossip_posts SET
+		 score = COALESCE((SELECT SUM(rating) FROM gossip_comments WHERE post_id = ? AND rating > 0), 0),
+		 votes = COALESCE((SELECT COUNT(*) FROM gossip_comments WHERE post_id = ? AND rating > 0), 0)
+		 WHERE id = ?`,
+		comment.PostID, comment.PostID, comment.PostID); err != nil {
+		return err
+	}
+
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (r *gossipRepo) HasRated(ctx context.Context, postID, machineID string) (bool, error) {

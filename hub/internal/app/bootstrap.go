@@ -115,6 +115,13 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 	coordinator := im.NewCoordinator(messageRouter, deviceFinder, llmConfigProvider)
 	imAdapter.SetCoordinator(coordinator)
 
+	// Wire smart route permission checker so only authorized users get LLM features.
+	smartRouteChecker := im.NewDBSmartRouteChecker(
+		&smartRouteUserAdapter{users: st.Users},
+		st.System,
+	)
+	coordinator.SetSmartRouteChecker(smartRouteChecker)
+
 	// Wire the DiscussionConductor into the MessageRouter so /discuss
 	// can delegate to LLM-orchestrated discussions when available.
 	discussionConductor := im.NewDiscussionConductor(llmConfigProvider, coordinator.Breaker(), messageRouter)
@@ -272,6 +279,7 @@ func Bootstrap(cfg *config.Config) (*App, error) {
 		openclawIMPlugin,
 		qqbotPlugin,
 		coordinator.GetLLMStatus,
+		coordinator.ConvContextStats,
 		cfg.PWA.StaticDir,
 		cfg.PWA.RoutePrefix,
 		cfg.Bridge.Dir,
@@ -316,4 +324,22 @@ func (u *userEmailLookup) GetEmail(ctx context.Context, userID string) (string, 
 		return "", fmt.Errorf("user not found: %s", userID)
 	}
 	return user.Email, nil
+}
+
+// smartRouteUserAdapter adapts store.UserRepository to im.SmartRouteStore.
+type smartRouteUserAdapter struct {
+	users interface {
+		GetByID(ctx context.Context, id string) (*store.User, error)
+	}
+}
+
+func (a *smartRouteUserAdapter) GetSmartRouteByUserID(ctx context.Context, userID string) (bool, error) {
+	user, err := a.users.GetByID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if user == nil {
+		return false, nil
+	}
+	return user.SmartRoute, nil
 }

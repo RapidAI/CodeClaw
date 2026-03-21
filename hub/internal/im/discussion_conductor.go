@@ -135,6 +135,9 @@ func (dc *DiscussionConductor) runConductedDiscussion(userID, platformName, plat
 				fmt.Sprintf("❌ 智能讨论异常终止: %v", rv))
 		}
 		state.Running = false
+		dc.router.mu.Lock()
+		delete(dc.router.discussions, userID)
+		dc.router.mu.Unlock()
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -154,7 +157,7 @@ func (dc *DiscussionConductor) runConductedDiscussion(userID, platformName, plat
 		Prompt:  firstPrompt,
 		Replies: replies,
 	})
-	dc.deliverRoundReplies(ctx, userID, platformName, platformUID, replies, state.Devices)
+	dc.deliverRoundReplies(ctx, userID, platformName, platformUID, replies, state.Devices, state.Topic, 1)
 
 	// Subsequent rounds: LLM decides.
 	for round := 2; round <= state.MaxRounds; round++ {
@@ -224,7 +227,7 @@ func (dc *DiscussionConductor) runConductedDiscussion(userID, platformName, plat
 			Prompt:    prompt,
 			Replies:   replies,
 		})
-		dc.deliverRoundReplies(ctx, userID, platformName, platformUID, replies, targets)
+		dc.deliverRoundReplies(ctx, userID, platformName, platformUID, replies, targets, state.Topic, round)
 	}
 
 	// Final summary if not already concluded.
@@ -242,6 +245,12 @@ func (dc *DiscussionConductor) askDevices(
 	userID, platformName, platformUID, prompt string,
 	devices []OnlineMachineInfo,
 ) map[string]string {
+	// Build participant name list for discussion_context.
+	var allNames []string
+	for _, d := range devices {
+		allNames = append(allNames, d.Name)
+	}
+
 	type result struct {
 		machineID string
 		text      string
@@ -249,7 +258,18 @@ func (dc *DiscussionConductor) askDevices(
 	ch := make(chan result, len(devices))
 	for _, d := range devices {
 		go func(d OnlineMachineInfo) {
-			resp, err := dc.router.routeToSingleMachine(ctx, userID, platformName, platformUID, prompt, d.MachineID, "")
+			// Build discussion_context instruction for this device.
+			var others []string
+			for _, n := range allNames {
+				if n != d.Name {
+					others = append(others, n)
+				}
+			}
+			instruction := fmt.Sprintf("你是讨论参与者「%s」，其他参与者有 %s。请以你的角色身份参与讨论。不要重复自己之前的观点，重点回应其他参与者的新观点。",
+				d.Name, strings.Join(others, "、"))
+			contextualPrompt := fmt.Sprintf("[讨论角色: %s] %s\n\n%s", d.Name, instruction, prompt)
+
+			resp, err := dc.router.routeToSingleMachine(ctx, userID, platformName, platformUID, contextualPrompt, d.MachineID, "")
 			var text string
 			if err == nil && resp != nil {
 				text = resp.Body
@@ -271,14 +291,17 @@ func (dc *DiscussionConductor) deliverRoundReplies(
 	userID, platformName, platformUID string,
 	replies map[string]string,
 	devices []OnlineMachineInfo,
+	topic string,
+	round int,
 ) {
+	prefix := fmt.Sprintf("🗣️ 会议 | %s | 第%d轮", truncate(topic, 20), round)
 	for _, d := range devices {
 		text := replies[d.MachineID]
 		if text == "" {
 			text = "⏰ 超时未回复"
 		}
 		dc.router.deliverProgress(ctx, userID, platformName, platformUID,
-			fmt.Sprintf("[%s] %s", d.Name, text))
+			fmt.Sprintf("%s\n[%s] %s", prefix, d.Name, text))
 	}
 }
 

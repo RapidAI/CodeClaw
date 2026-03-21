@@ -149,3 +149,19 @@ func loadHubLLMConfig(r *http.Request, system store.SystemSettingsRepository) *i
 	}
 	return &cfg
 }
+
+// ConversationStatsProvider returns active context count and total rounds.
+type ConversationStatsProvider interface {
+	ConvContextStats() (int, int)
+}
+
+// ConversationStatsHandler returns conversation context statistics.
+func ConversationStatsHandler(provider ConversationStatsProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		contexts, rounds := provider.ConvContextStats()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"active_contexts": contexts,
+			"total_rounds":    rounds,
+		})
+	}
+}

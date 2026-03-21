@@ -7,6 +7,7 @@ type RouteAction string
 
 const (
 	ActionRouteToTarget      RouteAction = "route_to_target"
+	ActionRouteToMultiple    RouteAction = "route_to_multiple"
 	ActionBroadcast          RouteAction = "broadcast"
 	ActionNeedClassification RouteAction = "need_classification"
 	ActionPassthrough        RouteAction = "passthrough"
@@ -15,7 +16,8 @@ const (
 // RouteDecision is the result returned by RuleEngine.Evaluate.
 type RouteDecision struct {
 	Action   RouteAction
-	TargetID string // valid when Action == ActionRouteToTarget
+	TargetID string   // valid when Action == ActionRouteToTarget
+	Targets  []string // valid when Action == ActionRouteToMultiple (machineIDs)
 	Reason   string
 }
 
@@ -41,19 +43,35 @@ func (e *RuleEngine) Evaluate(
 	llmEnabled bool,
 	smartRouteSingle bool,
 ) RouteDecision {
-	// Rule 1: @name prefix — find the targeted device.
+	// Rule 1: @name prefix — use ParseMentions for single or multi-@ routing.
 	if strings.HasPrefix(text, "@") {
-		if idx := strings.IndexByte(text, ' '); idx > 1 {
-			name := text[1:idx]
+		names, _ := ParseMentions(text)
+		if len(names) > 0 {
+			machineByName := make(map[string]OnlineMachineInfo)
 			for _, m := range machines {
-				if strings.EqualFold(m.Name, name) {
-					return RouteDecision{
-						Action:   ActionRouteToTarget,
-						TargetID: m.MachineID,
-						Reason:   "@ 指定设备",
-					}
+				machineByName[strings.ToLower(m.Name)] = m
+			}
+			var matched []string
+			for _, name := range names {
+				if m, ok := machineByName[strings.ToLower(name)]; ok {
+					matched = append(matched, m.MachineID)
 				}
 			}
+			if len(matched) == 1 {
+				return RouteDecision{
+					Action:   ActionRouteToTarget,
+					TargetID: matched[0],
+					Reason:   "@ 指定设备",
+				}
+			}
+			if len(matched) > 1 {
+				return RouteDecision{
+					Action:  ActionRouteToMultiple,
+					Targets: matched,
+					Reason:  "@ 多设备定向",
+				}
+			}
+			// No matches found — fall through to other rules.
 		}
 	}
 

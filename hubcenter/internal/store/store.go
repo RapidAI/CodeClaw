@@ -2,8 +2,12 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrAlreadyRated is returned when a duplicate rating is attempted for the same (post_id, machine_id).
+var ErrAlreadyRated = errors.New("already rated")
 
 type AdminUser struct {
 	ID           string    `json:"id"`
@@ -158,6 +162,7 @@ type GossipRepository interface {
 	DeleteComment(ctx context.Context, id string) error
 	UpdatePostScore(ctx context.Context, postID string) error
 	HasRated(ctx context.Context, postID, machineID string) (bool, error)
+	RateComment(ctx context.Context, comment *GossipComment) error
 }
 
 type Store struct {

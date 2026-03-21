@@ -176,6 +176,7 @@ func RunMigrations(db *sql.DB) error {
 	alterStmts = append(alterStmts, `ALTER TABLE invitation_codes ADD COLUMN validity_days INTEGER NOT NULL DEFAULT 0`)
 	alterStmts = append(alterStmts, `ALTER TABLE user_enrollments ADD COLUMN mobile TEXT NOT NULL DEFAULT ''`)
 	alterStmts = append(alterStmts, `ALTER TABLE invitation_codes ADD COLUMN exported INTEGER NOT NULL DEFAULT 0`)
+	alterStmts = append(alterStmts, `ALTER TABLE users ADD COLUMN smart_route INTEGER NOT NULL DEFAULT 0`)
 
 	for _, stmt := range alterStmts {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {

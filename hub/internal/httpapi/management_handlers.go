@@ -36,6 +36,7 @@ type BoundUserView struct {
 	SN               string `json:"sn"`
 	Status           string `json:"status"`
 	EnrollmentStatus string `json:"enrollment_status"`
+	SmartRoute       bool   `json:"smart_route"`
 }
 
 func ManualBindHandler(identity *auth.IdentityService) http.HandlerFunc {
@@ -185,6 +186,7 @@ func ListUsersHandler(identity *auth.IdentityService) http.HandlerFunc {
 				SN:               user.SN,
 				Status:           user.Status,
 				EnrollmentStatus: user.EnrollmentStatus,
+				SmartRoute:       user.SmartRoute,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"users": out})
@@ -271,5 +273,63 @@ func RegisterCenterHandler(centerSvc *center.Service) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, status)
+	}
+}
+
+// --- Smart Route permission handlers ---
+
+const smartRouteAllKey = "smart_route_all"
+
+// UpdateUserSmartRouteHandler toggles the smart_route flag for a single user.
+func UpdateUserSmartRouteHandler(users store.UserRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			UserID  string `json:"user_id"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request body")
+			return
+		}
+		if req.UserID == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "user_id is required")
+			return
+		}
+		if err := users.UpdateSmartRoute(r.Context(), req.UserID, req.Enabled); err != nil {
+			writeError(w, http.StatusInternalServerError, "UPDATE_SMART_ROUTE_FAILED", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+// GetSmartRouteAllHandler returns the global smart_route_all toggle.
+func GetSmartRouteAllHandler(system store.SystemSettingsRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := system.Get(r.Context(), smartRouteAllKey)
+		enabled := raw == "true"
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": enabled})
+	}
+}
+
+// UpdateSmartRouteAllHandler sets the global smart_route_all toggle.
+func UpdateSmartRouteAllHandler(system store.SystemSettingsRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request body")
+			return
+		}
+		val := "false"
+		if req.Enabled {
+			val = "true"
+		}
+		if err := system.Set(r.Context(), smartRouteAllKey, val); err != nil {
+			writeError(w, http.StatusInternalServerError, "UPDATE_SMART_ROUTE_ALL_FAILED", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": req.Enabled})
 	}
 }

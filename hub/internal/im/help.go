@@ -26,7 +26,10 @@ func BuildHelpMessage(machineCount int, selectedMachine string, llmEnabled bool)
 		b.WriteString("  例: /discuss 如何优化性能\n")
 	}
 
-	b.WriteString("\n/stop  — 停止当前讨论\n")
+	b.WriteString("\n/stop  — 停止当前讨论 / 退出会议\n")
+	b.WriteString("/ask <设备名> <消息>  — 一次性跨空间交互（不影响当前状态）\n")
+	b.WriteString("/context  — 查看对话上下文\n")
+	b.WriteString("/context clear  — 清除对话上下文\n")
 	b.WriteString("/help  — 显示此帮助\n")
 
 	// Context-specific hints.
@@ -40,6 +43,13 @@ func BuildHelpMessage(machineCount int, selectedMachine string, llmEnabled bool)
 
 	if machineCount > 1 && !llmEnabled {
 		b.WriteString(fmt.Sprintf("\n💡 您有 %d 台设备在线，使用 /call <昵称> 选择目标设备。\n", machineCount))
+	}
+
+	if llmEnabled && machineCount > 1 {
+		b.WriteString("\n📍 空间模型：\n")
+		b.WriteString("  大厅 — 智能路由，@ 定向发送\n")
+		b.WriteString("  私聊 — /call <名> 进入，/call all 退出\n")
+		b.WriteString("  会议 — /discuss 进入，/stop 退出\n")
 	}
 
 	return b.String()

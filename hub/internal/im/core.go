@@ -252,6 +252,34 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 			})
 			return
 		}
+
+		// SpaceState validation.
+		if a.coordinator != nil {
+			ss := a.coordinator.SpaceStateStore()
+			state := ss.GetOrCreate(unifiedID)
+			if state.State == SpaceMeeting {
+				a.sendResponse(ctx, plugin, target, &GenericResponse{
+					StatusCode: 400,
+					StatusIcon: "⚠️",
+					Title:      "会议进行中",
+					Body:       "会议进行中，无法切换设备。使用 /ask <设备名> <消息> 临时交互，或 /stop 结束会议。",
+				})
+				return
+			}
+			if state.State == SpacePrivate && strings.EqualFold(name, "all") {
+				// /call all in private mode → exit private, return to lobby.
+				ss.ExitPrivate(unifiedID)
+				a.messageRouter.ClearSelectedMachine(unifiedID)
+				a.sendResponse(ctx, plugin, target, &GenericResponse{
+					StatusCode: 200,
+					StatusIcon: "🏠",
+					Title:      "已返回大厅",
+					Body:       fmt.Sprintf("已退出与 %s 的私聊，返回大厅模式。", state.PrivateName),
+				})
+				return
+			}
+		}
+
 		// If a discussion is running, stop it before switching device.
 		if a.messageRouter.IsInDiscussion(unifiedID) {
 			a.messageRouter.StopDiscussion(unifiedID)
@@ -264,6 +292,21 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 			icon = "⚠️"
 			code = 400
 		}
+
+		// Enter private mode on successful /call <name> (not "all").
+		if result.OK && !strings.EqualFold(name, "all") && a.coordinator != nil {
+			ss := a.coordinator.SpaceStateStore()
+			ss.EnterPrivate(unifiedID, result.MachineID, result.MachineName)
+		}
+		// /call all → exit private if in private mode.
+		if result.OK && strings.EqualFold(name, "all") && a.coordinator != nil {
+			ss := a.coordinator.SpaceStateStore()
+			state := ss.GetOrCreate(unifiedID)
+			if state.State == SpacePrivate {
+				ss.ExitPrivate(unifiedID)
+			}
+		}
+
 		a.sendResponse(ctx, plugin, target, &GenericResponse{
 			StatusCode: code,
 			StatusIcon: icon,
@@ -285,6 +328,36 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 			})
 			return
 		}
+		// SpaceState validation.
+		if a.coordinator != nil {
+			ss := a.coordinator.SpaceStateStore()
+			state := ss.GetOrCreate(unifiedID)
+			if state.State == SpacePrivate {
+				a.sendResponse(ctx, plugin, target, &GenericResponse{
+					StatusCode: 400,
+					StatusIcon: "⚠️",
+					Title:      "私聊模式中",
+					Body:       "私聊模式中无法发起讨论。发送 /call all 返回大厅后再发起。",
+				})
+				return
+			}
+			if state.State == SpaceMeeting {
+				a.sendResponse(ctx, plugin, target, &GenericResponse{
+					StatusCode: 400,
+					StatusIcon: "⚠️",
+					Title:      "已有会议",
+					Body:       "已有会议进行中，请先 /stop 结束当前会议。",
+				})
+				return
+			}
+			// Enter meeting state with all online devices as participants.
+			machines := a.messageRouter.devices.FindAllOnlineMachinesForUser(ctx, unifiedID)
+			var participantIDs []string
+			for _, m := range machines {
+				participantIDs = append(participantIDs, m.MachineID)
+			}
+			ss.EnterMeeting(unifiedID, topic, participantIDs)
+		}
 		resp := a.messageRouter.StartDiscussion(ctx, unifiedID, msg.PlatformName, msg.PlatformUID, topic)
 		a.sendResponse(ctx, plugin, target, resp)
 		return
@@ -299,10 +372,110 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 		return
 	}
 
-	// 3c. Handle /stop command — stop active discussion.
+	// 3c. Handle /stop command — stop active discussion + exit meeting.
 	if text == "/stop" {
 		resp := a.messageRouter.StopDiscussion(unifiedID)
+		// Also exit meeting state if in meeting.
+		if a.coordinator != nil {
+			ss := a.coordinator.SpaceStateStore()
+			state := ss.GetOrCreate(unifiedID)
+			if state.State == SpaceMeeting {
+				ss.ExitMeeting(unifiedID)
+				if resp.Body != "" {
+					resp.Body += "\n🏠 已退出会议，返回大厅。"
+				} else {
+					resp.Body = "🏠 已退出会议，返回大厅。"
+				}
+			}
+		}
 		a.sendResponse(ctx, plugin, target, resp)
+		return
+	}
+
+	// 3d-ask. Handle /ask <设备名> <消息> — one-shot cross-space interaction.
+	if strings.HasPrefix(text, "/ask ") {
+		rest := strings.TrimSpace(text[5:])
+		spaceIdx := strings.IndexByte(rest, ' ')
+		if spaceIdx <= 0 {
+			a.sendResponse(ctx, plugin, target, &GenericResponse{
+				StatusCode: 400,
+				StatusIcon: "❓",
+				Title:      "缺少参数",
+				Body:       "用法: /ask <设备名> <消息>\n\n不影响当前空间状态，一次性发送。",
+			})
+			return
+		}
+		deviceName := rest[:spaceIdx]
+		askText := strings.TrimSpace(rest[spaceIdx+1:])
+		if askText == "" {
+			a.sendResponse(ctx, plugin, target, &GenericResponse{
+				StatusCode: 400,
+				StatusIcon: "❓",
+				Title:      "缺少消息",
+				Body:       "用法: /ask <设备名> <消息>",
+			})
+			return
+		}
+		// Find the device.
+		machines := a.messageRouter.devices.FindAllOnlineMachinesForUser(ctx, unifiedID)
+		var targetMachine *OnlineMachineInfo
+		for i := range machines {
+			if strings.EqualFold(machines[i].Name, deviceName) {
+				targetMachine = &machines[i]
+				break
+			}
+		}
+		if targetMachine == nil {
+			a.sendResponse(ctx, plugin, target, &GenericResponse{
+				StatusCode: 404,
+				StatusIcon: "📴",
+				Title:      "设备未找到",
+				Body:       fmt.Sprintf("未找到名为 %q 的在线设备。", deviceName),
+			})
+			return
+		}
+		resp, err := a.messageRouter.routeToSingleMachine(ctx, unifiedID, msg.PlatformName, msg.PlatformUID, askText, targetMachine.MachineID, targetMachine.Name)
+		if err != nil {
+			a.sendResponse(ctx, plugin, target, &GenericResponse{
+				StatusCode: 500,
+				StatusIcon: "❌",
+				Title:      "发送失败",
+				Body:       err.Error(),
+			})
+			return
+		}
+		a.sendResponse(ctx, plugin, target, resp)
+		return
+	}
+
+	// 3d-ctx. Handle /context and /context clear commands.
+	if text == "/context" || text == "/context clear" {
+		if a.coordinator == nil {
+			a.sendResponse(ctx, plugin, target, &GenericResponse{
+				StatusCode: 200,
+				StatusIcon: "📭",
+				Title:      "对话上下文",
+				Body:       "智能路由未启用，无对话上下文。",
+			})
+			return
+		}
+		cc := a.coordinator.ConvContext().GetOrCreate(unifiedID)
+		if text == "/context clear" {
+			cc.Clear()
+			a.sendResponse(ctx, plugin, target, &GenericResponse{
+				StatusCode: 200,
+				StatusIcon: "🗑️",
+				Title:      "已清除",
+				Body:       "对话上下文已清除。",
+			})
+			return
+		}
+		a.sendResponse(ctx, plugin, target, &GenericResponse{
+			StatusCode: 200,
+			StatusIcon: "📋",
+			Title:      "对话上下文",
+			Body:       cc.FormatDisplay(),
+		})
 		return
 	}
 
@@ -367,8 +540,10 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 		return
 	}
 
-	// 3d. If user is in discussion mode, handle accordingly.
-	if !strings.HasPrefix(text, "/") && a.messageRouter.IsInDiscussion(unifiedID) {
+	// 3h. If user is in discussion mode, handle accordingly.
+	// When LLM is active, skip this — Coordinator handles meeting messages.
+	llmActive := a.coordinator != nil && a.coordinator.IsLLMEnabled()
+	if !llmActive && !strings.HasPrefix(text, "/") && a.messageRouter.IsInDiscussion(unifiedID) {
 		if a.messageRouter.IsDiscussionRunning(unifiedID) {
 			// Discussion is running — inject as human interjection.
 			if a.messageRouter.InjectUserInput(unifiedID, text) {
@@ -398,7 +573,6 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 	// When LLM smart mode is active, skip this — IntentClassifier decides
 	// routing, so sending "安妮" means talking TO that device, not switching.
 	// Users can still switch explicitly via /call.
-	llmActive := a.coordinator != nil && a.coordinator.IsLLMEnabled()
 	if !llmActive && !strings.HasPrefix(text, "/") {
 		if handled, nameResp := a.messageRouter.TrySelectByName(ctx, unifiedID, text); handled {
 			a.sendResponse(ctx, plugin, target, nameResp)

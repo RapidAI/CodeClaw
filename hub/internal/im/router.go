@@ -123,8 +123,10 @@ func NewMessageRouter(devices DeviceFinder) *MessageRouter {
 
 // MachineSelectResult is returned by SelectMachine / TrySelectByName.
 type MachineSelectResult struct {
-	OK       bool   // selection succeeded
-	Message  string // human-readable status message
+	OK          bool   // selection succeeded
+	Message     string // human-readable status message
+	MachineID   string // selected machine ID (empty for broadcast or failure)
+	MachineName string // selected machine name
 }
 
 // broadcastMachineID is the sentinel value stored in selectedMachine to
@@ -186,8 +188,10 @@ func (r *MessageRouter) SelectMachine(ctx context.Context, userID, name string) 
 	r.mu.Unlock()
 
 	return MachineSelectResult{
-		OK:      true,
-		Message: fmt.Sprintf("✅ 已切换设备，你当前正在与 %s 交流。", matched[0].Name),
+		OK:          true,
+		Message:     fmt.Sprintf("✅ 已切换设备，你当前正在与 %s 交流。", matched[0].Name),
+		MachineID:   matched[0].MachineID,
+		MachineName: matched[0].Name,
 	}
 }
 
@@ -634,6 +638,65 @@ func (r *MessageRouter) routeBroadcast(ctx context.Context, userID, platformName
 		StatusCode: 200,
 		StatusIcon: "📢",
 		Title:      "群聊回复",
+		Body:       FormatBroadcastReply(deviceReplies),
+	}, nil
+}
+
+// routeToMultiple sends a message to specific machines concurrently and
+// collects responses. Similar to routeBroadcast but targets specific machineIDs.
+func (r *MessageRouter) routeToMultiple(ctx context.Context, userID, platformName, platformUID, text string, machineIDs []string) (*GenericResponse, error) {
+	allMachines := r.devices.FindAllOnlineMachinesForUser(ctx, userID)
+	machineMap := make(map[string]OnlineMachineInfo)
+	for _, m := range allMachines {
+		machineMap[m.MachineID] = m
+	}
+
+	var targets []OnlineMachineInfo
+	for _, id := range machineIDs {
+		if m, ok := machineMap[id]; ok {
+			targets = append(targets, m)
+		}
+	}
+	if len(targets) == 0 {
+		return &GenericResponse{
+			StatusCode: 404,
+			StatusIcon: "📴",
+			Title:      "设备不在线",
+			Body:       "目标设备均已离线。",
+		}, nil
+	}
+
+	type result struct {
+		name string
+		resp *GenericResponse
+		err  error
+	}
+	ch := make(chan result, len(targets))
+	for _, m := range targets {
+		go func(m OnlineMachineInfo) {
+			resp, err := r.routeToSingleMachine(ctx, userID, platformName, platformUID, text, m.MachineID, m.Name)
+			ch <- result{name: m.Name, resp: resp, err: err}
+		}(m)
+	}
+
+	var deviceReplies []DeviceReply
+	for range targets {
+		res := <-ch
+		dr := DeviceReply{Name: res.name}
+		if res.err != nil {
+			dr.Err = res.err
+		} else if res.resp != nil {
+			dr.Response = res.resp
+		} else {
+			dr.Err = fmt.Errorf("空响应")
+		}
+		deviceReplies = append(deviceReplies, dr)
+	}
+
+	return &GenericResponse{
+		StatusCode: 200,
+		StatusIcon: "📨",
+		Title:      "多设备回复",
 		Body:       FormatBroadcastReply(deviceReplies),
 	}, nil
 }

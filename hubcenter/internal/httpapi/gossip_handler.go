@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -178,10 +179,36 @@ func GossipCommentHandler(gossip store.GossipRepository, cache *GossipCache) htt
 		}
 		// Prevent duplicate ratings from the same machine
 		if req.Rating > 0 {
-			if rated, err := gossip.HasRated(r.Context(), postID, machineID); err == nil && rated {
-				writeError(w, http.StatusConflict, "ALREADY_RATED", "You have already rated this post")
+			comment := &store.GossipComment{
+				ID:        generateID(),
+				PostID:    postID,
+				MachineID: machineID,
+				UserEmail: strings.TrimSpace(req.UserEmail),
+				Nickname:  generateNickname(machineID),
+				Content:   content,
+				Rating:    req.Rating,
+				CreatedAt: time.Now().UTC(),
+			}
+			if err := gossip.RateComment(r.Context(), comment); err != nil {
+				if errors.Is(err, store.ErrAlreadyRated) {
+					writeError(w, http.StatusConflict, "ALREADY_RATED", "You have already rated this post")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "CREATE_FAILED", err.Error())
 				return
 			}
+			go cache.Refresh(context.Background())
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok": true,
+				"comment": map[string]any{
+					"id":         comment.ID,
+					"nickname":   comment.Nickname,
+					"content":    comment.Content,
+					"rating":     comment.Rating,
+					"created_at": comment.CreatedAt.Format(time.RFC3339),
+				},
+			})
+			return
 		}
 		comment := &store.GossipComment{
 			ID:        generateID(),
@@ -196,10 +223,6 @@ func GossipCommentHandler(gossip store.GossipRepository, cache *GossipCache) htt
 		if err := gossip.CreateComment(r.Context(), comment); err != nil {
 			writeError(w, http.StatusInternalServerError, "CREATE_FAILED", err.Error())
 			return
-		}
-		if req.Rating > 0 {
-			_ = gossip.UpdatePostScore(r.Context(), postID)
-			go cache.Refresh(context.Background())
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok": true,
@@ -249,11 +272,7 @@ func GossipRateHandler(gossip store.GossipRepository, cache *GossipCache) http.H
 			writeError(w, http.StatusForbidden, "LOCKED", "This post is locked for ratings")
 			return
 		}
-		// Prevent duplicate ratings from the same machine
-		if rated, err := gossip.HasRated(r.Context(), postID, machineID); err == nil && rated {
-			writeError(w, http.StatusConflict, "ALREADY_RATED", "You have already rated this post")
-			return
-		}
+		// Prevent duplicate ratings — atomic check+insert+score update
 		comment := &store.GossipComment{
 			ID:        generateID(),
 			PostID:    postID,
@@ -264,11 +283,14 @@ func GossipRateHandler(gossip store.GossipRepository, cache *GossipCache) http.H
 			Rating:    req.Rating,
 			CreatedAt: time.Now().UTC(),
 		}
-		if err := gossip.CreateComment(r.Context(), comment); err != nil {
+		if err := gossip.RateComment(r.Context(), comment); err != nil {
+			if errors.Is(err, store.ErrAlreadyRated) {
+				writeError(w, http.StatusConflict, "ALREADY_RATED", "You have already rated this post")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "CREATE_FAILED", err.Error())
 			return
 		}
-		_ = gossip.UpdatePostScore(r.Context(), postID)
 		go cache.Refresh(context.Background())
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}

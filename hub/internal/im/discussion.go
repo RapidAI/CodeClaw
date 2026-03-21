@@ -148,6 +148,7 @@ func (r *MessageRouter) runDiscussion(userID, platformName, platformUID string, 
 		}
 		r.mu.Lock()
 		ds.Running = false
+		delete(r.discussions, userID)
 		r.mu.Unlock()
 	}()
 
