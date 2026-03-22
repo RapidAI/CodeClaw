@@ -1,16 +1,16 @@
 package main
 
 import (
-	"math"
 	"sort"
 	"strings"
-	"unicode"
+
+	"github.com/RapidAI/CodeClaw/corelib/bm25"
 )
 
 const (
 	// maxToolBudget is the maximum number of tools to send to the LLM.
 	// Core tools are always included; remaining budget goes to the highest-
-	// scoring candidates ranked by TF-IDF similarity to the user message.
+	// scoring candidates ranked by BM25 similarity to the user message.
 	maxToolBudget = 28
 
 	// maxDynamicRouted caps how many MCP/non-code dynamic tools can be included.
@@ -77,8 +77,7 @@ func isBuiltinToolName(name string) bool {
 //  1. Core tools (whitelist) are always included — they cover the basic
 //     interaction loop and cost ~13 tool slots.
 //  2. All remaining tools (non-core builtins + MCP dynamic tools) compete
-//     for the remaining budget via TF-IDF cosine similarity against the
-//     user message.
+//     for the remaining budget via BM25 scoring against the user message.
 //  3. MCP dynamic tools are additionally capped at maxDynamicRouted.
 type ToolRouter struct {
 	generator *ToolDefinitionGenerator
@@ -128,24 +127,11 @@ func (r *ToolRouter) tagsForTool(name string) []string {
 	return nil
 }
 
-// toolTokensWithTags extracts tokens from a tool definition's name,
-// description, and registry tags (if available).
-func (r *ToolRouter) toolTokensWithTags(def map[string]interface{}) []string {
-	name := extractToolName(def)
-	desc := extractToolDescription(def)
-	combined := name + " " + desc
-	if tags := r.tagsForTool(name); len(tags) > 0 {
-		combined += " " + strings.Join(tags, " ")
-	}
-	return tokenize(combined)
-}
-
-// Route selects the most relevant tools for userMessage from allTools.
-//
+// Route selects the most relevant tools for a given user message.
 // When len(allTools) <= maxToolBudget, all tools are returned unchanged.
 // Otherwise, core tools are kept unconditionally and the remaining budget
-// is filled by ranking all other tools (builtin + dynamic) via TF-IDF
-// cosine similarity to the user message.
+// is filled by ranking all other tools (builtin + dynamic) via BM25
+// scoring against the user message.
 func (r *ToolRouter) Route(userMessage string, allTools []map[string]interface{}) []map[string]interface{} {
 	if len(allTools) <= maxToolBudget {
 		return allTools
@@ -166,44 +152,39 @@ func (r *ToolRouter) Route(userMessage string, allTools []map[string]interface{}
 		return core
 	}
 
-	// Tokenize user message for TF-IDF scoring.
-	msgTokens := tokenize(userMessage)
-
-	if len(msgTokens) == 0 {
-		// No meaningful tokens — take the first N candidates in original order.
-		if remaining > len(candidates) {
-			remaining = len(candidates)
+	// Build a BM25 index over candidate tool descriptions.
+	docs := make([]bm25.Doc, len(candidates))
+	for i, t := range candidates {
+		name := extractToolName(t)
+		desc := extractToolDescription(t)
+		text := name + " " + desc
+		if tags := r.tagsForTool(name); len(tags) > 0 {
+			text += " " + strings.Join(tags, " ")
 		}
-		return append(core, candidates[:remaining]...)
+		docs[i] = bm25.Doc{ID: name, Text: text}
 	}
+	idx := bm25.New()
+	idx.Rebuild(docs)
+	scores := idx.Score(userMessage)
 
-	// Build IDF from all candidate tool documents.
-	allDocs := make([][]string, len(candidates))
-	for i, tool := range candidates {
-		allDocs[i] = r.toolTokensWithTags(tool)
-	}
-	idf := computeIDF(allDocs)
-
-	// Score each candidate.
 	type scored struct {
 		index int
 		score float64
 	}
-	scores := make([]scored, len(candidates))
-	for i, doc := range allDocs {
-		scores[i] = scored{index: i, score: tfidfSimilarity(msgTokens, doc, idf)}
+	scoredList := make([]scored, len(candidates))
+	for i, t := range candidates {
+		name := extractToolName(t)
+		scoredList[i] = scored{index: i, score: scores[name]}
 	}
-
-	// Sort by score descending; stable sort preserves original order for ties.
-	sort.SliceStable(scores, func(i, j int) bool {
-		return scores[i].score > scores[j].score
+	sort.SliceStable(scoredList, func(i, j int) bool {
+		return scoredList[i].score > scoredList[j].score
 	})
 
 	// Fill remaining budget, respecting the MCP dynamic tool cap.
 	dynamicCount := 0
 	result := make([]map[string]interface{}, len(core), maxToolBudget+2)
 	copy(result, core)
-	for _, s := range scores {
+	for _, s := range scoredList {
 		if len(result) >= maxToolBudget {
 			break
 		}
@@ -219,7 +200,7 @@ func (r *ToolRouter) Route(userMessage string, allTools []map[string]interface{}
 
 	// Check recommended Skills from Hub for keyword overlap with user message.
 	if r.hubClient != nil {
-		if hint := r.matchRecommendations(msgTokens); hint != nil {
+		if hint := r.matchRecommendations(bm25.Tokenize(userMessage)); hint != nil {
 			result = append(result, hint)
 		}
 	}
@@ -246,7 +227,7 @@ func (r *ToolRouter) matchRecommendations(msgTokens []string) map[string]interfa
 	}
 
 	for _, rec := range recommendations {
-		recTokens := tokenize(rec.Name + " " + rec.Description)
+		recTokens := bm25.Tokenize(rec.Name + " " + rec.Description)
 		matchCount := 0
 		for _, rt := range recTokens {
 			if _, ok := msgSet[rt]; ok {
@@ -283,64 +264,6 @@ func searchAndInstallSkillHint() map[string]interface{} {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tokenization
-// ---------------------------------------------------------------------------
-
-// tokenize splits text into lowercase tokens by whitespace and punctuation.
-// CJK characters are emitted as individual tokens so that Chinese tool
-// descriptions can participate in TF-IDF scoring.
-func tokenize(text string) []string {
-	lower := strings.ToLower(text)
-	// First pass: split on whitespace/punctuation/separators.
-	tokens := strings.FieldsFunc(lower, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsPunct(r) || r == '_' || r == '-'
-	})
-	// Second pass: break CJK characters out of mixed tokens.
-	result := make([]string, 0, len(tokens))
-	for _, t := range tokens {
-		hasCJK := false
-		for _, r := range t {
-			if unicode.Is(unicode.Han, r) {
-				hasCJK = true
-				break
-			}
-		}
-		if !hasCJK {
-			if len(t) > 1 {
-				result = append(result, t)
-			}
-			continue
-		}
-		// Split: consecutive non-CJK chars form one token, each CJK char
-		// is its own token.
-		var buf strings.Builder
-		for _, r := range t {
-			if unicode.Is(unicode.Han, r) {
-				if buf.Len() > 1 {
-					result = append(result, buf.String())
-				}
-				buf.Reset()
-				result = append(result, string(r))
-			} else {
-				buf.WriteRune(r)
-			}
-		}
-		if buf.Len() > 1 {
-			result = append(result, buf.String())
-		}
-	}
-	return result
-}
-
-// toolTokens extracts tokens from a tool definition's name and description.
-func toolTokens(def map[string]interface{}) []string {
-	name := extractToolName(def)
-	desc := extractToolDescription(def)
-	combined := name + " " + desc
-	return tokenize(combined)
-}
-
 // extractToolDescription extracts the description from an OpenAI function
 // calling tool definition.
 func extractToolDescription(def map[string]interface{}) string {
@@ -354,91 +277,4 @@ func extractToolDescription(def map[string]interface{}) string {
 	}
 	desc, _ := fnMap["description"].(string)
 	return desc
-}
-
-// ---------------------------------------------------------------------------
-// TF-IDF Computation
-// ---------------------------------------------------------------------------
-
-// termFrequency computes the term frequency of each token in a document.
-// TF(t, d) = count(t in d) / len(d)
-func termFrequency(tokens []string) map[string]float64 {
-	counts := make(map[string]int, len(tokens))
-	for _, t := range tokens {
-		counts[t]++
-	}
-	tf := make(map[string]float64, len(counts))
-	n := float64(len(tokens))
-	if n == 0 {
-		return tf
-	}
-	for t, c := range counts {
-		tf[t] = float64(c) / n
-	}
-	return tf
-}
-
-// computeIDF computes inverse document frequency across all documents.
-// IDF(t) = log(N / (1 + df(t)))  where df(t) = number of docs containing t.
-func computeIDF(docs [][]string) map[string]float64 {
-	df := make(map[string]int)
-	for _, doc := range docs {
-		seen := make(map[string]bool, len(doc))
-		for _, t := range doc {
-			if !seen[t] {
-				df[t]++
-				seen[t] = true
-			}
-		}
-	}
-	n := float64(len(docs))
-	idf := make(map[string]float64, len(df))
-	for t, count := range df {
-		idf[t] = math.Log(n / (1.0 + float64(count)))
-	}
-	return idf
-}
-
-// tfidfVector computes the TF-IDF vector for a document given precomputed IDF.
-func tfidfVector(tokens []string, idf map[string]float64) map[string]float64 {
-	tf := termFrequency(tokens)
-	vec := make(map[string]float64, len(tf))
-	for t, tfVal := range tf {
-		idfVal, ok := idf[t]
-		if !ok {
-			// Term not in any document corpus — use a default IDF.
-			idfVal = math.Log(float64(len(idf)) + 1.0)
-		}
-		vec[t] = tfVal * idfVal
-	}
-	return vec
-}
-
-// tfidfSimilarity computes the cosine similarity between the user message
-// tokens and a tool document's tokens using TF-IDF weighting.
-func tfidfSimilarity(queryTokens, docTokens []string, idf map[string]float64) float64 {
-	if len(queryTokens) == 0 || len(docTokens) == 0 {
-		return 0
-	}
-
-	qVec := tfidfVector(queryTokens, idf)
-	dVec := tfidfVector(docTokens, idf)
-
-	// Cosine similarity = dot(q, d) / (|q| * |d|)
-	var dot, qNorm, dNorm float64
-	for t, qVal := range qVec {
-		if dVal, ok := dVec[t]; ok {
-			dot += qVal * dVal
-		}
-		qNorm += qVal * qVal
-	}
-	for _, dVal := range dVec {
-		dNorm += dVal * dVal
-	}
-
-	denom := math.Sqrt(qNorm) * math.Sqrt(dNorm)
-	if denom == 0 {
-		return 0
-	}
-	return dot / denom
 }

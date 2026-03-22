@@ -184,68 +184,8 @@ func TestToolRouter_EmptyTools(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tokenization tests
+// Tokenization tests (now using bm25.Tokenize)
 // ---------------------------------------------------------------------------
-
-func TestTokenize(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected []string
-	}{
-		{"hello world", []string{"hello", "world"}},
-		{"Hello, World!", []string{"hello", "world"}},
-		{"search_web tool", []string{"search", "web", "tool"}},
-		{"TF-IDF similarity", []string{"tf", "idf", "similarity"}},
-		{"", nil},
-		{"a b c", nil}, // single chars filtered out
-		{"  spaces  everywhere  ", []string{"spaces", "everywhere"}},
-	}
-
-	for _, tt := range tests {
-		result := tokenize(tt.input)
-		if len(result) != len(tt.expected) {
-			t.Errorf("tokenize(%q): expected %v, got %v", tt.input, tt.expected, result)
-			continue
-		}
-		for i, tok := range result {
-			if tok != tt.expected[i] {
-				t.Errorf("tokenize(%q)[%d]: expected %q, got %q", tt.input, i, tt.expected[i], tok)
-			}
-		}
-	}
-}
-
-func TestTokenize_CJK(t *testing.T) {
-	// CJK characters should be split into individual tokens.
-	result := tokenize("列出配置")
-	if len(result) == 0 {
-		t.Fatal("expected CJK tokens, got none")
-	}
-	// Each Chinese character should be a separate token.
-	found := make(map[string]bool)
-	for _, tok := range result {
-		found[tok] = true
-	}
-	if !found["列"] || !found["出"] || !found["配"] || !found["置"] {
-		t.Errorf("expected individual CJK chars as tokens, got %v", result)
-	}
-
-	// Mixed CJK + ASCII should produce both types of tokens.
-	result2 := tokenize("修改config配置")
-	hasASCII := false
-	hasCJK := false
-	for _, tok := range result2 {
-		if tok == "config" {
-			hasASCII = true
-		}
-		if tok == "修" || tok == "改" || tok == "配" || tok == "置" {
-			hasCJK = true
-		}
-	}
-	if !hasASCII || !hasCJK {
-		t.Errorf("mixed CJK+ASCII tokenize failed: %v", result2)
-	}
-}
 
 func TestExtractToolDescription(t *testing.T) {
 	def := toolDef("my_tool", "A useful tool", nil, nil)
@@ -258,88 +198,6 @@ func TestExtractToolDescription(t *testing.T) {
 	desc = extractToolDescription(map[string]interface{}{})
 	if desc != "" {
 		t.Errorf("expected empty string, got %q", desc)
-	}
-}
-
-func TestToolTokens(t *testing.T) {
-	def := toolDef("search_web", "Search the web for information", nil, nil)
-	tokens := toolTokens(def)
-
-	// Should contain tokens from both name and description.
-	found := make(map[string]bool)
-	for _, tok := range tokens {
-		found[tok] = true
-	}
-	for _, expected := range []string{"search", "web", "the", "for", "information"} {
-		if !found[expected] {
-			t.Errorf("expected token %q in toolTokens result", expected)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// TF-IDF tests
-// ---------------------------------------------------------------------------
-
-func TestTermFrequency(t *testing.T) {
-	tokens := []string{"hello", "world", "hello"}
-	tf := termFrequency(tokens)
-
-	if tf["hello"] != 2.0/3.0 {
-		t.Errorf("expected tf[hello]=%.4f, got %.4f", 2.0/3.0, tf["hello"])
-	}
-	if tf["world"] != 1.0/3.0 {
-		t.Errorf("expected tf[world]=%.4f, got %.4f", 1.0/3.0, tf["world"])
-	}
-}
-
-func TestTermFrequency_Empty(t *testing.T) {
-	tf := termFrequency(nil)
-	if len(tf) != 0 {
-		t.Errorf("expected empty tf for nil input, got %v", tf)
-	}
-}
-
-func TestTfidfSimilarity_IdenticalDocs(t *testing.T) {
-	// Use a larger corpus so IDF values are non-zero for the target terms.
-	docs := [][]string{
-		{"hello", "world"},
-		{"foo", "bar"},
-		{"baz", "qux"},
-		{"alpha", "beta"},
-	}
-	idf := computeIDF(docs)
-
-	// A document compared to itself should have similarity ~1.0.
-	sim := tfidfSimilarity([]string{"hello", "world"}, []string{"hello", "world"}, idf)
-	if sim < 0.99 {
-		t.Errorf("expected similarity ~1.0 for identical docs, got %.4f", sim)
-	}
-}
-
-func TestTfidfSimilarity_DisjointDocs(t *testing.T) {
-	docs := [][]string{
-		{"hello", "world"},
-		{"foo", "bar"},
-		{"baz", "qux"},
-		{"alpha", "beta"},
-	}
-	idf := computeIDF(docs)
-
-	sim := tfidfSimilarity([]string{"hello", "world"}, []string{"foo", "bar"}, idf)
-	if sim != 0 {
-		t.Errorf("expected similarity 0 for disjoint docs, got %.4f", sim)
-	}
-}
-
-func TestTfidfSimilarity_EmptyInputs(t *testing.T) {
-	idf := map[string]float64{"hello": 1.0}
-
-	if sim := tfidfSimilarity(nil, []string{"hello"}, idf); sim != 0 {
-		t.Errorf("expected 0 for nil query, got %.4f", sim)
-	}
-	if sim := tfidfSimilarity([]string{"hello"}, nil, idf); sim != 0 {
-		t.Errorf("expected 0 for nil doc, got %.4f", sim)
 	}
 }
 

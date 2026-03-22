@@ -80,7 +80,6 @@ class MessageBubble extends StatelessWidget {
       ),
     );
   }
-  }
 
   Widget _buildContent(BuildContext context) {
     final textColor = isMe ? Colors.white : Theme.of(context).colorScheme.onSurface;

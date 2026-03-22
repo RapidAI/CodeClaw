@@ -1,10 +1,8 @@
 package tool
 
 import (
-	"math"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/RapidAI/CodeClaw/corelib/bm25"
 )
@@ -107,16 +105,6 @@ func (r *Router) tagsForTool(name string) []string {
 		return t.Tags
 	}
 	return nil
-}
-
-func (r *Router) toolTokensWithTags(def map[string]interface{}) []string {
-	name := ExtractToolName(def)
-	desc := ExtractToolDescription(def)
-	combined := name + " " + desc
-	if tags := r.tagsForTool(name); len(tags) > 0 {
-		combined += " " + strings.Join(tags, " ")
-	}
-	return Tokenize(combined)
 }
 
 // Route selects the most relevant tools for userMessage from allTools.
@@ -238,47 +226,6 @@ func SearchAndInstallSkillHint() map[string]interface{} {
 	}
 }
 
-// Tokenize splits text into lowercase tokens by whitespace and punctuation.
-// CJK characters are emitted as individual tokens.
-func Tokenize(text string) []string {
-	lower := strings.ToLower(text)
-	tokens := strings.FieldsFunc(lower, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsPunct(r) || r == '_' || r == '-'
-	})
-	result := make([]string, 0, len(tokens))
-	for _, t := range tokens {
-		hasCJK := false
-		for _, r := range t {
-			if unicode.Is(unicode.Han, r) {
-				hasCJK = true
-				break
-			}
-		}
-		if !hasCJK {
-			if len(t) > 1 {
-				result = append(result, t)
-			}
-			continue
-		}
-		var buf strings.Builder
-		for _, r := range t {
-			if unicode.Is(unicode.Han, r) {
-				if buf.Len() > 1 {
-					result = append(result, buf.String())
-				}
-				buf.Reset()
-				result = append(result, string(r))
-			} else {
-				buf.WriteRune(r)
-			}
-		}
-		if buf.Len() > 1 {
-			result = append(result, buf.String())
-		}
-	}
-	return result
-}
-
 // ExtractToolDescription extracts the description from an OpenAI function calling tool definition.
 func ExtractToolDescription(def map[string]interface{}) string {
 	fn, ok := def["function"]
@@ -293,78 +240,4 @@ func ExtractToolDescription(def map[string]interface{}) string {
 	return desc
 }
 
-// TermFrequency computes the term frequency of each token in a document.
-func TermFrequency(tokens []string) map[string]float64 {
-	counts := make(map[string]int, len(tokens))
-	for _, t := range tokens {
-		counts[t]++
-	}
-	tf := make(map[string]float64, len(counts))
-	n := float64(len(tokens))
-	if n == 0 {
-		return tf
-	}
-	for t, c := range counts {
-		tf[t] = float64(c) / n
-	}
-	return tf
-}
 
-// ComputeIDF computes inverse document frequency across all documents.
-func ComputeIDF(docs [][]string) map[string]float64 {
-	df := make(map[string]int)
-	for _, doc := range docs {
-		seen := make(map[string]bool, len(doc))
-		for _, t := range doc {
-			if !seen[t] {
-				df[t]++
-				seen[t] = true
-			}
-		}
-	}
-	n := float64(len(docs))
-	idf := make(map[string]float64, len(df))
-	for t, count := range df {
-		idf[t] = math.Log(n / (1.0 + float64(count)))
-	}
-	return idf
-}
-
-// TFIDFVector computes the TF-IDF vector for a document given precomputed IDF.
-func TFIDFVector(tokens []string, idf map[string]float64) map[string]float64 {
-	tf := TermFrequency(tokens)
-	vec := make(map[string]float64, len(tf))
-	for t, tfVal := range tf {
-		idfVal, ok := idf[t]
-		if !ok {
-			idfVal = math.Log(float64(len(idf)) + 1.0)
-		}
-		vec[t] = tfVal * idfVal
-	}
-	return vec
-}
-
-// TFIDFSimilarity computes the cosine similarity between query and doc tokens using TF-IDF.
-func TFIDFSimilarity(queryTokens, docTokens []string, idf map[string]float64) float64 {
-	if len(queryTokens) == 0 || len(docTokens) == 0 {
-		return 0
-	}
-	qVec := TFIDFVector(queryTokens, idf)
-	dVec := TFIDFVector(docTokens, idf)
-
-	var dot, qNorm, dNorm float64
-	for t, qVal := range qVec {
-		if dVal, ok := dVec[t]; ok {
-			dot += qVal * dVal
-		}
-		qNorm += qVal * qVal
-	}
-	for _, dVal := range dVec {
-		dNorm += dVal * dVal
-	}
-	denom := math.Sqrt(qNorm) * math.Sqrt(dNorm)
-	if denom == 0 {
-		return 0
-	}
-	return dot / denom
-}

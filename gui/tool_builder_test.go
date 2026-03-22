@@ -135,9 +135,4 @@ func TestRegisteredToolToDef(t *testing.T) {
 	}
 }
 
-func TestTokenizeSimple(t *testing.T) {
-	tokens := tokenizeSimple("hello_world foo-bar")
-	if len(tokens) != 4 {
-		t.Errorf("tokenize len = %d, want 4, tokens = %v", len(tokens), tokens)
-	}
-}
+

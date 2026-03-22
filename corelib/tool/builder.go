@@ -144,30 +144,6 @@ func RegisteredToolToDef(t RegisteredTool) map[string]interface{} {
 	}
 }
 
-// ScoreTool computes a relevance score for a tool against user message tokens.
-func ScoreTool(t RegisteredTool, msgTokens []string) float64 {
-	if len(msgTokens) == 0 {
-		return 0
-	}
-	var toolToks []string
-	toolToks = append(toolToks, TokenizeSimple(t.Name)...)
-	toolToks = append(toolToks, TokenizeSimple(t.Description)...)
-	for _, tag := range t.Tags {
-		toolToks = append(toolToks, TokenizeSimple(tag)...)
-	}
-	toolSet := make(map[string]bool, len(toolToks))
-	for _, tok := range toolToks {
-		toolSet[tok] = true
-	}
-	var hits float64
-	for _, mt := range msgTokens {
-		if toolSet[mt] {
-			hits++
-		}
-	}
-	return hits/float64(len(msgTokens)) + float64(t.Priority)*0.01
-}
-
 // GroupKeywords maps user-facing group names (Chinese and English) to tag sets.
 var GroupKeywords = map[string][]string{
 	"数据库":      {"database", "sql", "query", "db"},
@@ -206,20 +182,4 @@ func DetectGroupTags(userMessage string) map[string]bool {
 	return tags
 }
 
-// TokenizeSimple splits text into lowercase tokens on common delimiters.
-func TokenizeSimple(text string) []string {
-	text = strings.ToLower(text)
-	f := func(r rune) bool {
-		return r == ' ' || r == '_' || r == '-' || r == '/' || r == '.' ||
-			r == ',' || r == '(' || r == ')' || r == '\n' || r == '\t'
-	}
-	parts := strings.FieldsFunc(text, f)
-	var out []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if len(p) > 0 {
-			out = append(out, p)
-		}
-	}
-	return out
-}
+

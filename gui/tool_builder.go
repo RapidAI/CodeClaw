@@ -3,6 +3,8 @@ package main
 import (
 	"sort"
 	"strings"
+
+	"github.com/RapidAI/CodeClaw/corelib/bm25"
 )
 
 // DynamicToolBuilder builds LLM tool definitions dynamically from the ToolRegistry.
@@ -74,15 +76,26 @@ func (b *DynamicToolBuilder) Build(userMessage string) []map[string]interface{} 
 		dynamic = append(dynamic, t)
 	}
 
-	// Score remaining dynamic tools by keyword overlap with userMessage.
-	msgTokens := tokenizeSimple(userMessage)
+	// Score remaining dynamic tools using BM25.
+	docs := make([]bm25.Doc, len(dynamic))
+	for i, t := range dynamic {
+		text := t.Name + " " + t.Description
+		for _, tag := range t.Tags {
+			text += " " + tag
+		}
+		docs[i] = bm25.Doc{ID: t.Name, Text: text}
+	}
+	idx := bm25.New()
+	idx.Rebuild(docs)
+	bm25Scores := idx.Score(userMessage)
+
 	type scored struct {
 		tool  RegisteredTool
 		score float64
 	}
 	scoredList := make([]scored, 0, len(dynamic))
 	for _, t := range dynamic {
-		s := scoreTool(t, msgTokens)
+		s := bm25Scores[t.Name] + float64(t.Priority)*0.01
 		scoredList = append(scoredList, scored{tool: t, score: s})
 	}
 	sort.Slice(scoredList, func(i, j int) bool {
@@ -132,32 +145,6 @@ func registeredToolToDef(t RegisteredTool) map[string]interface{} {
 	}
 }
 
-// scoreTool computes a relevance score for a tool against user message tokens.
-func scoreTool(t RegisteredTool, msgTokens []string) float64 {
-	if len(msgTokens) == 0 {
-		return 0
-	}
-	// Collect tool tokens from name, description, and tags.
-	var toolToks []string
-	toolToks = append(toolToks, tokenizeSimple(t.Name)...)
-	toolToks = append(toolToks, tokenizeSimple(t.Description)...)
-	for _, tag := range t.Tags {
-		toolToks = append(toolToks, tokenizeSimple(tag)...)
-	}
-	toolSet := make(map[string]bool, len(toolToks))
-	for _, tok := range toolToks {
-		toolSet[tok] = true
-	}
-	var hits float64
-	for _, mt := range msgTokens {
-		if toolSet[mt] {
-			hits++
-		}
-	}
-	// Add priority bonus (normalized).
-	return hits/float64(len(msgTokens)) + float64(t.Priority)*0.01
-}
-
 // groupKeywords maps user-facing group names (Chinese and English) to tag sets.
 // When a user message contains a group keyword, all tools matching those tags
 // are forcibly included regardless of the scoring threshold.
@@ -198,20 +185,4 @@ func detectGroupTags(userMessage string) map[string]bool {
 	return tags
 }
 
-// tokenizeSimple splits text into lowercase tokens on common delimiters.
-func tokenizeSimple(text string) []string {
-	text = strings.ToLower(text)
-	f := func(r rune) bool {
-		return r == ' ' || r == '_' || r == '-' || r == '/' || r == '.' ||
-			r == ',' || r == '(' || r == ')' || r == '\n' || r == '\t'
-	}
-	parts := strings.FieldsFunc(text, f)
-	var out []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if len(p) > 0 {
-			out = append(out, p)
-		}
-	}
-	return out
-}
+
