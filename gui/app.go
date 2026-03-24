@@ -10,6 +10,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,7 +22,9 @@ import (
 	"time"
 
 	"github.com/RapidAI/CodeClaw/corelib"
+	"github.com/RapidAI/CodeClaw/corelib/brand"
 	"github.com/RapidAI/CodeClaw/corelib/remote"
+	"github.com/RapidAI/CodeClaw/corelib/swarm"
 )
 
 // App struct
@@ -78,7 +81,7 @@ type App struct {
 	sessionCheckpointer  *SessionCheckpointer
 	startupFeedback      *SessionStartupFeedback
 	ioRelay              *SessionIORelay
-	swarmOrchestrator    *SwarmOrchestrator
+	swarmOrchestrator    *swarm.SwarmOrchestrator
 	memoryCompressor     *MemoryCompressor
 	compressorMu         sync.Mutex // guards lazy creation of memoryCompressor
 	scheduledTaskManager *ScheduledTaskManager
@@ -88,6 +91,7 @@ type App struct {
 	mcpAutoDiscovery     *MCPAutoDiscovery
 	securityFirewall     *SecurityFirewall
 	securityRiskAnalyzer *SecurityRiskAnalyzer
+	hubSecurityCache     hubSecurityCache
 	contextBridge        *ContextBridge
 	taskOrchestrator2    *TaskOrchestrator2
 	autoTaskPicker       *ClawNetAutoTaskPicker
@@ -165,6 +169,9 @@ func (a *App) initRemoteInfra() {
 		a.gossipAutoPublish.SetLLMConfigFn(func() corelib.MaclawLLMConfig {
 			return a.GetMaclawLLMConfig()
 		})
+		a.gossipAutoPublish.SetGossipAllowedFn(func() bool {
+			return a.isGossipAllowed()
+		})
 	}
 	if a.autoUploadTrigger == nil && a.skillMarketClient != nil {
 		a.autoUploadTrigger = NewAutoUploadTrigger(a.skillMarketClient, func() string {
@@ -190,8 +197,7 @@ func (a *App) initRemoteInfra() {
 		a.policyEngine = NewPolicyEngineWithMode(mode)
 	}
 	if a.auditLog == nil {
-		homeDir := a.GetUserHomeDir()
-		al, err := NewAuditLog(filepath.Join(homeDir, ".cceasy", "audit"))
+		al, err := NewAuditLog(filepath.Join(a.GetDataDir(), "audit"))
 		if err == nil {
 			a.auditLog = al
 		}
@@ -356,6 +362,16 @@ func (a *App) initRemoteInfra() {
 	if a.taskOrchestrator2 == nil && a.remoteSessions != nil && a.toolSelector != nil {
 		a.taskOrchestrator2 = NewTaskOrchestrator2(a.remoteSessions, a.toolSelector, a.contextBridge)
 	}
+	// Register OEM extra tools into the built-in tool registry.
+	{
+		registry := make(map[string]bool, len(remoteToolCatalog))
+		for name := range remoteToolCatalog {
+			registry[name] = true
+		}
+		if err := brand.RegisterExtraTools(registry); err != nil {
+			fmt.Printf("[initRemoteInfra] WARNING: failed to register OEM extra tools: %v\n", err)
+		}
+	}
 }
 
 // createAndWireHubClient creates a new RemoteHubClient, wires all subsystem
@@ -398,6 +414,11 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 	if a.securityFirewall != nil {
 		hubClient.imHandler.SetSecurityFirewall(a.securityFirewall)
 	}
+	// Wire IM file sender so the desktop AI assistant can forward files to
+	// the user's Feishu/WeChat via the Hub WebSocket.
+	hubClient.imHandler.SetIMFileSender(func(b64Data, fileName, mimeType, message string) error {
+		return hubClient.SendIMProactiveFile(b64Data, fileName, mimeType, message)
+	})
 	// Initialize and wire BackgroundLoopManager + SessionMonitor.
 	{
 		statusC := make(chan StatusEvent, 32)
@@ -562,6 +583,8 @@ func (a *App) IsToolBeingInstalled(toolName string) bool {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// Migrate legacy ~/.cceasy data to ~/.maclaw/data on first launch.
+	a.MigrateDataDir()
 	// Platform specific initialization
 	a.platformStartup()
 	a.startConfigWatcher()
@@ -1038,8 +1061,68 @@ func (a *App) buildRemoteLaunchEnvForTool(
 	case "cursor":
 		return a.buildCursorLaunchEnv(config, selectedModel, projectDir, useProxy)
 	default:
+		// Check OEM extra tools
+		extraTool := findExtraTool(normalizeRemoteToolName(toolName))
+		if extraTool != nil {
+			return a.buildExtraToolLaunchEnv(extraTool, selectedModel, projectDir, useProxy, config)
+		}
 		return nil, fmt.Errorf("remote launch is not supported for tool: %s", toolName)
 	}
+}
+
+// findExtraTool looks up an OEM extra tool by name from brand.Current().ExtraTools.
+// Returns nil if no matching extra tool is found.
+func findExtraTool(toolName string) *brand.ExtraToolDef {
+	for i, et := range brand.Current().ExtraTools {
+		if et.Name == toolName {
+			return &brand.Current().ExtraTools[i]
+		}
+	}
+	return nil
+}
+
+// buildExtraToolLaunchEnv builds environment variables for an OEM extra tool.
+// If the ExtraToolDef has a custom EnvBuilderFunc, it is used; otherwise a
+// generic OpenAI-compatible env set is produced.
+func (a *App) buildExtraToolLaunchEnv(
+	et *brand.ExtraToolDef,
+	selectedModel *ModelConfig,
+	projectDir string,
+	useProxy bool,
+	config AppConfig,
+) (map[string]string, error) {
+	if selectedModel == nil {
+		return nil, fmt.Errorf("selected model is nil for extra tool %s", et.Name)
+	}
+
+	var env map[string]string
+	if et.EnvBuilderFunc != nil {
+		env = et.EnvBuilderFunc(nil, selectedModel, projectDir)
+	} else {
+		// Generic OpenAI-compatible environment variable builder
+		env = map[string]string{}
+		if selectedModel.ApiKey != "" {
+			env["OPENAI_API_KEY"] = selectedModel.ApiKey
+		}
+		if selectedModel.ModelUrl != "" {
+			env["OPENAI_BASE_URL"] = selectedModel.ModelUrl
+		}
+		if selectedModel.ModelId != "" {
+			env["OPENAI_MODEL"] = selectedModel.ModelId
+		}
+	}
+
+	if useProxy {
+		proxyURL := a.resolveProjectProxyURL(config, projectDir)
+		if proxyURL != "" {
+			env["HTTP_PROXY"] = proxyURL
+			env["HTTPS_PROXY"] = proxyURL
+			env["http_proxy"] = proxyURL
+			env["https_proxy"] = proxyURL
+		}
+	}
+
+	return env, nil
 }
 
 func (a *App) buildRemoteLaunchSpec(
@@ -1117,7 +1200,7 @@ func (a *App) buildRemoteLaunchSpec(
 		BinaryName:   meta.BinaryName,
 		Title:        title,
 		LaunchSource: RemoteLaunchSourceDesktop,
-		YoloMode:     yoloMode,
+		YoloMode:     a.enforceYoloModeQuiet(yoloMode),
 		AdminMode:    adminMode,
 		PythonEnv:    pythonEnv,
 		UseProxy:     useProxy,
@@ -1221,11 +1304,50 @@ func (a *App) GetUserHomeDir() string {
 	home, _ := os.UserHomeDir()
 	return home
 }
-func (a *App) GetLocalCacheDir() string {
+// GetDataDir returns ~/.maclaw/data — the persistent data directory that
+// survives uninstalls and is easy to back up / transfer.
+func (a *App) GetDataDir() string {
+	return filepath.Join(a.GetUserHomeDir(), ".maclaw", "data")
+}
+
+// MigrateDataDir moves legacy ~/.cceasy/* subdirectories into ~/.maclaw/data/
+// on first launch. It is safe to call multiple times (no-op once migrated).
+func (a *App) MigrateDataDir() {
 	home := a.GetUserHomeDir()
+	oldBase := filepath.Join(home, ".cceasy")
+	newBase := a.GetDataDir()
+
+	// If old directory doesn't exist, nothing to migrate.
+	if _, err := os.Stat(oldBase); os.IsNotExist(err) {
+		return
+	}
+
+	// Ensure new base exists.
+	_ = os.MkdirAll(newBase, 0o755)
+
+	// Subdirectories to migrate.
+	subs := []string{"files", "screenshots", "im_files", "audit", "cache", "config_backup", "skills", "tools", "node"}
+	for _, sub := range subs {
+		src := filepath.Join(oldBase, sub)
+		dst := filepath.Join(newBase, sub)
+		if _, err := os.Stat(src); err != nil {
+			continue // source doesn't exist
+		}
+		if _, err := os.Stat(dst); err == nil {
+			continue // destination already exists, skip
+		}
+		if err := os.Rename(src, dst); err != nil {
+			log.Printf("[MigrateDataDir] failed to move %s → %s: %v", src, dst, err)
+		} else {
+			log.Printf("[MigrateDataDir] migrated %s → %s", src, dst)
+		}
+	}
+}
+
+func (a *App) GetLocalCacheDir() string {
 	// Use shorter path to avoid Windows 260 character path limit
 	// npm's _cacache directory structure can create very long paths
-	return filepath.Join(home, ".cceasy", "cache")
+	return filepath.Join(a.GetDataDir(), "cache")
 }
 func (a *App) GetCurrentProjectPath() string {
 	config, err := a.LoadConfig()
@@ -1319,7 +1441,7 @@ func (a *App) getIFlowConfigPaths(projectDir string, instanceID string) (string,
 // When switching to a third-party provider we need to clear the tool's native
 // config directory (e.g. ~/.claude, ~/.codex, ~/.gemini) so that env-var-based
 // credentials take effect.  Instead of deleting the directory outright we move
-// it to a backup location (~/.cceasy/config_backup/<tool>/) so that switching
+// it to a backup location (~/.maclaw/data/config_backup/<tool>/) so that switching
 // back to the original provider can restore it without forcing the user to
 // re-authenticate.
 
@@ -1350,10 +1472,9 @@ func (a *App) toolNativeConfigPaths(tool string) (dir string, extras []string) {
 	}
 }
 
-// configBackupDir returns ~/.cceasy/config_backup/<tool>.
+// configBackupDir returns ~/.maclaw/data/config_backup/<tool>.
 func (a *App) configBackupDir(tool string) string {
-	home := a.GetUserHomeDir()
-	return filepath.Join(home, ".cceasy", "config_backup", strings.ToLower(tool))
+	return filepath.Join(a.GetDataDir(), "config_backup", strings.ToLower(tool))
 }
 
 // backupToolNativeConfig moves the tool's native config directory (and any
@@ -2235,7 +2356,20 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 		envBaseUrl = "CODEBUDDY_BASE_URL"
 		binaryName = "codebuddy"
 	default:
-		return
+		// Check OEM extra tools from brand config
+		extraTool := findExtraTool(strings.ToLower(toolName))
+		if extraTool == nil {
+			return
+		}
+		// Load tool config from ExtraToolConfigs map
+		if config.ExtraToolConfigs != nil {
+			if tc, ok := config.ExtraToolConfigs[extraTool.ConfigKey]; ok {
+				toolCfg = tc
+			}
+		}
+		envKey = "OPENAI_API_KEY"
+		envBaseUrl = "OPENAI_BASE_URL"
+		binaryName = extraTool.Name
 	}
 	var selectedModel *ModelConfig
 	for _, m := range toolCfg.Models {
@@ -2337,6 +2471,11 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 				env["IFLOW_MODEL"] = selectedModel.ModelId
 			case "kilo":
 				env["KILO_MODEL"] = selectedModel.ModelId
+			default:
+				// OEM extra tools use generic OpenAI model env var
+				if findExtraTool(strings.ToLower(toolName)) != nil {
+					env["OPENAI_MODEL"] = selectedModel.ModelId
+				}
 			}
 		}
 		if strings.ToLower(toolName) == "claude" {
@@ -2396,6 +2535,14 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 		case "kilo":
 			// Kilo needs config file - use instanceID for isolation
 			a.syncToKiloSettings(config, projectDir, instanceID)
+		default:
+			// OEM extra tools: if EnvBuilderFunc is set, merge its output into env
+			if et := findExtraTool(strings.ToLower(toolName)); et != nil && et.EnvBuilderFunc != nil {
+				extraEnv := et.EnvBuilderFunc(nil, selectedModel, projectDir)
+				for k, v := range extraEnv {
+					env[k] = v
+				}
+			}
 		}
 	} else {
 		// --- ORIGINAL MODE: RESTORE NATIVE CONFIG ---
@@ -2420,7 +2567,7 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 		}
 	}
 
-	if config.RemoteEnabled && (strings.ToLower(toolName) == "claude" || strings.ToLower(toolName) == "codex" || strings.ToLower(toolName) == "opencode" || strings.ToLower(toolName) == "iflow" || strings.ToLower(toolName) == "kilo") {
+	if config.RemoteEnabled && (strings.ToLower(toolName) == "claude" || strings.ToLower(toolName) == "codex" || strings.ToLower(toolName) == "opencode" || strings.ToLower(toolName) == "iflow" || strings.ToLower(toolName) == "kilo" || findExtraTool(strings.ToLower(toolName)) != nil) {
 		spec, err := a.buildRemoteLaunchSpec(toolName, config, yoloMode, adminMode, pythonEnv, projectDir, useProxy, "")
 		if err != nil {
 			a.log("build remote launch spec failed: " + err.Error())
@@ -2441,6 +2588,9 @@ func (a *App) LaunchTool(toolName string, yoloMode bool, adminMode bool, pythonP
 	// Ensure tool onboarding is complete for local launches so the user
 	// doesn't have to confirm theme/trust/setup prompts every time.
 	ensureToolOnboardingComplete(a, strings.ToLower(toolName), projectDir)
+
+	// Enforce Hub YOLO mode override for local launches (Req 7.8).
+	yoloMode = a.enforceYoloModeQuiet(yoloMode)
 
 	// Platform specific launch
 	a.platformLaunch(binaryName, yoloMode, adminMode, pythonEnv, projectDir, env, selectedModel.ModelId)
@@ -4220,8 +4370,7 @@ func (a *App) ShowItemInFolder(path string) error {
 	return cmd.Start()
 }
 func (a *App) GetSkillsDir(toolName string) string {
-	home, _ := os.UserHomeDir()
-	baseDir := filepath.Join(home, ".cceasy", "skills")
+	baseDir := filepath.Join(a.GetDataDir(), "skills")
 	storageDir := filepath.Join(baseDir, "storage")
 
 	// Migration: If storage doesn't exist but claude does, rename claude to storage
@@ -4798,9 +4947,9 @@ var translations = map[string]map[string]string{
 		"zh-Hans": "手动触发环境检测。",
 		"zh-Hant": "手動觸發環境檢測。",
 	},
-	"Detected missing .cceasy directory. Forcing environment check...": {
-		"zh-Hans": "检测到缺失 .cceasy 目录。正在强制进行环境检...",
-		"zh-Hant": "檢測到缺�?.cceasy 目錄。正在強制進行環境檢測...",
+	"Detected missing .maclaw/data directory. Forcing environment check...": {
+		"zh-Hans": "检测到缺失 .maclaw/data 目录。正在强制进行环境检测...",
+		"zh-Hant": "檢測到缺失 .maclaw/data 目錄。正在強制進行環境檢測...",
 	},
 	"Init mode: Forcing environment check (ignoring configuration).": {
 		"zh-Hans": "初始化模式：正在强制进行环境检测（忽略配置）。",
