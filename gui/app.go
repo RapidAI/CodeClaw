@@ -2904,8 +2904,14 @@ func (a *App) LoadConfig() (AppConfig, error) {
 			RemoteMachineToken: "",
 			RemoteHeartbeatSec:  10,
 			ScreenDimTimeoutMin: 3, // Default: dim display after 3 minutes of inactivity
-			ClawNetEnabled:      true,
-			GossipAutoPublish:   true,
+			ClawNetEnabled:       true,
+			GossipAutoPublish:    true,
+			YoloModeAllowed:      true,
+			GossipEnabled:        true,
+			FileOutboundEnabled:  true,
+			ImageOutboundEnabled: true,
+			NetworkLevel:         "full",
+			SandboxMode:          "none",
 		}
 		err = a.SaveConfig(defaultConfig)
 		return defaultConfig, err
@@ -2951,6 +2957,22 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	if _, ok := rawConfig["gossip_auto_publish"]; ok {
 		hasGossipAutoPublish = true
 	}
+	hasYoloModeAllowed := false
+	if _, ok := rawConfig["yolo_mode_allowed"]; ok {
+		hasYoloModeAllowed = true
+	}
+	hasGossipEnabled := false
+	if _, ok := rawConfig["gossip_enabled"]; ok {
+		hasGossipEnabled = true
+	}
+	hasFileOutboundEnabled := false
+	if _, ok := rawConfig["file_outbound_enabled"]; ok {
+		hasFileOutboundEnabled = true
+	}
+	hasImageOutboundEnabled := false
+	if _, ok := rawConfig["image_outbound_enabled"]; ok {
+		hasImageOutboundEnabled = true
+	}
 
 	err = json.Unmarshal(data, &config)
 	if err != nil {
@@ -2972,6 +2994,24 @@ func (a *App) LoadConfig() (AppConfig, error) {
 	}
 	if !hasGossipAutoPublish {
 		config.GossipAutoPublish = true
+	}
+	if !hasYoloModeAllowed {
+		config.YoloModeAllowed = true
+	}
+	if !hasGossipEnabled {
+		config.GossipEnabled = true
+	}
+	if !hasFileOutboundEnabled {
+		config.FileOutboundEnabled = true
+	}
+	if !hasImageOutboundEnabled {
+		config.ImageOutboundEnabled = true
+	}
+	if config.NetworkLevel == "" {
+		config.NetworkLevel = "full"
+	}
+	if config.SandboxMode == "" {
+		config.SandboxMode = "none"
 	}
 	if config.RemoteHeartbeatSec < 5 {
 		config.RemoteHeartbeatSec = 10

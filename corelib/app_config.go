@@ -80,6 +80,12 @@ type AppConfig struct {
 	ClawNetAutoPickerMinReward float64 `json:"clawnet_auto_picker_min_reward,omitempty"`
 	// Security
 	SecurityPolicyMode   string `json:"security_policy_mode,omitempty"`
+	SandboxMode          string `json:"sandbox_mode,omitempty"`          // "none" (default), "os", "docker"
+	NetworkLevel         string `json:"network_level,omitempty"`         // "none", "intranet", "full" (default)
+	YoloModeAllowed      bool   `json:"yolo_mode_allowed"`              // default true
+	GossipEnabled        bool   `json:"gossip_enabled"`                  // default true (local preference, overridden by Hub)
+	FileOutboundEnabled  bool   `json:"file_outbound_enabled"`           // default true
+	ImageOutboundEnabled bool   `json:"image_outbound_enabled"`          // default true
 	MaclawDebugToolCalls bool   `json:"maclaw_debug_tool_calls,omitempty"`
 	// IM — per-user QQ Bot (client-side gateway)
 	QQBotEnabled   bool   `json:"qqbot_enabled,omitempty"`
@@ -106,6 +112,8 @@ type AppConfig struct {
 	SkillPurchaseMode string `json:"skill_purchase_mode,omitempty"` // "auto" (default) | "free_only"
 	// Gossip — 聊天八卦自动发布（默认开启）
 	GossipAutoPublish bool `json:"gossip_auto_publish"`
+	// Onboarding — 是否已完成引导流程
+	OnboardingDone bool `json:"onboarding_done,omitempty"`
 }
 
 // IsWeixinLocalMode returns the effective WeChat local mode setting.

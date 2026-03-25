@@ -143,6 +143,28 @@ func handleBotMessage(n *Notifier, raw json.RawMessage) {
 		}
 	}
 
+	// If the message is a media type but text is empty, synthesize a
+	// descriptive text so the message is not silently dropped.
+	if text == "" && msgType != "text" {
+		label := msgType
+		switch msgType {
+		case "image":
+			label = "图片"
+		case "file":
+			label = "文件"
+			if len(attachments) > 0 && attachments[0].FileName != "" {
+				label = "文件: " + attachments[0].FileName
+			}
+		case "audio":
+			label = "语音"
+		}
+		if len(attachments) > 0 {
+			text = "[用户发送了" + label + "]"
+		} else {
+			text = "[用户发送了" + label + "，但下载失败]"
+		}
+	}
+
 	// --- IM Adapter routing ---
 	if n.plugin != nil {
 		// Email binding and verification code flows are always handled by

@@ -251,11 +251,22 @@ func (m *telegramGatewayManager) forwardToHub(msg telegram.IncomingMessage) {
 		return
 	}
 
-	if err := hubClient.SendIMGatewayMessage("telegram", map[string]any{
+	msgType := "text"
+	if msg.MediaType != "" && len(msg.MediaData) > 0 {
+		msgType = msg.MediaType
+	}
+
+	payload := map[string]any{
 		"platform_uid": strconv.FormatInt(msg.ChatID, 10),
 		"text":         msg.Text,
-		"message_type": "text",
-	}); err != nil {
+		"message_type": msgType,
+	}
+
+	if att := buildMediaAttachment(msg.MediaType, msg.MediaData, msg.MediaName, msg.MimeType); att != nil {
+		payload["attachments"] = []map[string]any{att}
+	}
+
+	if err := hubClient.SendIMGatewayMessage("telegram", payload); err != nil {
 		log.Printf("[telegram-mgr] forwardToHub SendIMGatewayMessage error: %v", err)
 	}
 }
@@ -284,6 +295,18 @@ func (m *telegramGatewayManager) handleLocalMessage(msg telegram.IncomingMessage
 	}
 
 	text := msg.Text
+
+	// Prepend media info if present
+	if msg.MediaType != "" && len(msg.MediaData) > 0 {
+		mediaPath, err := saveTelegramMediaToTemp(msg)
+		if err != nil {
+			log.Printf("[telegram-mgr] save media error: %v", err)
+		} else {
+			prefix := "[收到" + mediaLabel(msg.MediaType) + ": " + mediaPath + "]\n"
+			text = prefix + text
+		}
+	}
+
 	if text == "" {
 		return
 	}
@@ -479,4 +502,9 @@ func (a *App) SetTelegramLocalMode(enabled bool) error {
 		}
 	}
 	return nil
+}
+
+// saveTelegramMediaToTemp saves media from a Telegram message to a temp file.
+func saveTelegramMediaToTemp(msg telegram.IncomingMessage) (string, error) {
+	return saveMediaToTempDir("maclaw-telegram-media", "tg_", strconv.FormatInt(msg.ChatID, 10), msg.MediaType, msg.MediaData, msg.MediaName)
 }

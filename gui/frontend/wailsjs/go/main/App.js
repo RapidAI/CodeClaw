@@ -996,6 +996,14 @@ export function IsGossipAllowed() {
   return window['go']['main']['App']['IsGossipAllowed']();
 }
 
+export function GetHubSecurityPolicy() {
+  return window['go']['main']['App']['GetHubSecurityPolicy']();
+}
+
+export function IsHubSecurityReadOnly() {
+  return window['go']['main']['App']['IsHubSecurityReadOnly']();
+}
+
 // NL Skill upload binding
 export function UploadNLSkillToMarket(arg1) {
   return window['go']['main']['App']['UploadNLSkillToMarket'](arg1);

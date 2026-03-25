@@ -161,6 +161,12 @@ export namespace main {
 	    clawnet_auto_picker_poll_min: number;
 	    clawnet_auto_picker_min_reward: number;
 	    security_policy_mode: string;
+	    sandbox_mode: string;
+	    network_level: string;
+	    yolo_mode_allowed: boolean;
+	    gossip_enabled: boolean;
+	    file_outbound_enabled: boolean;
+	    image_outbound_enabled: boolean;
 	    qqbot_enabled: boolean;
 	    qqbot_app_id: string;
 	    qqbot_app_secret: string;
@@ -175,6 +181,7 @@ export namespace main {
 	    ui_mode: string;
 	    skill_purchase_mode: string;
 	    gossip_auto_publish: boolean;
+	    onboarding_done: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -251,6 +258,12 @@ export namespace main {
 	        this.clawnet_auto_picker_min_reward = source["clawnet_auto_picker_min_reward"];
 	        this.skill_hub_urls = source["skill_hub_urls"];
 	        this.security_policy_mode = source["security_policy_mode"];
+	        this.sandbox_mode = source["sandbox_mode"];
+	        this.network_level = source["network_level"];
+	        this.yolo_mode_allowed = source["yolo_mode_allowed"];
+	        this.gossip_enabled = source["gossip_enabled"];
+	        this.file_outbound_enabled = source["file_outbound_enabled"];
+	        this.image_outbound_enabled = source["image_outbound_enabled"];
 	        this.maclaw_debug_tool_calls = source["maclaw_debug_tool_calls"];
 	        this.qqbot_enabled = source["qqbot_enabled"];
 	        this.qqbot_app_id = source["qqbot_app_id"];
@@ -266,6 +279,7 @@ export namespace main {
 	        this.ui_mode = source["ui_mode"];
 	        this.skill_purchase_mode = source["skill_purchase_mode"];
 	        this.gossip_auto_publish = source["gossip_auto_publish"];
+	        this.onboarding_done = source["onboarding_done"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

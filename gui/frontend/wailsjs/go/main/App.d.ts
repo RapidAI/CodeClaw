@@ -444,6 +444,10 @@ export function GossipGetComments(arg1:string, arg2:number):Promise<any>;
 
 export function IsGossipAllowed():Promise<boolean>;
 
+export function GetHubSecurityPolicy():Promise<any>;
+
+export function IsHubSecurityReadOnly():Promise<boolean>;
+
 // NL Skill upload binding
 export function UploadNLSkillToMarket(arg1:string):Promise<string>;
 

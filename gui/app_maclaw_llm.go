@@ -18,7 +18,7 @@ import (
 // defaultMaclawLLMProviders returns the built-in provider list.
 func defaultMaclawLLMProviders() []MaclawLLMProvider {
 	return []MaclawLLMProvider{
-		{Name: "免费", URL: "http://localhost:18099/v1", Model: "free-proxy", ContextLength: 128000, AuthType: "none"},
+		{Name: "免费", URL: "http://localhost:18099/v1", Model: "free-proxy", ContextLength: 10000, AuthType: "none"},
 		{Name: "OpenAI", URL: "https://api.openai.com/v1", Model: "gpt-5.4", AuthType: "oauth", ContextLength: 128000},
 		{Name: "智谱", URL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-5-turbo", ContextLength: 180000},
 		{Name: "MiniMax", URL: "https://api.minimaxi.com/v1", Model: "MiniMax-M2.7", ContextLength: 128000},
@@ -196,6 +196,7 @@ func (a *App) GetMaclawLLMConfig() MaclawLLMConfig {
 				Protocol:       p.Protocol,
 				ContextLength:  p.ContextLength,
 				SupportsVision: p.SupportsVision,
+				AgentType:      p.AgentType,
 			}
 		}
 	}
@@ -325,16 +326,16 @@ func (a *App) TestMaclawLLM(llm MaclawLLMConfig) (string, error) {
 	var textResult string
 	var err error
 	if protocol == "anthropic" {
-		textResult, err = a.testAnthropicLLM(url, key, model)
+		textResult, err = a.testAnthropicLLM(url, key, model, llm.UserAgent())
 	} else {
-		textResult, err = a.testOpenAILLM(url, key, model)
+		textResult, err = a.testOpenAILLM(url, key, model, llm.UserAgent())
 	}
 	if err != nil {
 		return "", err
 	}
 
 	// Probe vision support and persist the result.
-	vision := probeVisionSupport(url, key, model, protocol)
+	vision := probeVisionSupport(url, key, model, protocol, llm.UserAgent())
 	a.saveVisionProbeResult(vision)
 	log.Printf("[LLM] vision probe for %s: supports_vision=%v", model, vision)
 
@@ -346,7 +347,7 @@ func (a *App) TestMaclawLLM(llm MaclawLLMConfig) (string, error) {
 }
 
 // testOpenAILLM tests an OpenAI-compatible endpoint.
-func (a *App) testOpenAILLM(url, key, model string) (string, error) {
+func (a *App) testOpenAILLM(url, key, model, userAgent string) (string, error) {
 	// Build OpenAI-compatible chat completion request.
 	reqBody := map[string]interface{}{
 		"model": model,
@@ -364,7 +365,7 @@ func (a *App) testOpenAILLM(url, key, model string) (string, error) {
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "OpenClaw/1.0")
+	req.Header.Set("User-Agent", userAgent)
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
@@ -459,7 +460,7 @@ func (a *App) testOpenAILLM(url, key, model string) (string, error) {
 }
 
 // testAnthropicLLM tests an Anthropic Messages API endpoint.
-func (a *App) testAnthropicLLM(url, key, model string) (string, error) {
+func (a *App) testAnthropicLLM(url, key, model, userAgent string) (string, error) {
 	reqBody := map[string]interface{}{
 		"model": model,
 		"messages": []map[string]interface{}{
@@ -475,7 +476,7 @@ func (a *App) testAnthropicLLM(url, key, model string) (string, error) {
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "OpenClaw/1.0")
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	if key != "" {
 		req.Header.Set("x-api-key", key)
@@ -518,17 +519,17 @@ func (a *App) testAnthropicLLM(url, key, model string) (string, error) {
 // probeVisionSupport sends a tiny 1x1 red PNG as an image_url message to the
 // LLM and returns true if the model responds successfully (i.e. supports vision).
 // This is a best-effort probe — network errors or timeouts return false.
-func probeVisionSupport(baseURL, key, model, protocol string) bool {
+func probeVisionSupport(baseURL, key, model, protocol, userAgent string) bool {
 	// 1x1 red PNG, 68 bytes
 	const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 
 	if protocol == "anthropic" {
-		return probeVisionAnthropic(baseURL, key, model, tinyPNG)
+		return probeVisionAnthropic(baseURL, key, model, tinyPNG, userAgent)
 	}
-	return probeVisionOpenAI(baseURL, key, model, tinyPNG)
+	return probeVisionOpenAI(baseURL, key, model, tinyPNG, userAgent)
 }
 
-func probeVisionOpenAI(baseURL, key, model, imgB64 string) bool {
+func probeVisionOpenAI(baseURL, key, model, imgB64, userAgent string) bool {
 	reqBody := map[string]interface{}{
 		"model": model,
 		"messages": []interface{}{
@@ -555,7 +556,7 @@ func probeVisionOpenAI(baseURL, key, model, imgB64 string) bool {
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "OpenClaw/1.0")
+	req.Header.Set("User-Agent", userAgent)
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
@@ -569,7 +570,7 @@ func probeVisionOpenAI(baseURL, key, model, imgB64 string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-func probeVisionAnthropic(baseURL, key, model, imgB64 string) bool {
+func probeVisionAnthropic(baseURL, key, model, imgB64, userAgent string) bool {
 	reqBody := map[string]interface{}{
 		"model": model,
 		"messages": []interface{}{
@@ -597,7 +598,7 @@ func probeVisionAnthropic(baseURL, key, model, imgB64 string) bool {
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "OpenClaw/1.0")
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	if key != "" {
 		req.Header.Set("x-api-key", key)
@@ -678,46 +679,39 @@ var maclawLLMPingClient = &http.Client{Timeout: 10 * time.Second}
 // consumed).  If that returns 404 it falls back to a HEAD request on the
 // chat completions path.
 //
-// All requests carry User-Agent "OpenClaw/1.0" so LLM providers can
+// All requests carry a User-Agent derived from the provider's AgentType
+// ("OpenClaw/1.0" or "claude-code/2.0.0") so LLM providers can
 // recognise the client for coding-plan eligibility.
 func (a *App) PingMaclawLLM() MaclawLLMStatus {
 	if err := a.ensureOAuthToken(); err != nil {
 		return MaclawLLMStatus{Online: false, Configured: true, Error: err.Error()}
 	}
 
-	cfg, err := a.LoadConfig()
-	if err != nil {
-		return MaclawLLMStatus{Online: false, Configured: false, Error: err.Error()}
-	}
-
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.MaclawLLMUrl), "/")
-	model := strings.TrimSpace(cfg.MaclawLLMModel)
+	llmCfg := a.GetMaclawLLMConfig()
+	baseURL := strings.TrimRight(strings.TrimSpace(llmCfg.URL), "/")
+	model := strings.TrimSpace(llmCfg.Model)
 	if baseURL == "" || model == "" {
 		return MaclawLLMStatus{Online: false, Configured: false}
 	}
 
-	key := strings.TrimSpace(cfg.MaclawLLMKey)
-	protocol := strings.TrimSpace(cfg.MaclawLLMProtocol)
+	key := strings.TrimSpace(llmCfg.Key)
+	protocol := strings.TrimSpace(llmCfg.Protocol)
+	ua := llmCfg.UserAgent()
 
 	if protocol == "anthropic" {
-		// Anthropic: probe the messages endpoint
-		online, err := maclawAnthropicProbe(baseURL+"/v1/messages", key)
+		online, err := maclawAnthropicProbe(baseURL+"/v1/messages", key, ua)
 		if err == nil {
 			return MaclawLLMStatus{Online: online, Configured: true}
 		}
 		return MaclawLLMStatus{Online: false, Configured: true, Error: err.Error()}
 	}
 
-	// OpenAI-compatible: Try GET /models first — most OpenAI-compatible APIs support this and
-	// it costs zero tokens.
-	online, err2 := maclawLLMProbe(baseURL+"/models", key)
+	online, err2 := maclawLLMProbe(baseURL+"/models", key, ua)
 	if err2 == nil {
 		return MaclawLLMStatus{Online: online, Configured: true}
 	}
 
-	// Fallback: HEAD on the chat completions endpoint.  A 405 (Method Not
-	// Allowed) still proves the server is reachable and authenticated.
-	online, err2 = maclawLLMProbe(baseURL+"/chat/completions", key)
+	online, err2 = maclawLLMProbe(baseURL+"/chat/completions", key, ua)
 	if err2 == nil {
 		return MaclawLLMStatus{Online: online, Configured: true}
 	}
@@ -729,12 +723,12 @@ func (a *App) PingMaclawLLM() MaclawLLMStatus {
 // server responds with any 2xx/4xx status (proving it is reachable and the
 // credentials are accepted or at least the server is alive).  Only network
 // errors and 5xx are treated as "offline".
-func maclawLLMProbe(endpoint, key string) (bool, error) {
+func maclawLLMProbe(endpoint, key, userAgent string) (bool, error) {
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return false, err
 	}
-	req.Header.Set("User-Agent", "OpenClaw/1.0")
+	req.Header.Set("User-Agent", userAgent)
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
@@ -756,12 +750,12 @@ func maclawLLMProbe(endpoint, key string) (bool, error) {
 
 // maclawAnthropicProbe sends a GET request to the Anthropic endpoint with
 // the x-api-key header to verify connectivity.
-func maclawAnthropicProbe(endpoint, key string) (bool, error) {
+func maclawAnthropicProbe(endpoint, key, userAgent string) (bool, error) {
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return false, err
 	}
-	req.Header.Set("User-Agent", "OpenClaw/1.0")
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	if key != "" {
 		req.Header.Set("x-api-key", key)

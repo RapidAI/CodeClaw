@@ -232,19 +232,20 @@ func (m *weixinGatewayManager) forwardToHub(msg weixin.IncomingMessage) {
 		return
 	}
 
+	msgType := "text"
+	if msg.MediaType != "" && len(msg.MediaData) > 0 {
+		msgType = msg.MediaType
+	}
+
 	payload := map[string]any{
 		"platform_uid": msg.FromUserID,
 		"text":         msg.Text,
-		"message_type": "text",
+		"message_type": msgType,
 	}
 
-	// Include media if present
-	if msg.MediaType != "" && len(msg.MediaData) > 0 {
-		payload["message_type"] = msg.MediaType
-		payload["media_data"] = base64.StdEncoding.EncodeToString(msg.MediaData)
-		if msg.MediaName != "" {
-			payload["file_name"] = msg.MediaName
-		}
+	// Include media as attachments (matches Hub's MessageAttachment schema)
+	if att := buildMediaAttachment(msg.MediaType, msg.MediaData, msg.MediaName, ""); att != nil {
+		payload["attachments"] = []map[string]any{att}
 	}
 
 	// Include context_token so Hub can pass it back in replies
@@ -605,29 +606,9 @@ func detectMediaType(ext string) string {
 
 // saveMediaToTemp saves incoming media data to a temp file and returns the path.
 func (m *weixinGatewayManager) saveMediaToTemp(msg weixin.IncomingMessage) (string, error) {
-	dir := filepath.Join(os.TempDir(), "maclaw-weixin-media")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	name := msg.MediaName
-	if name == "" {
-		ext := ".bin"
-		switch msg.MediaType {
-		case "image":
-			ext = ".jpg"
-		case "voice":
-			ext = ".silk"
-		case "video":
-			ext = ".mp4"
-		}
-		name = "wx_" + msg.FromUserID + "_" + time.Now().Format("20060102_150405.000") + ext
-	}
-	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, msg.MediaData, 0o644); err != nil {
-		return "", err
-	}
-	return p, nil
+	return saveMediaToTempDir("maclaw-weixin-media", "wx_", msg.FromUserID, msg.MediaType, msg.MediaData, msg.MediaName)
 }
+
 
 // sendDiag sends a diagnostic message to the WeChat user for remote debugging.
 func (m *weixinGatewayManager) sendDiag(toUserID, contextToken, text string) {
@@ -653,21 +634,6 @@ func truncateForLog(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes]) + "..."
-}
-
-func mediaLabel(mediaType string) string {
-	switch mediaType {
-	case "image":
-		return "图片"
-	case "voice":
-		return "语音"
-	case "video":
-		return "视频"
-	case "file":
-		return "文件"
-	default:
-		return "媒体"
-	}
 }
 
 // HandleGatewayReply dispatches a reply from Hub to the WeChat API.

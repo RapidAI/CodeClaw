@@ -324,7 +324,15 @@ func (c *DangbeiClient) StreamCompletion(ctx context.Context, cr CompletionReque
 				dump.WriteString(fmt.Sprintf("  %s: %s\n", k, v))
 			}
 		}
-		dump.WriteString(fmt.Sprintf("\n--- Request Body (len=%d) ---\n%s\n", len(body), string(body)))
+		dump.WriteString(fmt.Sprintf("\n--- Request Body (len=%d) ---\n", len(body)))
+		if len(body) > 2000 {
+			dump.WriteString(string(body[:1000]))
+			dump.WriteString("\n...(truncated)...\n")
+			dump.WriteString(string(body[len(body)-500:]))
+		} else {
+			dump.WriteString(string(body))
+		}
+		dump.WriteString("\n")
 		dump.WriteString(fmt.Sprintf("\n--- Response Body ---\n%s\n", string(errBody)))
 		os.WriteFile(dumpFile, []byte(dump.String()), 0644)
 		log.Printf("[freeproxy] chat HTTP %d, diagnostics dumped to %s", raw.StatusCode, dumpFile)

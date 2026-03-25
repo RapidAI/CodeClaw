@@ -16,6 +16,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -39,6 +40,11 @@ type IncomingMessage struct {
 	Text      string
 	Username  string
 	Timestamp time.Time
+	// Media fields (populated when the message contains a document/photo).
+	MediaType string // "image", "file", "voice", "video", or ""
+	MediaData []byte // raw file bytes (downloaded from Telegram)
+	MediaName string // original file name (if available)
+	MimeType  string // MIME type from Telegram
 }
 
 // OutgoingText is a text message to send to a Telegram user.
@@ -210,23 +216,74 @@ func (g *Gateway) pollLoop(ctx context.Context) {
 			if u.UpdateID >= offset {
 				offset = u.UpdateID + 1
 			}
-			if u.Message != nil && u.Message.Text != "" {
-				incoming := IncomingMessage{
-					ChatID:    u.Message.Chat.ID,
-					Text:      u.Message.Text,
-					Username:  u.Message.From.Username,
-					Timestamp: time.Unix(int64(u.Message.Date), 0),
-				}
-				userKey := strconv.FormatInt(u.Message.Chat.ID, 10)
-				ul := g.userLock(userKey)
-				g.handlerWg.Add(1)
-				go func() {
-					defer g.handlerWg.Done()
-					ul.Lock()
-					defer ul.Unlock()
-					g.handler(incoming)
-				}()
+			if u.Message == nil {
+				continue
 			}
+			m := u.Message
+			text := m.Text
+			if text == "" && m.Caption != "" {
+				text = m.Caption
+			}
+
+			// Determine media file_id and type
+			var fileID, mediaType, fileName, mimeType string
+			switch {
+			case m.Document != nil:
+				fileID = m.Document.FileID
+				mediaType = "file"
+				fileName = m.Document.FileName
+				mimeType = m.Document.MimeType
+			case len(m.Photo) > 0:
+				// Pick the largest photo
+				best := m.Photo[len(m.Photo)-1]
+				fileID = best.FileID
+				mediaType = "image"
+				mimeType = "image/jpeg"
+			case m.Voice != nil:
+				fileID = m.Voice.FileID
+				mediaType = "voice"
+				mimeType = m.Voice.MimeType
+			case m.Video != nil:
+				fileID = m.Video.FileID
+				mediaType = "video"
+				fileName = m.Video.FileName
+				mimeType = m.Video.MimeType
+			}
+
+			// Skip messages with no text and no media
+			if text == "" && fileID == "" {
+				continue
+			}
+
+			incoming := IncomingMessage{
+				ChatID:    m.Chat.ID,
+				Text:      text,
+				Username:  m.From.Username,
+				Timestamp: time.Unix(int64(m.Date), 0),
+			}
+
+			// Download media if present
+			if fileID != "" {
+				data, err := g.downloadFile(ctx, fileID)
+				if err != nil {
+					log.Printf("[telegram/gw] download file %s failed: %v", fileID, err)
+				} else {
+					incoming.MediaType = mediaType
+					incoming.MediaData = data
+					incoming.MediaName = fileName
+					incoming.MimeType = mimeType
+				}
+			}
+
+			userKey := strconv.FormatInt(m.Chat.ID, 10)
+			ul := g.userLock(userKey)
+			g.handlerWg.Add(1)
+			go func() {
+				defer g.handlerWg.Done()
+				ul.Lock()
+				defer ul.Unlock()
+				g.handler(incoming)
+			}()
 		}
 	}
 }
@@ -260,6 +317,39 @@ type tgMessage struct {
 	Chat      tgChat `json:"chat"`
 	Date      int    `json:"date"`
 	Text      string `json:"text"`
+	Caption   string `json:"caption,omitempty"`
+	// Media fields
+	Document *tgDocument  `json:"document,omitempty"`
+	Photo    []tgPhotoSize `json:"photo,omitempty"`
+	Voice    *tgVoice     `json:"voice,omitempty"`
+	Video    *tgVideo     `json:"video,omitempty"`
+}
+
+type tgDocument struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
+}
+
+type tgPhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int64  `json:"file_size"`
+}
+
+type tgVoice struct {
+	FileID   string `json:"file_id"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
+}
+
+type tgVideo struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
 }
 
 type tgUser struct {
@@ -407,4 +497,55 @@ func (g *Gateway) SendMedia(ctx context.Context, msg OutgoingMedia) error {
 		return fmt.Errorf("%s returned %d: %s", method, resp.StatusCode, respBody)
 	}
 	return nil
+}
+
+// downloadFile downloads a file from Telegram servers using the getFile API.
+func (g *Gateway) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
+	// Step 1: getFile to obtain file_path
+	getURL := fmt.Sprintf("%s%s/getFile?file_id=%s", apiBase, g.config.BotToken, url.QueryEscape(fileID))
+	req, err := http.NewRequestWithContext(ctx, "GET", getURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			FilePath string `json:"file_path"`
+			FileSize int64  `json:"file_size"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("telegram getFile parse: %w", err)
+	}
+	if !result.OK || result.Result.FilePath == "" {
+		return nil, fmt.Errorf("telegram getFile failed: %s", body)
+	}
+	if result.Result.FileSize > 20*1024*1024 {
+		return nil, fmt.Errorf("telegram file too large: %d bytes", result.Result.FileSize)
+	}
+
+	// Step 2: download the file content
+	dlURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", g.config.BotToken, result.Result.FilePath)
+	dlReq, err := http.NewRequestWithContext(ctx, "GET", dlURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	dlResp, err := g.client.Do(dlReq)
+	if err != nil {
+		return nil, err
+	}
+	defer dlResp.Body.Close()
+	if dlResp.StatusCode != 200 {
+		return nil, fmt.Errorf("telegram file download returned %d", dlResp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(dlResp.Body, 20*1024*1024+1))
 }

@@ -71,7 +71,7 @@ func doSimpleOpenAIRequest(cfg corelib.MaclawLLMConfig, messages []interface{}, 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "OpenClaw/1.0")
+	req.Header.Set("User-Agent", cfg.UserAgent())
 	if cfg.Key != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Key)
 	}
@@ -146,7 +146,7 @@ func doSimpleAnthropicRequest(cfg corelib.MaclawLLMConfig, messages []interface{
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "OpenClaw/1.0")
+	req.Header.Set("User-Agent", cfg.UserAgent())
 	req.Header.Set("anthropic-version", "2023-06-01")
 	if cfg.Key != "" {
 		req.Header.Set("x-api-key", cfg.Key)

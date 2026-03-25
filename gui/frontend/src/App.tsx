@@ -2306,7 +2306,7 @@ function App() {
     useEffect(() => {
         if (onboardingRegCheckDone.current || !config || remoteActivationStatus === null) return;
         onboardingRegCheckDone.current = true;
-        if (!remoteActivationStatus.activated) {
+        if (!remoteActivationStatus.activated && !config.onboarding_done) {
             setShowMaclawLLMPopup(true);
             setShowStartupPopup(false);
         }

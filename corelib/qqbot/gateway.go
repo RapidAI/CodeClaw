@@ -46,6 +46,11 @@ type IncomingMessage struct {
 	Text      string
 	RawData   json.RawMessage
 	Timestamp time.Time
+	// Media fields (populated when the message contains attachments).
+	MediaType string // "image", "file", "voice", "video", or ""
+	MediaData []byte // raw file bytes (downloaded)
+	MediaName string // original file name
+	MimeType  string // MIME type
 }
 
 // OutgoingText is a text message to send to a QQ user.
@@ -490,7 +495,13 @@ func (g *Gateway) handleC2CMessage(data json.RawMessage) {
 		Author  struct {
 			UserOpenID string `json:"user_openid"`
 		} `json:"author"`
-		Timestamp string `json:"timestamp"`
+		Timestamp   string `json:"timestamp"`
+		Attachments []struct {
+			ContentType string `json:"content_type"`
+			Filename    string `json:"filename"`
+			URL         string `json:"url"`
+			Size        int64  `json:"size"`
+		} `json:"attachments,omitempty"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
 		log.Printf("[qqbot/gw] parse C2C message failed: %v", err)
@@ -499,11 +510,13 @@ func (g *Gateway) handleC2CMessage(data json.RawMessage) {
 
 	openID := event.Author.UserOpenID
 	text := strings.TrimSpace(event.Content)
-	if openID == "" || text == "" {
+	hasAttachment := len(event.Attachments) > 0
+
+	if openID == "" || (text == "" && !hasAttachment) {
 		return
 	}
 
-	log.Printf("[qqbot/gw] C2C from %s: %s", openID, truncate(text, 80))
+	log.Printf("[qqbot/gw] C2C from %s: %s attachments=%d", openID, truncate(text, 80), len(event.Attachments))
 
 	if g.handler != nil {
 		incoming := IncomingMessage{
@@ -512,6 +525,31 @@ func (g *Gateway) handleC2CMessage(data json.RawMessage) {
 			RawData:   data,
 			Timestamp: time.Now(),
 		}
+
+		// Download the first attachment if present
+		if hasAttachment {
+			att := event.Attachments[0]
+			mediaType := "file"
+			if strings.HasPrefix(att.ContentType, "image/") {
+				mediaType = "image"
+			} else if strings.HasPrefix(att.ContentType, "video/") {
+				mediaType = "video"
+			} else if strings.HasPrefix(att.ContentType, "audio/") {
+				mediaType = "voice"
+			}
+			if att.URL != "" {
+				dlData, err := g.downloadURL(att.URL)
+				if err != nil {
+					log.Printf("[qqbot/gw] download attachment failed: %v", err)
+				} else {
+					incoming.MediaType = mediaType
+					incoming.MediaData = dlData
+					incoming.MediaName = att.Filename
+					incoming.MimeType = att.ContentType
+				}
+			}
+		}
+
 		ul := g.userLock(openID)
 		g.handlerWg.Add(1)
 		go func() {
@@ -521,6 +559,29 @@ func (g *Gateway) handleC2CMessage(data json.RawMessage) {
 			g.handler(incoming)
 		}()
 	}
+}
+
+// downloadURL downloads content from a URL with a size limit.
+func (g *Gateway) downloadURL(rawURL string) ([]byte, error) {
+	// Validate URL scheme to prevent SSRF
+	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "http://") {
+		return nil, fmt.Errorf("invalid URL scheme: %s", rawURL)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("download returned %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
 }
 
 // ---------------------------------------------------------------------------

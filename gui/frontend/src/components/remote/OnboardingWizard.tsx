@@ -164,6 +164,7 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, onClose, onLLMCo
     // Auto-close when all done
     useEffect(() => {
         if (regDone && modeDone && llmDone && wxDone) {
+            onSaveField({ onboarding_done: true });
             const timer = setTimeout(onClose, 1500);
             return () => clearTimeout(timer);
         }
@@ -764,18 +765,37 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, onClose, onLLMCo
                     </span>
 
                     {isLastStep ? (
-                        <button
-                            onClick={onClose}
-                            disabled={!wxDone}
-                            style={{
-                                padding: "7px 20px", fontSize: "0.8rem", fontWeight: 600, borderRadius: 6,
-                                background: wxDone ? "#22c55e" : "#cbd5e1",
-                                color: "#fff", border: "none",
-                                cursor: wxDone ? "pointer" : "default",
-                            }}
-                        >
-                            {t("完成", "Finish")}
-                        </button>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            {!wxDone && (
+                                <button
+                                    onClick={() => {
+                                        setWxDone(true);
+                                    }}
+                                    style={{
+                                        padding: "7px 14px", fontSize: "0.75rem", fontWeight: 500, borderRadius: 6,
+                                        background: "transparent", color: "#94a3b8", border: "1px solid #e2e8f0",
+                                        cursor: "pointer",
+                                    }}
+                                >
+                                    {t("跳过", "Skip")}
+                                </button>
+                            )}
+                            <button
+                                onClick={() => {
+                                    onSaveField({ onboarding_done: true });
+                                    onClose();
+                                }}
+                                disabled={!wxDone}
+                                style={{
+                                    padding: "7px 20px", fontSize: "0.8rem", fontWeight: 600, borderRadius: 6,
+                                    background: wxDone ? "#22c55e" : "#cbd5e1",
+                                    color: "#fff", border: "none",
+                                    cursor: wxDone ? "pointer" : "default",
+                                }}
+                            >
+                                {t("完成", "Finish")}
+                            </button>
+                        </div>
                     ) : (
                         <button
                             onClick={() => setStep(s => Math.min(TOTAL_STEPS, s + 1))}

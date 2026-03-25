@@ -139,6 +139,7 @@ type MaclawLLMProvider struct {
 	ContextLength  int    `json:"context_length,omitempty"`
 	IsCustom       bool   `json:"is_custom,omitempty"`
 	SupportsVision bool   `json:"supports_vision,omitempty"`
+	AgentType      string `json:"agent_type,omitempty"` // "openclaw" (default) or "claude_code"
 	// ── 新增 OAuth 字段 ──
 	AuthType       string `json:"auth_type,omitempty"`
 	RefreshToken   string `json:"refresh_token,omitempty"`
@@ -153,6 +154,16 @@ type MaclawLLMConfig struct {
 	Protocol       string `json:"protocol,omitempty"`
 	ContextLength  int    `json:"context_length,omitempty"`
 	SupportsVision bool   `json:"supports_vision,omitempty"`
+	AgentType      string `json:"agent_type,omitempty"` // "openclaw" (default) or "claude_code"
+}
+
+// UserAgent returns the User-Agent header value based on AgentType.
+// "claude_code" → "claude-code/2.0.0", otherwise → "OpenClaw/1.0".
+func (c MaclawLLMConfig) UserAgent() string {
+	if c.AgentType == "claude_code" {
+		return "claude-code/2.0.0"
+	}
+	return "OpenClaw/1.0"
 }
 
 // EffectiveContextTokens returns the usable context window in tokens.

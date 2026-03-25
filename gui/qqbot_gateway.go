@@ -265,11 +265,22 @@ func (m *qqBotGatewayManager) forwardToHub(msg qqbot.IncomingMessage) {
 		return
 	}
 
-	if err := hubClient.SendIMGatewayMessage("qqbot_remote", map[string]any{
+	msgType := "text"
+	if msg.MediaType != "" && len(msg.MediaData) > 0 {
+		msgType = msg.MediaType
+	}
+
+	payload := map[string]any{
 		"platform_uid": msg.OpenID,
 		"text":         msg.Text,
-		"message_type": "text",
-	}); err != nil {
+		"message_type": msgType,
+	}
+
+	if att := buildMediaAttachment(msg.MediaType, msg.MediaData, msg.MediaName, msg.MimeType); att != nil {
+		payload["attachments"] = []map[string]any{att}
+	}
+
+	if err := hubClient.SendIMGatewayMessage("qqbot_remote", payload); err != nil {
 		log.Printf("[qqbot-mgr] forwardToHub SendIMGatewayMessage error: %v", err)
 	}
 }
@@ -298,6 +309,18 @@ func (m *qqBotGatewayManager) handleLocalMessage(msg qqbot.IncomingMessage) {
 	}
 
 	text := msg.Text
+
+	// Prepend media info if present
+	if msg.MediaType != "" && len(msg.MediaData) > 0 {
+		mediaPath, err := saveQQMediaToTemp(msg)
+		if err != nil {
+			log.Printf("[qqbot-mgr] save media error: %v", err)
+		} else {
+			prefix := "[收到" + mediaLabel(msg.MediaType) + ": " + mediaPath + "]\n"
+			text = prefix + text
+		}
+	}
+
 	if text == "" {
 		return
 	}
@@ -471,4 +494,9 @@ func (a *App) SetQQBotLocalMode(enabled bool) error {
 		}
 	}
 	return nil
+}
+
+// saveQQMediaToTemp saves media from a QQ message to a temp file.
+func saveQQMediaToTemp(msg qqbot.IncomingMessage) (string, error) {
+	return saveMediaToTempDir("maclaw-qqbot-media", "qq_", msg.OpenID, msg.MediaType, msg.MediaData, msg.MediaName)
 }

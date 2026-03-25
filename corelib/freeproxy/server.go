@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -184,7 +185,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	for _, m := range req.Messages {
 		switch m.Role {
 		case "system":
-			prompt.WriteString("[System] " + m.Content + "\n\n")
+			compact := compactSystemPrompt(m.Content)
+			if compact != "" {
+				if len(compact) != len(m.Content) {
+					log.Printf("[freeproxy] system prompt compacted: %d -> %d chars", len(m.Content), len(compact))
+				}
+				prompt.WriteString("[System] " + compact + "\n\n")
+			}
 		case "user":
 			prompt.WriteString(m.Content + "\n")
 		case "assistant":
@@ -400,6 +407,78 @@ func (s *Server) handleStreamWithTools(ctx context.Context, w http.ResponseWrite
 	flusher.Flush()
 }
 
+// Pre-compiled regexps for compactSystemPrompt to avoid re-compilation per call.
+var (
+	reCompactTools    = regexp.MustCompile(`(?s)需要执行操作时，使用以下格式调用工具：.*?(\n\n|\z)`)
+	reCompactToolList = regexp.MustCompile(`(?s)可用工具：\n(?:- .+\n(?:  .+\n)*)+`)
+	reCompactRules    = regexp.MustCompile(`(?s)规则：\n(?:\d+\..+\n)+`)
+	reCompactBlank    = regexp.MustCompile(`\n{3,}`)
+)
+
+// compactSystemPrompt strips verbose tool definitions, workflow rules, and
+// other boilerplate from system prompts to keep the question field short
+// enough for the 当贝 API. It preserves the core identity line and any
+// short instructions.
+func compactSystemPrompt(s string) string {
+	s = reCompactTools.ReplaceAllString(s, "")
+	s = reCompactToolList.ReplaceAllString(s, "")
+
+	// Remove workflow section: find start marker, then cut until next "## " or end
+	if idx := strings.Index(s, "## ⚠️ 编程任务工作流"); idx >= 0 {
+		end := len(s)
+		// Find next "## " that is NOT part of the workflow subsections
+		rest := s[idx+len("## ⚠️ 编程任务工作流"):]
+		for _, marker := range []string{"\n## 当前设备", "\n## 用户记忆"} {
+			if p := strings.Index(rest, marker); p >= 0 {
+				candidate := idx + len("## ⚠️ 编程任务工作流") + p
+				if candidate < end {
+					end = candidate
+				}
+			}
+		}
+		s = s[:idx] + s[end:]
+	}
+
+	// Remove other verbose sections by string search (no lookahead needed)
+	removeSections := []string{
+		"执行验证原则", "会话失败止损原则", "工具使用要点",
+		"安全防火墙", "高级能力", "对话管理", "动态工具",
+		"记忆管理指引", "上线昵称报告",
+	}
+	for _, sec := range removeSections {
+		marker := "## "
+		// Find the section header containing this text
+		idx := strings.Index(s, sec)
+		if idx < 0 {
+			continue
+		}
+		// Walk back to find the "## " prefix
+		start := strings.LastIndex(s[:idx], marker)
+		if start < 0 {
+			start = idx
+		}
+		// Find the next "## " after this section
+		rest := s[idx+len(sec):]
+		end := len(s)
+		if p := strings.Index(rest, "\n## "); p >= 0 {
+			end = idx + len(sec) + p
+		}
+		s = s[:start] + s[end:]
+	}
+
+	s = reCompactRules.ReplaceAllString(s, "")
+	s = reCompactBlank.ReplaceAllString(s, "\n\n")
+	s = strings.TrimSpace(s)
+
+	// Hard cap at 4000 runes
+	runes := []rune(s)
+	if len(runes) > 4000 {
+		s = string(runes[:4000]) + "\n...(truncated)"
+	}
+
+	return s
+}
+
 func writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -411,3 +490,4 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 		},
 	})
 }
+
