@@ -48,9 +48,8 @@ func MigrateSkillsDir() {
 
 // SkillScanRoots returns all directories that should be scanned for
 // file-based skills, in priority order (first wins on name conflict):
-//   1. ~/.maclaw/data/skills  (new canonical location)
-//   2. ~/.maclaw/skills       (legacy fallback)
-//   3. ~/.agents/skills
+//   1. ~/.maclaw/data/skills  (canonical location)
+//   2. ~/.agents/skills
 func SkillScanRoots() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -58,7 +57,6 @@ func SkillScanRoots() []string {
 	}
 	return []string{
 		filepath.Join(home, ".maclaw", "data", "skills"),
-		filepath.Join(home, ".maclaw", "skills"),
 		filepath.Join(home, ".agents", "skills"),
 	}
 }

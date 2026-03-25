@@ -1202,6 +1202,24 @@ func (c *RemoteHubClient) SendIMGatewayClaim(platform string) error {
 	})
 }
 
+// SendIMGatewayUnclaim sends im.gateway_unclaim to Hub to release this machine's
+// gateway ownership for the given IM platform. Called when the user disables
+// an IM plugin so Hub stops routing messages to this client.
+func (c *RemoteHubClient) SendIMGatewayUnclaim(platform string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.conn == nil {
+		return nil
+	}
+	return c.conn.WriteJSON(HubEnvelope{
+		Type:      "im.gateway_unclaim",
+		TS:        time.Now().Unix(),
+		MachineID: c.machineID,
+		Payload:   map[string]string{"platform": platform},
+	})
+}
+
+
 // SendIMGatewayMessage sends im.gateway_message to Hub, forwarding an incoming
 // IM message from a client-side gateway (QQ Bot, Telegram) for processing
 // through the Hub's IM Adapter pipeline.

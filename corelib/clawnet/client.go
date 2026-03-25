@@ -404,7 +404,13 @@ func (c *Client) EnsureDaemonWithProgress(emitProgress func(stage string, pct in
 			_ = p.Kill()
 		}
 		removePIDFile()
-		time.Sleep(1 * time.Second)
+		// Wait until the process is truly gone (up to 3s).
+		for i := 0; i < 6; i++ {
+			if findProcessByName(LocalBinaryName()) == 0 {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 
 	c.mu.Lock()

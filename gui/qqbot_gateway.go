@@ -54,10 +54,18 @@ func (m *qqBotGatewayManager) SyncFromConfig() {
 			m.status = "disconnected"
 			m.mu.Unlock()
 			_ = gw.Stop() // Stop outside lock to avoid deadlock with onStatusChange
-			m.emitStatusEvent()
-			return
+		} else {
+			m.mu.Unlock()
 		}
-		m.mu.Unlock()
+		// Always notify Hub to release gateway claim, even if local gateway
+		// was already nil — Hub may still hold a stale claim from a previous run.
+		if hubClient := m.app.hubClient(); hubClient != nil && hubClient.IsConnected() {
+			_ = hubClient.SendIMGatewayUnclaim("qqbot_remote")
+			log.Printf("[qqbot-mgr] sent gateway unclaim to hub")
+		}
+		if gw != nil {
+			m.emitStatusEvent()
+		}
 		return
 	}
 

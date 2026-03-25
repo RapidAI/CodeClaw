@@ -304,7 +304,13 @@ func (c *ClawNetClient) EnsureDaemonWithProgress(emitProgress func(stage string,
 		if p, err := os.FindProcess(pid); err == nil {
 			_ = p.Kill()
 		}
-		time.Sleep(1 * time.Second)
+		// Wait until the process is truly gone (up to 3s).
+		for i := 0; i < 6; i++ {
+			if clawnetFindProcessByName(clawnetLocalBinaryName()) == 0 {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 
 	c.mu.Lock()

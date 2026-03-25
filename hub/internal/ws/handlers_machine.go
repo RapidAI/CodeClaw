@@ -493,6 +493,10 @@ func (g *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 			if err := g.handleIMGatewayClaim(ctx, msg); err != nil {
 				return
 			}
+		case "im.gateway_unclaim":
+			if err := g.handleIMGatewayUnclaim(ctx, msg); err != nil {
+				return
+			}
 		case "im.gateway_message":
 			if err := g.handleIMGatewayMessage(ctx, msg); err != nil {
 				return
@@ -1228,6 +1232,45 @@ func (g *Gateway) handleIMGatewayClaim(ctx *ConnContext, msg Envelope) error {
 			"platform": payload.Platform,
 			"ok":       ok,
 			"reason":   reason,
+		},
+	})
+	return nil
+}
+
+// handleIMGatewayUnclaim handles im.gateway_unclaim from a client that wants
+// to release its gateway ownership for a given IM platform (e.g. when the user
+// unchecks the "enable" checkbox). This ensures Hub stops routing IM messages
+// to the disconnected client.
+func (g *Gateway) handleIMGatewayUnclaim(ctx *ConnContext, msg Envelope) error {
+	if ctx.Role != "machine" {
+		return writeWSError(ctx.Conn, "FORBIDDEN", "Machine role required")
+	}
+	var payload struct {
+		Platform string `json:"platform"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		log.Printf("[ws] handleIMGatewayUnclaim: parse error: %v", err)
+		return nil
+	}
+	if payload.Platform == "" {
+		return writeWSError(ctx.Conn, "INVALID_MESSAGE", "platform is required")
+	}
+	plugin, ok := g.IMGatewayPlugins[payload.Platform]
+	if !ok {
+		log.Printf("[ws] handleIMGatewayUnclaim: unknown platform %s", payload.Platform)
+		return nil
+	}
+	plugin.ReleaseAllForMachine(ctx.MachineID)
+	// Also clear the claim seq so connection cleanup won't double-release.
+	if ctx.gwClaimSeqs != nil {
+		delete(ctx.gwClaimSeqs, payload.Platform)
+	}
+	log.Printf("[ws] im.gateway_unclaim: platform=%s machine=%s", payload.Platform, ctx.MachineID)
+	_ = writeWSJSON(ctx.Conn, map[string]any{
+		"type": "im.gateway_unclaim_result",
+		"payload": map[string]any{
+			"platform": payload.Platform,
+			"ok":       true,
 		},
 	})
 	return nil

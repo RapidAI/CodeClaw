@@ -17,13 +17,13 @@ import (
 // On Linux it reads /proc directly. On other Unix systems (macOS, BSDs) it
 // falls back to pgrep.
 func clawnetFindProcessByName(name string) int {
-	if pid := findViaProc(name); pid != 0 {
+	if pid := guiFindViaProc(name); pid != 0 {
 		return pid
 	}
-	return findViaPgrep(name)
+	return guiFindViaPgrep(name)
 }
 
-func findViaProc(name string) int {
+func guiFindViaProc(name string) int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return 0
@@ -45,7 +45,7 @@ func findViaProc(name string) int {
 	return 0
 }
 
-func findViaPgrep(name string) int {
+func guiFindViaPgrep(name string) int {
 	out, err := exec.Command("pgrep", "-x", name).Output()
 	if err != nil {
 		return 0

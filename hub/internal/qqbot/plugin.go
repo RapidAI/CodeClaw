@@ -520,31 +520,40 @@ func (p *Plugin) sendC2CMedia(ctx context.Context, openID string, fileType int, 
 // If URL mode fails with a download error (QQ can't reach our server, e.g.
 // intranet deployment), it falls back to inline mode.
 func (p *Plugin) tryUploadMedia(ctx context.Context, token, uploadURL string, fileType int, base64Data, fileName, mimeType string) (string, error) {
-	uploadPayload := map[string]any{
-		"file_type":    fileType,
-		"srv_send_msg": false,
-	}
-	if fileType == 4 && fileName != "" {
-		uploadPayload["file_name"] = fileName
+	buildPayload := func(mode string, url string) map[string]any {
+		pl := map[string]any{
+			"file_type":    fileType,
+			"srv_send_msg": false,
+		}
+		if fileType == 4 && fileName != "" {
+			pl["file_name"] = fileName
+		}
+		if mode == "url" {
+			pl["url"] = url
+		} else {
+			pl["file_data"] = base64Data
+		}
+		return pl
 	}
 
 	useURLMode := len(base64Data) > urlUploadThreshold && p.publicBaseURL != ""
 
+	var payload map[string]any
 	if useURLMode {
 		tempURL, storeErr := p.storeTempFile(base64Data, mimeType)
 		if storeErr != nil {
 			log.Printf("[qqbot] failed to store temp file, falling back to inline: %v", storeErr)
-			uploadPayload["file_data"] = base64Data
+			payload = buildPayload("inline", "")
 			useURLMode = false
 		} else {
 			log.Printf("[qqbot] large file (%d bytes base64), using URL mode: %s", len(base64Data), tempURL)
-			uploadPayload["url"] = tempURL
+			payload = buildPayload("url", tempURL)
 		}
 	} else {
-		uploadPayload["file_data"] = base64Data
+		payload = buildPayload("inline", "")
 	}
 
-	fileInfo, err := p.doUploadMedia(ctx, token, uploadURL, uploadPayload)
+	fileInfo, err := p.doUploadMedia(ctx, token, uploadURL, payload)
 	if err == nil {
 		return fileInfo, nil
 	}
@@ -555,15 +564,7 @@ func (p *Plugin) tryUploadMedia(ctx context.Context, token, uploadURL string, fi
 	// deployment), fall back to inline mode.
 	if useURLMode && isDownloadError(errStr) {
 		log.Printf("[qqbot] URL mode failed (QQ can't reach our server), falling back to inline: %v", err)
-		inlinePayload := map[string]any{
-			"file_type":    fileType,
-			"srv_send_msg": false,
-			"file_data":    base64Data,
-		}
-		if fileType == 4 && fileName != "" {
-			inlinePayload["file_name"] = fileName
-		}
-		return p.doUploadMedia(ctx, token, uploadURL, inlinePayload)
+		return p.doUploadMedia(ctx, token, uploadURL, buildPayload("inline", ""))
 	}
 
 	// If inline mode failed with timeout and we haven't tried URL mode yet, retry with URL.
@@ -574,32 +575,15 @@ func (p *Plugin) tryUploadMedia(ctx context.Context, token, uploadURL string, fi
 		if storeErr != nil {
 			return "", fmt.Errorf("qqbot: inline upload timed out and URL fallback failed: %w", err)
 		}
-		retryPayload := map[string]any{
-			"file_type":    fileType,
-			"srv_send_msg": false,
-			"url":          tempURL,
-		}
-		if fileType == 4 && fileName != "" {
-			retryPayload["file_name"] = fileName
-		}
-		retryInfo, retryErr := p.doUploadMedia(ctx, token, uploadURL, retryPayload)
+		retryInfo, retryErr := p.doUploadMedia(ctx, token, uploadURL, buildPayload("url", tempURL))
 		if retryErr == nil {
 			return retryInfo, nil
 		}
 		// URL mode also failed with download error — QQ can't reach us.
-		// Fall back to inline (already failed with timeout, but worth one more try
-		// since the timeout may have been transient).
+		// Retry inline once more (the earlier timeout may have been transient).
 		if isDownloadError(retryErr.Error()) {
 			log.Printf("[qqbot] URL mode also failed (QQ can't reach server), retrying inline: %v", retryErr)
-			inlinePayload := map[string]any{
-				"file_type":    fileType,
-				"srv_send_msg": false,
-				"file_data":    base64Data,
-			}
-			if fileType == 4 && fileName != "" {
-				inlinePayload["file_name"] = fileName
-			}
-			return p.doUploadMedia(ctx, token, uploadURL, inlinePayload)
+			return p.doUploadMedia(ctx, token, uploadURL, buildPayload("inline", ""))
 		}
 		return "", retryErr
 	}
@@ -610,9 +594,12 @@ func (p *Plugin) tryUploadMedia(ctx context.Context, token, uploadURL string, fi
 // isDownloadError returns true if the error string indicates QQ's server
 // could not download the file from our URL (common in intranet deployments).
 func isDownloadError(errStr string) bool {
-	return strings.Contains(errStr, "40002") ||
-		strings.Contains(errStr, "10041") ||
-		strings.Contains(errStr, "850011") ||
+	return strings.Contains(errStr, "\"code\":40002") ||
+		strings.Contains(errStr, "\"code\":10041") ||
+		strings.Contains(errStr, "\"code\":850011") ||
+		strings.Contains(errStr, "\"err_code\":40002") ||
+		strings.Contains(errStr, "\"err_code\":10041") ||
+		strings.Contains(errStr, "\"err_code\":850011") ||
 		strings.Contains(errStr, "download file")
 }
 
