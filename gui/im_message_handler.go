@@ -1274,6 +1274,7 @@ type llmToolCall struct {
 // Supports both OpenAI-compatible and Anthropic Messages API protocols.
 // The httpClient parameter selects which connection pool to use (chat vs background).
 func (h *IMMessageHandler) doLLMRequest(cfg MaclawLLMConfig, messages []interface{}, tools []map[string]interface{}, httpClient *http.Client) (*llmResponse, error) {
+	debugLLMLog("doLLMRequest url=%s ua=%s model=%s protocol=%s", cfg.URL, cfg.UserAgent(), cfg.Model, cfg.Protocol)
 	if cfg.Protocol == "anthropic" {
 		return h.doAnthropicLLMRequest(cfg, messages, tools, httpClient)
 	}
@@ -1282,6 +1283,7 @@ func (h *IMMessageHandler) doLLMRequest(cfg MaclawLLMConfig, messages []interfac
 
 // doOpenAILLMRequest sends a request using the OpenAI-compatible protocol.
 func (h *IMMessageHandler) doOpenAILLMRequest(cfg MaclawLLMConfig, messages []interface{}, tools []map[string]interface{}, httpClient *http.Client) (*llmResponse, error) {
+	debugLLMLog("doOpenAILLMRequest url=%s ua=%s", cfg.URL, cfg.UserAgent())
 	endpoint := strings.TrimRight(cfg.URL, "/") + "/chat/completions"
 
 	reqBody := map[string]interface{}{
@@ -1698,19 +1700,27 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 
 		choice := resp.Choices[0]
 
+		// Kimi's kimi-for-coding puts all output in reasoning_content with empty content.
+		// Promote reasoning to content so the assistant message is never empty.
+		msgContent := choice.Message.Content
+		msgReasoning := choice.Message.ReasoningContent
+		if msgContent == "" && msgReasoning != "" {
+			msgContent = msgReasoning
+		}
+
 		assistantMsg := map[string]interface{}{
 			"role":    "assistant",
-			"content": choice.Message.Content,
+			"content": msgContent,
 		}
-		if choice.Message.ReasoningContent != "" {
-			assistantMsg["reasoning_content"] = choice.Message.ReasoningContent
+		if msgReasoning != "" {
+			assistantMsg["reasoning_content"] = msgReasoning
 		}
 		if len(choice.Message.ToolCalls) > 0 {
 			assistantMsg["tool_calls"] = choice.Message.ToolCalls
 		}
 		conversation = append(conversation, assistantMsg)
 
-		historyEntry := conversationEntry{Role: "assistant", Content: choice.Message.Content, ReasoningContent: choice.Message.ReasoningContent}
+		historyEntry := conversationEntry{Role: "assistant", Content: msgContent, ReasoningContent: msgReasoning}
 		if len(choice.Message.ToolCalls) > 0 {
 			historyEntry.ToolCalls = choice.Message.ToolCalls
 		}
@@ -1722,7 +1732,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 		// treat the response as final when there are genuinely no tool calls.
 		if len(choice.Message.ToolCalls) == 0 {
 			// Check for capability gap before returning.
-			if h.capabilityGapDetector != nil && h.capabilityGapDetector.Detect(choice.Message.Content) {
+			if h.capabilityGapDetector != nil && h.capabilityGapDetector.Detect(msgContent) {
 				skillName, result, err := h.capabilityGapDetector.Resolve(
 					context.Background(), userText, nil,
 					func(status string) {
@@ -1736,7 +1746,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 				}
 			}
 			h.memory.save(userID, trimHistory(history))
-			return &IMAgentResponse{Text: stripThinkingTags(choice.Message.Content)}
+			return &IMAgentResponse{Text: stripThinkingTags(msgContent)}
 		}
 
 		// Execute tool calls and feed results back.
@@ -1926,19 +1936,24 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 		bonusResp, err := h.doLLMRequestStream(cfg, conversation, tools, httpClient, onToken)
 		if err == nil && len(bonusResp.Choices) > 0 {
 			bc := bonusResp.Choices[0]
+			bcContent := bc.Message.Content
+			bcReasoning := bc.Message.ReasoningContent
+			if bcContent == "" && bcReasoning != "" {
+				bcContent = bcReasoning
+			}
 			assistantMsg := map[string]interface{}{
 				"role":    "assistant",
-				"content": bc.Message.Content,
+				"content": bcContent,
 			}
-			if bc.Message.ReasoningContent != "" {
-				assistantMsg["reasoning_content"] = bc.Message.ReasoningContent
+			if bcReasoning != "" {
+				assistantMsg["reasoning_content"] = bcReasoning
 			}
 			if len(bc.Message.ToolCalls) > 0 {
 				assistantMsg["tool_calls"] = bc.Message.ToolCalls
 			}
 			conversation = append(conversation, assistantMsg)
 			history = append(history, conversationEntry{
-				Role: "assistant", Content: bc.Message.Content, ReasoningContent: bc.Message.ReasoningContent, ToolCalls: bc.Message.ToolCalls,
+				Role: "assistant", Content: bcContent, ReasoningContent: bcReasoning, ToolCalls: bc.Message.ToolCalls,
 			})
 
 			// Execute any tool calls from the bonus round.

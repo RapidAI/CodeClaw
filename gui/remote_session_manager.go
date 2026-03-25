@@ -1579,6 +1579,14 @@ func (m *RemoteSessionManager) runExitLoop(s *RemoteSession) {
 		if reason != "" {
 			s.ResumeContext = buildResumeContext(s, reason)
 		}
+
+		// Force CompletionIncomplete when the session exits early with
+		// very few output lines. This ensures the Agent receives a strong
+		// auto-resume hint instead of an ambiguous "uncertain" signal,
+		// which often causes it to give up rather than retry.
+		if len(s.RawOutputLines) <= earlyExitLineThreshold && s.CompletionLevel != CompletionCompleted {
+			s.CompletionLevel = CompletionIncomplete
+		}
 	}
 
 	closedEvent := buildSessionClosedEvent(s, exit)

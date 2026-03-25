@@ -2,6 +2,12 @@ package main
 
 import "strings"
 
+// earlyExitLineThreshold is the maximum number of output lines below which
+// a session exit is considered "early" (the tool quit before doing real work).
+// Used by both CompletionAnalyzer and runExitLoop to avoid duplicating the
+// magic number.
+const earlyExitLineThreshold = 10
+
 // completionSignals are phrases that indicate a task has been completed.
 var completionSignals = []string{
 	"✅",
@@ -51,6 +57,10 @@ func NewCompletionAnalyzer(config CompletionAnalyzerConfig) *CompletionAnalyzer 
 //  4. completionCount > incompletionCount → CompletionCompleted
 //  5. incompletionCount > 0 → CompletionIncomplete
 //  6. Otherwise → CompletionUncertain
+//
+// Note: early-exit detection (session exited with very few output lines) is
+// handled by runExitLoop, not here, because Analyze is also called on
+// Gemini ACP turn-complete where few output lines is perfectly normal.
 func (a *CompletionAnalyzer) Analyze(lines []string, tool string, sdkResult *SDKResultPayload) CompletionLevel {
 	if len(lines) == 0 {
 		return CompletionUncertain

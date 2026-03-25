@@ -153,12 +153,10 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
     }, [providers, currentName]);
 
     const closeDialog = useCallback(async () => {
-        if (oauthBusy) return; // prevent closing during OAuth flow
-        if (dlgDirty && !dlgSaving) {
-            if (!await showConfirm(t("有未保存的更改，确定关闭？", "Unsaved changes. Close anyway?"))) return;
-        }
+        if (oauthBusy) return;
+        if (dlgSaving) return;
         setDlgOpen(false);
-    }, [dlgDirty, dlgSaving, oauthBusy, t, showConfirm]);
+    }, [dlgSaving, oauthBusy]);
 
     // Escape key to close dialog
     useEffect(() => {
@@ -885,35 +883,7 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                                     </p>
                                 </div>
 
-                                {/* Agent Type — not shown for free proxy */}
-                                {dlgProvider.auth_type !== "none" && (
-                                    <div style={{ marginTop: 12 }}>
-                                        <label style={labelStyle}>{t("Agent 类型", "Agent Type")}</label>
-                                        <div style={{ display: "flex", gap: 6 }}>
-                                            {(["openclaw", "claude_code"] as const).map(at => {
-                                                const active = (dlgProvider.agent_type || "openclaw") === at;
-                                                const label = at === "openclaw" ? "OpenClaw" : "Claude Code";
-                                                return (
-                                                    <button key={at} onClick={() => dlgUpdateField("agent_type", at)} style={{
-                                                        fontSize: "0.76rem", padding: "5px 16px", cursor: "pointer",
-                                                        background: active ? "#6366f1" : colors.surface,
-                                                        color: active ? "#fff" : colors.text,
-                                                        border: `1px solid ${active ? "#6366f1" : colors.border}`,
-                                                        borderRadius: 4, transition: "all 0.15s",
-                                                    }}>
-                                                        {label}
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
-                                        <p style={{ fontSize: "0.68rem", color: colors.textMuted, margin: "4px 0 0 0", lineHeight: 1.4 }}>
-                                            {t(
-                                                "以选定的 Agent 类型发送请求，用于 coding plan 识别。默认 OpenClaw。",
-                                                "Send requests as the selected agent type for coding plan eligibility. Default: OpenClaw."
-                                            )}
-                                        </p>
-                                    </div>
-                                )}
+
                             </div>
                         )}
 

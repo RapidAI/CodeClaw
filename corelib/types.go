@@ -157,14 +157,13 @@ type MaclawLLMConfig struct {
 	AgentType      string `json:"agent_type,omitempty"` // "openclaw" (default) or "claude_code"
 }
 
-// UserAgent returns the User-Agent header value based on AgentType.
-// "claude_code" → "claude-code/2.0.0", otherwise → "OpenClaw/1.0".
+// UserAgent returns the User-Agent header value for LLM API requests.
+// Uses "claude-code/2.0.0" as the system-wide default — compatible with
+// all major providers and satisfies Kimi's coding-agent whitelist.
 func (c MaclawLLMConfig) UserAgent() string {
-	if c.AgentType == "claude_code" {
-		return "claude-code/2.0.0"
-	}
-	return "OpenClaw/1.0"
+	return "claude-code/2.0.0"
 }
+
 
 // EffectiveContextTokens returns the usable context window in tokens.
 // It uses the configured ContextLength, falling back to DefaultContextTokens.

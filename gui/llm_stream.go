@@ -381,10 +381,11 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		payload := strings.TrimPrefix(line, "data: ")
+		payload := strings.TrimPrefix(line, "data:")
+		payload = strings.TrimPrefix(payload, " ")
 		if payload == "[DONE]" {
 			break
 		}
@@ -403,6 +404,9 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 		// Reasoning content delta (kimi-k2.5, deepseek, etc.)
 		if delta.ReasoningContent != "" {
 			reasoningBuf.WriteString(delta.ReasoningContent)
+			if delta.Content == "" {
+				tf.Write(delta.ReasoningContent)
+			}
 		}
 
 		// Text content delta
@@ -448,10 +452,15 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 	fcf.Flush()
 
 	// Assemble llmResponse
+	content := stripFunctionCalls(stripThinkTags(contentBuf.String()))
+	reasoning := reasoningBuf.String()
+	if content == "" && reasoning != "" {
+		content = stripFunctionCalls(stripThinkTags(reasoning))
+	}
 	msg := llmMessage{
 		Role:             "assistant",
-		Content:          stripFunctionCalls(stripThinkTags(contentBuf.String())),
-		ReasoningContent: reasoningBuf.String(),
+		Content:          content,
+		ReasoningContent: reasoning,
 	}
 	// Collect tool calls in index order
 	if len(toolAccums) > 0 {
@@ -517,6 +526,9 @@ func parseNonStreamOpenAIResponse(resp *http.Response, requestBody []byte) (*llm
 	// Strip <think>...</think> blocks from content.
 	for i := range result.Choices {
 		result.Choices[i].Message.Content = stripFunctionCalls(stripThinkTags(result.Choices[i].Message.Content))
+		if result.Choices[i].Message.Content == "" && result.Choices[i].Message.ReasoningContent != "" {
+			result.Choices[i].Message.Content = stripFunctionCalls(stripThinkTags(result.Choices[i].Message.ReasoningContent))
+		}
 	}
 	return &result, nil
 }
@@ -711,10 +723,11 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		payload := strings.TrimPrefix(line, "data: ")
+		payload := strings.TrimPrefix(line, "data:")
+		payload = strings.TrimPrefix(payload, " ")
 
 		var evt struct {
 			Type         string `json:"type"`

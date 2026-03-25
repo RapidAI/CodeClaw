@@ -177,7 +177,13 @@ func (h *GeminiACPExecutionHandle) sendPrompt(sessionID, text string) {
 
 	resp, err := h.sendRequest("session/prompt", params, 0) // no timeout — prompts can be long
 	if err != nil {
-		h.outputCh <- []byte(fmt.Sprintf("[gemini-acp] prompt error: %v\n", err))
+		// Distinguish process-exit from real errors for cleaner UX.
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "channel closed") || strings.Contains(errMsg, "session closed") {
+			h.safeOutput([]byte("[gemini-acp] Gemini process exited unexpectedly. Please start a new session.\n"))
+		} else {
+			h.safeOutput([]byte(fmt.Sprintf("[gemini-acp] prompt error: %v\n", err)))
+		}
 		return
 	}
 
@@ -185,7 +191,7 @@ func (h *GeminiACPExecutionHandle) sendPrompt(sessionID, text string) {
 	var result map[string]interface{}
 	if json.Unmarshal(resp, &result) == nil {
 		if reason, ok := result["stopReason"].(string); ok && reason != "" {
-			h.outputCh <- []byte(fmt.Sprintf("[gemini-acp] turn complete: %s\n", reason))
+			h.safeOutput([]byte(fmt.Sprintf("[gemini-acp] turn complete: %s\n", reason)))
 		}
 	}
 }
@@ -221,12 +227,12 @@ func (h *GeminiACPExecutionHandle) Exit() <-chan PTYExit  { return h.exitCh }
 
 func (h *GeminiACPExecutionHandle) Close() error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return nil
-	}
+	alreadyClosed := h.closed
 	h.closed = true
-	_ = h.stdin.Close()
+	h.mu.Unlock()
+	if !alreadyClosed {
+		_ = h.stdin.Close()
+	}
 	return nil
 }
 
@@ -264,7 +270,13 @@ func (h *GeminiACPExecutionHandle) writeJSON(v interface{}) error {
 	h.writeMu.Lock()
 	_, err = h.stdin.Write(data)
 	h.writeMu.Unlock()
-	return err
+	if err != nil {
+		if isExpectedPipeError(err) {
+			return fmt.Errorf("gemini-acp session closed")
+		}
+		return err
+	}
+	return nil
 }
 
 func (h *GeminiACPExecutionHandle) sendRequest(method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
@@ -438,16 +450,32 @@ func (h *GeminiACPExecutionHandle) readStdout() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		h.outputCh <- []byte(fmt.Sprintf("[gemini-acp-read-error] %v\n", err))
+		// Suppress "file already closed" noise when the process exited
+		// normally — this happens because waitProcess closes stdin which
+		// can race with the OS closing the stdout pipe.
+		h.mu.Lock()
+		alreadyClosed := h.closed
+		h.mu.Unlock()
+		if !alreadyClosed && !isExpectedPipeError(err) {
+			h.outputCh <- []byte(fmt.Sprintf("[gemini-acp-read-error] %v\n", err))
+		}
 	}
 
-	// Reject all pending requests
+	// Mark as closed so no new writes are attempted on the dead pipe.
 	h.mu.Lock()
+	wasAlreadyClosed := h.closed
+	h.closed = true
+	// Reject all pending requests
 	for id, p := range h.pending {
 		close(p.ch)
 		delete(h.pending, id)
 	}
 	h.mu.Unlock()
+
+	// Close stdin if not already closed, so the process can exit cleanly.
+	if !wasAlreadyClosed {
+		_ = h.stdin.Close()
+	}
 }
 
 func (h *GeminiACPExecutionHandle) handleResponse(msg acpJSONRPCResponse) {
@@ -684,4 +712,25 @@ func (h *GeminiACPExecutionHandle) waitProcess() {
 	}
 
 	_ = h.Close()
+}
+
+// isExpectedPipeError returns true for pipe/file errors that are expected
+// when the child process exits (e.g. "file already closed", broken pipe).
+func isExpectedPipeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "file already closed") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "pipe has been ended") ||
+		err == io.EOF ||
+		err == io.ErrClosedPipe
+}
+
+// safeOutput writes to outputCh without panicking if the channel is already
+// closed (which happens when ReaderCoordinator finishes after process exit).
+func (h *GeminiACPExecutionHandle) safeOutput(data []byte) {
+	defer func() { recover() }()
+	h.outputCh <- data
 }

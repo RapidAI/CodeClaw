@@ -82,7 +82,8 @@ func doSimpleOpenAIRequest(ctx context.Context, cfg MaclawLLMConfig, messages []
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -92,7 +93,11 @@ func doSimpleOpenAIRequest(ctx context.Context, cfg MaclawLLMConfig, messages []
 	if len(result.Choices) == 0 {
 		return nil, fmt.Errorf("no response from model")
 	}
-	return &llmSimpleResponse{Content: stripThinkingTags(result.Choices[0].Message.Content)}, nil
+	text := result.Choices[0].Message.Content
+	if text == "" {
+		text = result.Choices[0].Message.ReasoningContent
+	}
+	return &llmSimpleResponse{Content: stripThinkingTags(text)}, nil
 }
 
 func doSimpleAnthropicRequest(ctx context.Context, cfg MaclawLLMConfig, messages []interface{}, client *http.Client, timeout time.Duration) (*llmSimpleResponse, error) {

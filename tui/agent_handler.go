@@ -167,9 +167,13 @@ func (h *TUIAgentHandler) RunAgentLoop(userText string, history []map[string]str
 		}
 
 		choice := resp.Choices[0]
+		tuiContent := choice.Message.Content
+		if tuiContent == "" && choice.Message.ReasoningContent != "" {
+			tuiContent = choice.Message.ReasoningContent
+		}
 		assistantMsg := map[string]interface{}{
 			"role":    "assistant",
-			"content": choice.Message.Content,
+			"content": tuiContent,
 		}
 		if len(choice.Message.ToolCalls) > 0 {
 			assistantMsg["tool_calls"] = choice.Message.ToolCalls
@@ -178,7 +182,7 @@ func (h *TUIAgentHandler) RunAgentLoop(userText string, history []map[string]str
 
 		// 无工具调用 → 最终回复
 		if len(choice.Message.ToolCalls) == 0 {
-			return AgentResponse{Text: agent.StripThinkingTags(choice.Message.Content)}
+			return AgentResponse{Text: agent.StripThinkingTags(tuiContent)}
 		}
 
 		// 执行工具调用

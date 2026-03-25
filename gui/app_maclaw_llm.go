@@ -446,7 +446,8 @@ func (a *App) testOpenAILLM(url, key, model, userAgent string) (string, error) {
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -456,7 +457,11 @@ func (a *App) testOpenAILLM(url, key, model, userAgent string) (string, error) {
 	if len(result.Choices) == 0 {
 		return "", fmt.Errorf("no response from model")
 	}
-	return stripFunctionCalls(stripThinkTags(result.Choices[0].Message.Content)), nil
+	text := result.Choices[0].Message.Content
+	if text == "" {
+		text = result.Choices[0].Message.ReasoningContent
+	}
+	return stripFunctionCalls(stripThinkTags(text)), nil
 }
 
 // testAnthropicLLM tests an Anthropic Messages API endpoint.
