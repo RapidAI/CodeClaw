@@ -497,7 +497,7 @@ func (a *App) SendAIAssistantMessage(text string) (*IMAgentResponse, error) {
 		Text:     text,
 	}
 	onProgress := func(progressText string) {
-		if progressText == "__heartbeat__" {
+		if progressText == imHeartbeatMsg {
 			return
 		}
 		runtime.EventsEmit(a.ctx, "ai-assistant-progress", progressText)

@@ -313,7 +313,7 @@ func (m *telegramGatewayManager) handleLocalMessage(msg telegram.IncomingMessage
 
 	var lastProgress time.Time
 	onProgress := func(progressText string) {
-		if progressText == "" {
+		if progressText == "" || progressText == imHeartbeatMsg {
 			return
 		}
 		now := time.Now()

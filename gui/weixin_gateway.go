@@ -372,7 +372,7 @@ func (m *weixinGatewayManager) handleLocalMessage(msg weixin.IncomingMessage) {
 	// Use a rate limiter to avoid flooding: at most one progress message per 5s.
 	var lastProgress time.Time
 	onProgress := func(progressText string) {
-		if progressText == "" {
+		if progressText == "" || progressText == imHeartbeatMsg {
 			return
 		}
 		now := time.Now()

@@ -327,7 +327,7 @@ func (m *qqBotGatewayManager) handleLocalMessage(msg qqbot.IncomingMessage) {
 
 	var lastProgress time.Time
 	onProgress := func(progressText string) {
-		if progressText == "" {
+		if progressText == "" || progressText == imHeartbeatMsg {
 			return
 		}
 		now := time.Now()
