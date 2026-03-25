@@ -359,3 +359,18 @@ func (s *SkillStore) GetByFingerprint(fingerprint string) *HubSkillMeta {
 	}
 	return nil
 }
+
+// FindBySourceURL 根据 source_url 和 name 查找已存在的 Skill（用于覆盖更新）。
+func (s *SkillStore) FindBySourceURL(sourceURL, name string) *HubSkillMeta {
+	if sourceURL == "" {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, m := range s.index {
+		if m.SourceURL == sourceURL && m.Name == name {
+			return &m
+		}
+	}
+	return nil
+}

@@ -59,11 +59,6 @@
     body.embed .channel-select{gap:6px;margin-bottom:10px}
     body.embed .channel-select button{padding:7px;font-size:12px;border-radius:8px}
     body.embed .warn-box{padding:10px 12px;font-size:12px;margin-bottom:10px;border-radius:10px}
-    .mobile-row{display:flex;gap:8px;align-items:stretch}
-    .mobile-row select{width:90px;flex-shrink:0;height:44px;padding:0 8px;border:1px solid var(--line);border-radius:var(--radius);font:inherit;font-size:13px;background:#fff;color:var(--text);cursor:pointer}
-    .mobile-row select:focus{outline:none;border-color:rgba(44,111,202,.5);box-shadow:0 0 0 3px rgba(44,111,202,.1)}
-    .mobile-row input{flex:1}
-    body.embed .mobile-row select{height:36px;font-size:12px;border-radius:10px;width:80px}
     body.embed .info-label{font-size:11px}
     body.embed .info-value{font-size:12px}
   </style>
@@ -83,33 +78,6 @@
   <div id="tab-bind" class="panel active" role="tabpanel">
     <div class="field"><label for="bindEmail">邮箱</label><input id="bindEmail" type="email" placeholder="your@email.com"></div>
     <div id="bindCodeField" class="field"><label for="bindCode">邀请码</label><input id="bindCode" type="text" placeholder="输入邀请码"></div>
-    <div class="field"><label for="bindMobile">手机号（选填，用于飞书自动入组）</label>
-      <div class="mobile-row">
-        <select id="bindMobileCC">
-          <option value="+86">🇨🇳 +86</option>
-          <option value="+1">🇺🇸 +1</option>
-          <option value="+81">🇯🇵 +81</option>
-          <option value="+82">🇰🇷 +82</option>
-          <option value="+44">🇬🇧 +44</option>
-          <option value="+49">🇩🇪 +49</option>
-          <option value="+33">🇫🇷 +33</option>
-          <option value="+61">🇦🇺 +61</option>
-          <option value="+65">🇸🇬 +65</option>
-          <option value="+852">🇭🇰 +852</option>
-          <option value="+853">🇲🇴 +853</option>
-          <option value="+886">🇹🇼 +886</option>
-          <option value="+91">🇮🇳 +91</option>
-          <option value="+7">🇷🇺 +7</option>
-          <option value="+55">🇧🇷 +55</option>
-          <option value="+60">🇲🇾 +60</option>
-          <option value="+66">🇹🇭 +66</option>
-          <option value="+84">🇻🇳 +84</option>
-          <option value="+62">🇮🇩 +62</option>
-          <option value="+63">🇵🇭 +63</option>
-        </select>
-        <input id="bindMobile" type="text" placeholder="13800138000" inputmode="numeric">
-      </div>
-    </div>
     <button class="btn btn-primary" id="btnBind">绑定</button>
     <div id="bindResult" class="result hidden"></div>
   </div>
@@ -222,14 +190,11 @@
   document.getElementById('btnBind').addEventListener('click', async function() {
     var email = document.getElementById('bindEmail').value.trim();
     var code = document.getElementById('bindCode').value.trim();
-    var localNum = document.getElementById('bindMobile').value.trim().replace(/\D/g, '');
-    var cc = document.getElementById('bindMobileCC').value;
-    var mobile = localNum ? cc + localNum : '';
     if (!email) return showResult('bindResult', '请输入邮箱', 'error');
 
     try {
       var data = await api('/api/enroll/start', {
-        email: email, invitation_code: code, mobile: mobile,
+        email: email, invitation_code: code,
         machine_name: 'WebBind', platform: 'web'
       });
       if (data.status === 'approved' || data.status === 'already_enrolled') {

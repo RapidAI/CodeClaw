@@ -4,6 +4,8 @@ import (
 	"embed"
 	"os"
 
+	"github.com/RapidAI/CodeClaw/corelib/brand"
+	"github.com/RapidAI/CodeClaw/corelib/skill"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -17,6 +19,9 @@ import (
 var assets embed.FS
 
 func main() {
+	// Migrate ~/.maclaw/skills → ~/.maclaw/data/skills (one-time).
+	skill.MigrateSkillsDir()
+
 	// Create an instance of the app structure
 	app := NewApp()
 
@@ -48,6 +53,11 @@ func main() {
 	// Platform specific early initialization (like hiding console on Windows)
 	app.platformStartup()
 
+	// Clean up stale SingleInstanceLock file from a previous crash.
+	// Without this, macOS launches silently exit via os.Exit(0) when the
+	// lock file exists but the owning process is gone.
+	cleanStaleLock()
+
 	// On macOS 26 (Tahoe) and later, Liquid Glass changes how translucent and
 	// frameless windows are rendered.  Wails v2's NSVisualEffectView-based
 	// translucency can crash at window creation time, so we fall back to a
@@ -77,7 +87,7 @@ func main() {
 
 	// Create application with options
 	appOptions := &options.App{
-		Title:                    "MaClaw",
+		Title:                    brand.Current().WindowTitle,
 		Frameless:                frameless,
 		Width:                    807,
 		Height:                   392,

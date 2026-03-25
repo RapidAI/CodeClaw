@@ -579,7 +579,7 @@ func (p *FeishuPlugin) Stop(ctx context.Context) error {
 //
 // Returns true if the message was dispatched to the IM Adapter, false if
 // the legacy path should handle it.
-func (p *FeishuPlugin) DispatchBotMessage(openID, messageType, text string, raw json.RawMessage) bool {
+func (p *FeishuPlugin) DispatchBotMessage(openID, messageType, text string, attachments []im.MessageAttachment, raw json.RawMessage) bool {
 	if p.adapter == nil && p.messageHandler == nil {
 		return false // no adapter wired — use legacy path
 	}
@@ -589,6 +589,7 @@ func (p *FeishuPlugin) DispatchBotMessage(openID, messageType, text string, raw 
 		PlatformUID:  openID,
 		MessageType:  messageType,
 		Text:         text,
+		Attachments:  attachments,
 		RawPayload:   raw,
 		Timestamp:    time.Now(),
 	}

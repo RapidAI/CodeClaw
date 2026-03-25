@@ -122,6 +122,8 @@ func (h *SDKExecutionHandle) Write(data []byte) error {
 			Role:    "user",
 			Content: text,
 		},
+		SessionID:       "default",
+		ParentToolUseID: nil,
 	}
 	return h.writeJSON(msg)
 }

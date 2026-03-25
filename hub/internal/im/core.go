@@ -115,11 +115,13 @@ type Adapter struct {
 	mu      sync.RWMutex
 	plugins map[string]IMPlugin
 
-	messageRouter  *MessageRouter
-	coordinator    *Coordinator      // optional; nil = passthrough to messageRouter
-	deviceNotifier *DeviceNotifier   // optional; nil = no device notifications
-	identity       IdentityResolver
-	limiter        *rateLimiter
+	messageRouter        *MessageRouter
+	coordinator          *Coordinator          // optional; nil = passthrough to messageRouter
+	deviceNotifier       *DeviceNotifier       // optional; nil = no device notifications
+	outboundInterceptor  *OutboundInterceptor  // optional; nil = no outbound interception
+	contentAuditor       *ContentAuditor       // optional; nil = no content audit
+	identity             IdentityResolver
+	limiter              *rateLimiter
 }
 
 // NewAdapter creates a new IM Adapter with the given MessageRouter.
@@ -149,6 +151,17 @@ func (a *Adapter) SetCoordinator(coord *Coordinator) {
 // SetDeviceNotifier wires the device notifier for online/offline notifications.
 func (a *Adapter) SetDeviceNotifier(dn *DeviceNotifier) {
 	a.deviceNotifier = dn
+}
+
+// SetOutboundInterceptor wires the outbound interceptor for file/image
+// permission checks on IM channels.
+func (a *Adapter) SetOutboundInterceptor(interceptor *OutboundInterceptor) {
+	a.outboundInterceptor = interceptor
+}
+
+// SetContentAuditor wires the content auditor for outbound content compliance checks.
+func (a *Adapter) SetContentAuditor(ca *ContentAuditor) {
+	a.contentAuditor = ca
 }
 
 // RegisterPlugin registers an IM plugin with the adapter.
@@ -236,7 +249,7 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 	}
 
 	text := strings.TrimSpace(msg.Text)
-	if text == "" {
+	if text == "" && len(msg.Attachments) == 0 {
 		return
 	}
 
@@ -624,7 +637,11 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 	}
 
 	// 5. Route to MaClaw Agent — via Coordinator (if wired) or MessageRouter.
-	log.Printf("[IM Adapter] routing: user=%s coordinator=%v text_len=%d", unifiedID, a.coordinator != nil, len(text))
+	log.Printf("[IM Adapter] routing: user=%s coordinator=%v text_len=%d attachments=%d", unifiedID, a.coordinator != nil, len(text), len(msg.Attachments))
+
+	// Stash attachments so routeToSingleMachine can include them in the
+	// WebSocket payload without changing the routing API signatures.
+	a.messageRouter.StashAttachments(unifiedID, msg.Attachments)
 
 	var routeResp *GenericResponse
 	var routeErr error
@@ -696,6 +713,37 @@ func (a *Adapter) DeliverResponse(ctx context.Context, platformName, userID, pla
 //   - If plugin supports rich cards → SendCard with OutgoingMessage
 //   - Otherwise → SendText with FallbackText
 func (a *Adapter) sendResponse(ctx context.Context, plugin IMPlugin, target UserTarget, resp *GenericResponse) {
+	// Outbound interception: check file/image permissions for IM channels
+	intercepted := false
+	if a.outboundInterceptor != nil {
+		newResp, blocked := a.outboundInterceptor.CheckOutbound(ctx, target.UnifiedUserID, resp, plugin.Name())
+		if blocked {
+			resp = newResp
+			intercepted = true
+		}
+	}
+
+	// Content audit: check outbound content compliance (skip if already intercepted)
+	if !intercepted && a.contentAuditor != nil {
+		result := a.contentAuditor.Audit(ctx, target.UnifiedUserID, plugin.Name(), resp)
+		switch result.Action {
+		case AuditBlock, AuditManualReview:
+			resp = result.Response
+		case AuditSanitize:
+			resp = result.Response
+		case AuditDelay:
+			// Send placeholder message immediately.
+			a.deliverSingleResponse(ctx, plugin, target, result.Response)
+			// Start background polling; deliver final result asynchronously.
+			a.contentAuditor.StartDelayPolling(ctx, target.UnifiedUserID, plugin.Name(), resp, func(bgCtx context.Context, finalResp *GenericResponse) {
+				a.deliverSingleResponse(bgCtx, plugin, target, finalResp)
+			})
+			return
+		case AuditPass:
+			// resp unchanged
+		}
+	}
+
 	caps := plugin.Capabilities()
 
 	// If the response contains an image, send it first via SendImage.
@@ -783,6 +831,34 @@ func (a *Adapter) sendResponse(ctx context.Context, plugin IMPlugin, target User
 	if err := plugin.SendText(ctx, target, text); err != nil {
 		log.Printf("[IM Adapter] SendText failed for %s (uid=%s): %v", plugin.Name(), target.PlatformUID, err)
 	}
+}
+
+// deliverSingleResponse delivers a GenericResponse through the plugin,
+// reusing the same delivery logic as sendResponse but without interception/audit.
+// Used for async delivery (e.g. delay polling callbacks).
+func (a *Adapter) deliverSingleResponse(ctx context.Context, plugin IMPlugin, target UserTarget, resp *GenericResponse) {
+	caps := plugin.Capabilities()
+
+	out := resp.ToOutgoingMessage()
+
+	if caps.SupportsRichCard {
+		if err := plugin.SendCard(ctx, target, out); err != nil {
+			_ = plugin.SendText(ctx, target, out.FallbackText)
+		}
+		return
+	}
+
+	text := out.FallbackText
+	if text == "" {
+		text = resp.ToFallbackText()
+	}
+	if !caps.SupportsMarkdown {
+		text = stripMarkdown(text)
+	}
+	if caps.MaxTextLength > 0 && len(text) > caps.MaxTextLength {
+		text = truncateAtLine(text, caps.MaxTextLength)
+	}
+	_ = plugin.SendText(ctx, target, text)
 }
 
 // truncateAtLine truncates text to maxLen at a line boundary and appends "…".

@@ -1,14 +1,13 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
-	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
+	"github.com/RapidAI/CodeClaw/hub/internal/security"
 )
 
 type enrollmentResponse struct {
@@ -72,7 +71,7 @@ func ListPendingEnrollmentsHandler(identity *auth.IdentityService) http.HandlerF
 	}
 }
 
-func ApproveEnrollmentHandler(identity *auth.IdentityService, feishuNotifier *feishu.Notifier) http.HandlerFunc {
+func ApproveEnrollmentHandler(identity *auth.IdentityService, securitySvc *security.SecurityService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req approveEnrollmentRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -83,42 +82,18 @@ func ApproveEnrollmentHandler(identity *auth.IdentityService, feishuNotifier *fe
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "Enrollment ID is required")
 			return
 		}
-		user, enrollment, err := identity.ApproveEnrollment(r.Context(), req.ID)
+		user, _, err := identity.ApproveEnrollment(r.Context(), req.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "APPROVE_FAILED", err.Error())
 			return
 		}
 
-		// Trigger Feishu auto-enrollment for the newly approved user so they
-		// can discover the bot without manual intervention.
-		if feishuNotifier != nil {
-			if ae := feishuNotifier.AutoEnroller(); ae != nil {
-				email := user.Email
-				mobile := enrollment.Mobile
-				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-					defer cancel()
-					result, err := ae.AddToFeishuOrg(ctx, email, "", mobile)
-					if err != nil {
-						log.Printf("[enroll/approve] feishu auto-enroll failed for %s: %v", email, err)
-					} else if result != nil {
-						log.Printf("[enroll/approve] feishu auto-enroll for %s: status=%s msg=%s", email, result.Status, result.Message)
-					}
-					// If first attempt failed, retry once after a short delay.
-					if result != nil && result.Status == "failed" {
-						time.Sleep(5 * time.Second)
-						ae.ClearCooldown(email)
-						log.Printf("[enroll/approve] background feishu retry for %s", email)
-						retryCtx, retryCancel := context.WithTimeout(context.Background(), 60*time.Second)
-						defer retryCancel()
-						r2, err2 := ae.AddToFeishuOrg(retryCtx, email, "", mobile)
-						if err2 != nil {
-							log.Printf("[enroll/approve] background feishu retry failed for %s: %v", email, err2)
-						} else if r2 != nil {
-							log.Printf("[enroll/approve] background feishu retry for %s: status=%s msg=%s", email, r2.Status, r2.Message)
-						}
-					}
-				}()
+		// Assign newly approved user to the appropriate security group.
+		// Admin approval doesn't include a group selection, so selectedGroupID is empty.
+		// The user will be assigned based on org_structure_enabled and default_group_id.
+		if securitySvc != nil && user != nil {
+			if err := securitySvc.AssignNewUser(r.Context(), user.Email, ""); err != nil {
+				log.Printf("[enroll/approve] security group assignment failed for %s: %v", user.Email, err)
 			}
 		}
 

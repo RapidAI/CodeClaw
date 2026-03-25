@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/RapidAI/CodeClaw/corelib/skill"
 )
 
 // HubSkillMeta is the client-side Skill metadata returned from SkillHub searches.
@@ -195,7 +197,7 @@ var allowedFileExts = map[string]bool{
 }
 
 // Install downloads a Skill from the hub, extracts bundled files to
-// ~/.maclaw/skills/<name>/, installs declared dependencies, and converts
+// ~/.maclaw/data/skills/<name>/, installs declared dependencies, and converts
 // the skill to an NLSkillEntry.
 func (c *SkillHubClient) Install(ctx context.Context, skillID string, hubURL string) (*NLSkillEntry, error) {
 	base := c.hubBaseURL()
@@ -220,7 +222,7 @@ func (c *SkillHubClient) Install(ctx context.Context, skillID string, hubURL str
 
 	status := "active"
 
-	// Extract bundled files to ~/.maclaw/skills/<name>/
+	// Extract bundled files to ~/.maclaw/data/skills/<name>/
 	if len(full.Files) > 0 {
 		if err := c.extractFiles(full.Name, full.Files); err != nil {
 			// Non-fatal: mark as needs_setup but continue.
@@ -250,14 +252,14 @@ func (c *SkillHubClient) Install(ctx context.Context, skillID string, hubURL str
 	}, nil
 }
 
-// extractFiles writes bundled files (base64-encoded) to ~/.maclaw/skills/<name>/.
+// extractFiles writes bundled files (base64-encoded) to ~/.maclaw/data/skills/<name>/.
 // Validates extension whitelist, size limits, and path safety.
 func (c *SkillHubClient) extractFiles(skillName string, files map[string]string) error {
-	home, err := os.UserHomeDir()
+	skillsRoot, err := skill.PrimarySkillsDir()
 	if err != nil {
 		return err
 	}
-	skillDir := filepath.Join(home, ".maclaw", "skills", skillName)
+	skillDir := filepath.Join(skillsRoot, skillName)
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		return err
 	}

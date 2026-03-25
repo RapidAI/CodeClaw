@@ -464,10 +464,58 @@ func (m *RemoteSessionManager) WriteInput(sessionID, text string) error {
 func (m *RemoteSessionManager) writeSDKInput(s *RemoteSession, sessionID, text, tag string) error {
 	m.app.log(fmt.Sprintf("[remote-write-%s] session=%s, len=%d, text=%q",
 		tag, sessionID, len(text), text))
+
+	// Check if there's a pending AskUserQuestion — if so, wrap the user's
+	// reply as a tool_result instead of a new user message.
+	s.mu.Lock()
+	pending := s.PendingUserQuestion
+	s.PendingUserQuestion = nil // consume it
+	s.mu.Unlock()
+
+	if pending != nil && tag == "sdk" {
+		sdkHandle, ok := s.Exec.(*SDKExecutionHandle)
+		if ok {
+			m.app.log(fmt.Sprintf("[remote-write-%s] session=%s: answering AskUserQuestion tool_use_id=%s",
+				tag, sessionID, pending.ToolUseID))
+			resultMsg := map[string]interface{}{
+				"type": "user",
+				"message": map[string]interface{}{
+					"role": "user",
+					"content": []map[string]interface{}{
+						{
+							"type":        "tool_result",
+							"tool_use_id": pending.ToolUseID,
+							"content":     strings.TrimSpace(text),
+						},
+					},
+				},
+				"session_id":         "default",
+				"parent_tool_use_id": nil,
+			}
+			err := sdkHandle.writeJSON(resultMsg)
+			if err != nil {
+				m.app.log(fmt.Sprintf("[remote-write-%s] tool_result FAILED session=%s: %v", tag, sessionID, err))
+				return err
+			}
+			m.echoUserInput(s, sessionID, text)
+			return nil
+		}
+		// Type assertion failed — restore pending so it's not lost.
+		s.mu.Lock()
+		s.PendingUserQuestion = pending
+		s.mu.Unlock()
+	}
+
 	err := s.Exec.Write([]byte(text))
 	if err != nil {
 		m.app.log(fmt.Sprintf("[remote-write-%s] FAILED session=%s: %v", tag, sessionID, err))
 	}
+	m.echoUserInput(s, sessionID, text)
+	return err
+}
+
+// echoUserInput appends user input to raw output and preview for display.
+func (m *RemoteSessionManager) echoUserInput(s *RemoteSession, sessionID, text string) {
 	displayText := strings.TrimSpace(text)
 	if displayText != "" {
 		echoLine := fmt.Sprintf("❯ %s", displayText)
@@ -490,7 +538,6 @@ func (m *RemoteSessionManager) writeSDKInput(s *RemoteSession, sessionID, text, 
 			})
 		}
 	}
-	return err
 }
 
 // WriteImageInput constructs a multi-part SDKUserInput containing an image
@@ -538,6 +585,8 @@ func (m *RemoteSessionManager) WriteImageInput(sessionID string, img ImageTransf
 				},
 			},
 		},
+		SessionID:       "default",
+		ParentToolUseID: nil,
 	}
 
 	m.app.log(fmt.Sprintf("[remote-write-image] session=%s, media_type=%s, b64_len=%d, content_parts=2(text+image)",
@@ -665,6 +714,15 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 
 	sessionStarted := false
 
+	// initTimeout breaks the deadlock where Claude Code waits for stdin
+	// input before emitting system/init, but the UI waits for system/init
+	// before allowing user input. After 5 seconds without system/init,
+	// we transition to SessionWaitingInput so the user can send a message,
+	// which will trigger Claude Code to emit system/init.
+	initTimer := time.NewTimer(5 * time.Second)
+	defer initTimer.Stop()
+	initTimeoutCh := initTimer.C // nil-able so we can disable after firing
+
 	// updateThinking transitions the session's thinking state and syncs
 	// the summary to Hub when the state actually changes. Inspired by
 	// happy-coder's fd3-based thinking tracker, but driven by SDK
@@ -712,6 +770,61 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 	// toolUseToEventID maps SDK tool_use block IDs to coalescer event IDs
 	// so that incoming tool_result blocks can trigger CompleteToolCall.
 	toolUseToEventID := make(map[string]string)
+
+	// busyTicker emits periodic progress lines into RawOutputLines while
+	// the SDK is executing tool_use operations (busy state with no streaming
+	// output).  This prevents the terminal from appearing frozen/blank.
+	var busyTicker *time.Ticker
+	var busyTickerDone chan struct{}
+
+	stopBusyTicker := func() {
+		if busyTicker != nil {
+			busyTicker.Stop()
+			close(busyTickerDone)
+			busyTicker = nil
+			busyTickerDone = nil
+		}
+	}
+	defer stopBusyTicker()
+
+	startBusyTicker := func(toolName string) {
+		stopBusyTicker()
+		startTime := time.Now()
+		busyTicker = time.NewTicker(5 * time.Second)
+		busyTickerDone = make(chan struct{})
+		go func(name string, start time.Time, ticker *time.Ticker, done chan struct{}) {
+			for {
+				select {
+				case <-done:
+					return
+				case t := <-ticker.C:
+					elapsed := int(t.Sub(start).Seconds())
+					line := fmt.Sprintf("⏳ %s running... (%ds)", name, elapsed)
+					s.mu.Lock()
+					s.RawOutputLines = append(s.RawOutputLines, line)
+					if len(s.RawOutputLines) > 2000 {
+						s.RawOutputLines = s.RawOutputLines[len(s.RawOutputLines)-2000:]
+					}
+					s.Preview.PreviewLines = append(s.Preview.PreviewLines, line)
+					if len(s.Preview.PreviewLines) > 500 {
+						s.Preview.PreviewLines = s.Preview.PreviewLines[len(s.Preview.PreviewLines)-500:]
+					}
+					s.UpdatedAt = time.Now()
+					s.mu.Unlock()
+					// Push preview delta to remote clients (mobile/PWA)
+					if m.hubClient != nil {
+						_ = m.hubClient.SendPreviewDelta(SessionPreviewDelta{
+							SessionID:   s.ID,
+							OutputSeq:   s.Preview.OutputSeq,
+							AppendLines: []string{line},
+							UpdatedAt:   time.Now().Unix(),
+						})
+					}
+					m.app.emitRemoteStateChanged()
+				}
+			}
+		}(toolName, startTime, busyTicker, busyTickerDone)
+	}
 
 	// streamAccum accumulates streaming text_delta fragments into the
 	// current line.  The in-progress text is kept as the last element of
@@ -787,10 +900,10 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 				}
 
 				// If the output channel closed without the session ever
-				// reaching "running" state, the process likely crashed on
-				// startup (missing API key, bad config, etc.).  Update the
-				// summary so the user sees a clear diagnostic instead of a
-				// generic "exit code 1" message.
+				// initializing (no system/init received), the process
+				// likely crashed on startup (missing API key, bad config,
+				// etc.).  Update the summary so the user sees a clear
+				// diagnostic instead of a generic "exit code 1" message.
 				if !sessionStarted {
 					s.mu.Lock()
 					s.Summary.Severity = "error"
@@ -812,6 +925,10 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			}
 
 			text := string(chunk)
+
+			// New streaming output arrived — stop the busy ticker since
+			// the terminal is no longer blank.
+			stopBusyTicker()
 
 			// Accumulate text for RawOutputLines (desktop terminal)
 			s.mu.Lock()
@@ -877,6 +994,7 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			var summaryToSync *SessionSummary
 			var eventsToSync []ImportantEvent
 			var imagesToSync []ImageTransferMessage
+			var lastToolName string // tracks last tool_use name for busy ticker
 
 			s.mu.Lock()
 			s.UpdatedAt = now
@@ -885,10 +1003,18 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			case "system":
 				if msg.Subtype == "init" && !sessionStarted {
 					sessionStarted = true
-					s.Status = SessionRunning
-					s.Summary.Status = string(SessionRunning)
+					initTimer.Stop()    // Cancel the deadlock-breaker timer
+					initTimeoutCh = nil // Prevent select from spinning on fired timer
+					// SDK init means the tool is ready for user input —
+					// transition directly to waiting_input so maclaw
+					// (and the mobile PWA) see the session as interactive
+					// immediately, instead of lingering in "running/starting".
+					s.Status = SessionWaitingInput
+					s.Summary.Status = string(SessionWaitingInput)
+					s.Summary.WaitingForUser = true
 					s.Summary.Severity = "info"
 					s.Summary.CurrentTask = "Session initialized"
+					s.Summary.SuggestedAction = "Send the first instruction to start working"
 					s.Summary.UpdatedAt = now.Unix()
 					snap := s.Summary
 					summaryToSync = &snap
@@ -897,18 +1023,35 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			case "assistant":
 				s.Status = SessionBusy
 				s.Summary.Status = string(SessionBusy)
+				s.Summary.WaitingForUser = false
 				s.Summary.UpdatedAt = now.Unix()
 				flushStreamAccum()
 
 				if msg.Message != nil {
 					for _, block := range msg.Message.Content {
 						if block.Type == "tool_use" && block.Name != "" {
+							lastToolName = block.Name
 							evt := buildSDKToolUseEvent(s, block)
 							s.Events = appendRecentEvents(s.Events, evt, maxRecentImportantEvents)
 							eventsToSync = append(eventsToSync, evt)
 							// Track block.ID → EventID for coalescer completion
 							if block.ID != "" {
 								toolUseToEventID[block.ID] = evt.EventID
+							}
+							// AskUserQuestion means Claude Code is waiting for
+							// user input via tool_result. Transition to
+							// waiting_input and record the pending tool_use so
+							// WriteInput can wrap the reply as a tool_result.
+							if block.Name == "AskUserQuestion" && block.ID != "" {
+								s.PendingUserQuestion = &PendingToolUse{
+									ToolUseID: block.ID,
+									ToolName:  block.Name,
+								}
+								s.Status = SessionWaitingInput
+								s.Summary.Status = string(SessionWaitingInput)
+								s.Summary.WaitingForUser = true
+								s.Summary.CurrentTask = "Waiting for your answer"
+								s.Summary.SuggestedAction = "Answer the question to continue"
 							}
 						}
 					}
@@ -957,6 +1100,7 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 				s.Status = SessionWaitingInput
 				s.Summary.Status = string(SessionWaitingInput)
 				s.Summary.WaitingForUser = true
+				s.PendingUserQuestion = nil // Clear any stale pending question
 				// Clear thinking state inline so the snapshot is consistent.
 				s.ThinkingState = ThinkingIdle
 				s.ThinkingSince = time.Time{}
@@ -996,9 +1140,19 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			case "assistant":
 				updateThinking(true)
 				m.stallDetector.StartMonitoring(s.ID, s.Exec, s.Tool)
+				// Start busy ticker if assistant message contained tool_use
+				// blocks, so the terminal shows periodic progress while
+				// tools execute (prevents blank screen during busy state).
+				if lastToolName != "" {
+					startBusyTicker(lastToolName)
+				}
+			case "user":
+				// Tool result arrived — stop the busy progress ticker.
+				stopBusyTicker()
 			case "result":
 				// Thinking state already cleared inline under s.mu above;
 				// updateThinking is a no-op here but kept for symmetry.
+				stopBusyTicker()
 				m.stallDetector.StopMonitoring(s.ID)
 			}
 
@@ -1030,6 +1184,32 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			s.UpdatedAt = time.Now()
 			s.mu.Unlock()
 			m.app.emitRemoteStateChanged()
+
+		case <-initTimeoutCh:
+			// Deadlock breaker: Claude Code in -p --input-format stream-json
+			// mode waits for stdin input before emitting system/init. If we
+			// haven't received system/init within 5 seconds, transition to
+			// SessionWaitingInput so the user can send a message (which will
+			// trigger Claude Code to emit system/init and start working).
+			initTimeoutCh = nil // Prevent re-entry on subsequent select iterations
+			if !sessionStarted {
+				sessionStarted = true
+				m.app.log(fmt.Sprintf("[sdk-init-timeout] session=%s: no system/init after 5s, forcing SessionWaitingInput to break deadlock", s.ID))
+				s.mu.Lock()
+				s.Status = SessionWaitingInput
+				s.Summary.Status = string(SessionWaitingInput)
+				s.Summary.WaitingForUser = true
+				s.Summary.Severity = "info"
+				s.Summary.CurrentTask = "Session ready (waiting for first message)"
+				s.Summary.SuggestedAction = "Send the first instruction to start working"
+				s.Summary.UpdatedAt = time.Now().Unix()
+				snap := s.Summary
+				s.mu.Unlock()
+				if m.hubClient != nil {
+					_ = m.hubClient.SendSessionSummary(snap)
+				}
+				m.app.emitRemoteStateChanged()
+			}
 		}
 	}
 }
@@ -1053,7 +1233,9 @@ func (m *RemoteSessionManager) runCodexSDKOutputLoop(s *RemoteSession) {
 	for chunk := range output {
 		text := string(chunk)
 
-		// Mark session as running on first output
+		// Mark session as running on first output. Codex is one-shot
+		// (codex exec) — it runs the task and exits, so "running" is
+		// the correct state (it doesn't wait for user input).
 		if !sessionStarted {
 			sessionStarted = true
 			s.mu.Lock()
@@ -1133,14 +1315,18 @@ func (m *RemoteSessionManager) runGeminiACPOutputLoop(s *RemoteSession) {
 	for chunk := range output {
 		text := string(chunk)
 
-		// Mark session as running on first output
+		// Mark session as ready on first output. The ACP handshake
+		// (initialize + session/new) completes inside Start(), so the
+		// first output line means the tool is ready for user input.
 		if !sessionStarted {
 			sessionStarted = true
 			s.mu.Lock()
-			s.Status = SessionRunning
-			s.Summary.Status = string(SessionRunning)
+			s.Status = SessionWaitingInput
+			s.Summary.Status = string(SessionWaitingInput)
+			s.Summary.WaitingForUser = true
 			s.Summary.Severity = "info"
 			s.Summary.CurrentTask = "Gemini ACP session started"
+			s.Summary.SuggestedAction = "Send the first instruction to start working"
 			s.Summary.UpdatedAt = time.Now().Unix()
 			snap := s.Summary
 			s.mu.Unlock()
@@ -1244,6 +1430,39 @@ func appendRecentEvents(events []ImportantEvent, event ImportantEvent, limit int
 	return out
 }
 
+// buildResumeContext creates a SessionResumeContext from the current session
+// state. Must be called with s.mu held. The reason parameter is typically
+// "token_limit" or "api_error".
+func buildResumeContext(s *RemoteSession, reason string) *SessionResumeContext {
+	rc := &SessionResumeContext{
+		ProjectPath:  s.ProjectPath,
+		Tool:         s.Tool,
+		LastProgress: s.Summary.ProgressSummary,
+		ExitReason:   reason,
+	}
+	// Carry forward resume count and original task from previous session.
+	if s.ResumeContext != nil {
+		rc.ResumeCount = s.ResumeContext.ResumeCount + 1
+		rc.OriginalTask = s.ResumeContext.OriginalTask
+	}
+	// Capture important files from summary.
+	if len(s.Summary.ImportantFiles) > 0 {
+		rc.CompletedFiles = make([]string, len(s.Summary.ImportantFiles))
+		copy(rc.CompletedFiles, s.Summary.ImportantFiles)
+	}
+	// Capture tail of output for context.
+	if tail := s.RawOutputLines; len(tail) > 0 {
+		if len(tail) > 20 {
+			tail = tail[len(tail)-20:]
+		}
+		rc.LastOutput = strings.Join(tail, "\n")
+		if len(rc.LastOutput) > 500 {
+			rc.LastOutput = rc.LastOutput[len(rc.LastOutput)-500:]
+		}
+	}
+	return rc
+}
+
 func (m *RemoteSessionManager) runExitLoop(s *RemoteSession) {
 	// Ensure config cleanup runs even if the exit channel is nil or closed
 	// unexpectedly, so the user's native tool config is always restored.
@@ -1325,11 +1544,19 @@ func (m *RemoteSessionManager) runExitLoop(s *RemoteSession) {
 		if exit.Code != nil {
 			s.Summary.LastResult = fmt.Sprintf("Session exited with code %d", *exit.Code)
 			if *exit.Code != 0 {
-				s.Summary.Severity = "warn"
+				// Structured sessions (Claude Code SDK, Gemini ACP, Codex, iFlow)
+				// normally exit with code 1 — treat this as a benign exit, not a warning.
+				if s.isStructuredSession() && *exit.Code == 1 {
+					s.Summary.Severity = "info"
+				} else {
+					s.Summary.Severity = "warn"
+				}
 				if stderrHint != "" {
 					s.Summary.LastResult += " — " + stderrHint
 				}
-				s.Summary.SuggestedAction = "Check tool installation and configuration, then retry"
+				if s.Summary.Severity == "warn" {
+					s.Summary.SuggestedAction = "Check tool installation and configuration, then retry"
+				}
 			}
 		} else {
 			s.Summary.LastResult = "Session exited"
@@ -1339,6 +1566,21 @@ func (m *RemoteSessionManager) runExitLoop(s *RemoteSession) {
 			s.Summary.SuggestedAction = "Start a new session when ready"
 		}
 	}
+	// Build resume context for structured sessions so the Agent can
+	// auto-continue unfinished tasks or retry after transient errors.
+	if s.isStructuredSession() && s.ExitCode != nil {
+		var reason string
+		switch {
+		case exit.Err == nil && (*s.ExitCode == 0 || *s.ExitCode == 1):
+			reason = "token_limit"
+		case *s.ExitCode > 1:
+			reason = "api_error"
+		}
+		if reason != "" {
+			s.ResumeContext = buildResumeContext(s, reason)
+		}
+	}
+
 	closedEvent := buildSessionClosedEvent(s, exit)
 	s.Events = appendRecentEvents(s.Events, closedEvent, maxRecentImportantEvents)
 	summarySnap := s.Summary
@@ -1358,7 +1600,11 @@ func (m *RemoteSessionManager) runExitLoop(s *RemoteSession) {
 	// Trigger experience extraction for successfully completed sessions
 	// (exited with code 0). Failed sessions are poor candidates for
 	// reusable patterns.
-	if exitStatus == SessionExited && exitCodeVal != nil && *exitCodeVal == 0 && m.app.experienceExtractor != nil {
+	// Structured sessions (Claude Code, Gemini, Codex, iFlow) normally
+	// exit with code 1, so treat exit code ≤ 1 as success for them.
+	exitOK := exitStatus == SessionExited && exitCodeVal != nil &&
+		(*exitCodeVal == 0 || (s.isStructuredSession() && *exitCodeVal == 1))
+	if exitOK && m.app.experienceExtractor != nil {
 		go func() {
 			_ = m.app.experienceExtractor.Extract(s)
 		}()

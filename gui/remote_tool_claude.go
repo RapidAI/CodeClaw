@@ -46,12 +46,21 @@ func (a *ClaudeAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 	commandPath := a.resolveClaudeExecutable(status.Path)
 	env := a.buildCommandEnv(spec.Env)
 
-	// SDK mode: use stream-json for structured communication
+	// SDK mode: use -p (print mode) with stream-json for structured communication.
+	// Claude Code 2.x requires -p for --output-format/--input-format stream-json.
+	// In -p mode with stream-json input, Claude Code reads JSON messages from
+	// stdin continuously, supporting multi-turn conversations.
 	args := []string{
+		"-p",
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
+		// Set a high max-turns to prevent premature exit during complex tasks.
+		// In SDK mode, Claude Code defaults to a low max_turns which causes
+		// it to exit mid-task when creating large projects (e.g. a full game).
+		// Each tool call consumes one turn, so complex tasks need many turns.
+		"--max-turns", "200",
 	}
 
 	// Permission handling via SDK protocol
@@ -138,7 +147,7 @@ func (a *ClaudeAdapter) buildCommandEnv(base map[string]string) map[string]strin
 	}
 
 	home, _ := os.UserHomeDir()
-	localToolPath := filepath.Join(home, ".cceasy", "tools")
+	localToolPath := filepath.Join(home, ".maclaw", "data", "tools")
 	npmPath := filepath.Join(os.Getenv("AppData"), "npm")
 	nodePath := `C:\Program Files\nodejs`
 	gitCmdPath := `C:\Program Files\Git\cmd`
@@ -161,9 +170,6 @@ func (a *ClaudeAdapter) buildCommandEnv(base map[string]string) map[string]strin
 
 	if env["CLAUDE_CODE_USE_COLORS"] == "" {
 		env["CLAUDE_CODE_USE_COLORS"] = "true"
-	}
-	if env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "" {
-		env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "64000"
 	}
 	if env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"] == "" {
 		env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"] = "1"

@@ -167,6 +167,32 @@ func RunMigrations(db *sql.DB) error {
 		);`,
 
 		`CREATE INDEX IF NOT EXISTS idx_voiceprints_user_id ON voiceprints(user_id);`,
+
+		`CREATE TABLE IF NOT EXISTS content_audit_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			user_id TEXT NOT NULL,
+			platform TEXT NOT NULL,
+			content_type TEXT NOT NULL,
+			summary TEXT NOT NULL,
+			return_code INTEGER NOT NULL,
+			duration_ms INTEGER NOT NULL,
+			message TEXT,
+			content_hash TEXT
+		);`,
+
+		`CREATE INDEX IF NOT EXISTS idx_content_audit_logs_timestamp ON content_audit_logs(timestamp);`,
+		`CREATE INDEX IF NOT EXISTS idx_content_audit_logs_user_id ON content_audit_logs(user_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_content_audit_logs_return_code ON content_audit_logs(return_code);`,
+
+		`CREATE TABLE IF NOT EXISTS email_invites (
+			id TEXT PRIMARY KEY,
+			email TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'viewer',
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
 	}
 
 	for _, stmt := range stmts {
@@ -188,6 +214,7 @@ func RunMigrations(db *sql.DB) error {
 	alterStmts = append(alterStmts, `ALTER TABLE user_enrollments ADD COLUMN mobile TEXT NOT NULL DEFAULT ''`)
 	alterStmts = append(alterStmts, `ALTER TABLE invitation_codes ADD COLUMN exported INTEGER NOT NULL DEFAULT 0`)
 	alterStmts = append(alterStmts, `ALTER TABLE users ADD COLUMN smart_route INTEGER NOT NULL DEFAULT 0`)
+	alterStmts = append(alterStmts, `ALTER TABLE invitation_codes ADD COLUMN vip INTEGER NOT NULL DEFAULT 0`)
 
 	for _, stmt := range alterStmts {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {

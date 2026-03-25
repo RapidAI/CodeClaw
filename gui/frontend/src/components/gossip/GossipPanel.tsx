@@ -272,7 +272,7 @@ export function GossipPanel({ lang }: GossipPanelProps) {
                 <div key={p.id} style={{
                     marginBottom: '10px', padding: '12px 14px', borderRadius: '10px',
                     background: '#fff', border: '1px solid #e5e7eb',
-                    fontSize: '0.8rem', lineHeight: 1.6
+                    fontSize: '0.8rem', lineHeight: 1.6, textAlign: 'left'
                 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>

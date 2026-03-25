@@ -23,7 +23,7 @@ func TestBugCondition_NonDesktopSourceBlockedByRemoteEnabled(t *testing.T) {
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
 	// Create tool stubs so remoteToolSupported() returns true
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -104,7 +104,7 @@ func TestBugCondition_NonDesktopSourceBlockedByRemoteEnabled(t *testing.T) {
 				// On UNFIXED code this will fail because the check is unconditional.
 				if err != nil && strings.Contains(err.Error(), "remote mode is disabled") {
 					t.Errorf("StartRemoteSessionForProject(tool=%q, source=%q) returned "+
-						"'remote mode is disabled' — non-desktop sources should bypass "+
+						"'remote mode is disabled' �?non-desktop sources should bypass "+
 						"RemoteEnabled check. Got error: %v", tool, source, err)
 				}
 			})

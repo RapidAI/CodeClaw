@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	cskill "github.com/RapidAI/CodeClaw/corelib/skill"
 )
 
 // CapabilityGapDetector detects capability gaps in Agent responses and
@@ -97,7 +99,65 @@ func (d *CapabilityGapDetector) Resolve(
 		return "", "", fmt.Errorf("search hub: %w", err)
 	}
 	if len(candidates) == 0 {
-		return "", "", nil
+		// Fallback: search GitHub for skill.yaml files.
+		sendStatus("SkillHub 未找到匹配技能，正在搜索 GitHub...")
+		gs := cskill.NewGitHubSearcher("")
+		ghCandidates, ghErr := gs.SearchGitHub(query)
+		if ghErr != nil || len(ghCandidates) == 0 {
+			return "", "", nil
+		}
+		// Import the first candidate.
+		imported, impErr := gs.ImportFromCandidate(ghCandidates[0])
+		if impErr != nil {
+			sendStatus(fmt.Sprintf("GitHub 技能导入失败: %v", impErr))
+			return "", "", nil
+		}
+
+		// Risk assessment for GitHub-imported skill (same as Hub path).
+		sendStatus("正在进行安全审查...")
+		ghAssessment := d.riskAssessor.AssessSkill(imported, "community")
+		if ghAssessment.Level == RiskCritical {
+			riskDetails := fmt.Sprintf("GitHub Skill「%s」来自 %s (trust_level=community) 包含 critical 级别风险操作",
+				imported.Name, ghCandidates[0].RepoURL)
+			confirmed := false
+			if d.confirmCallback != nil {
+				sendStatus(fmt.Sprintf("⚠️ 安全警告: %s\n等待用户确认...", riskDetails))
+				confirmed = d.confirmCallback(imported.Name, riskDetails)
+			}
+			if !confirmed {
+				if d.auditLog != nil {
+					_ = d.auditLog.Log(AuditEntry{
+						Timestamp:    time.Now(),
+						Action:       AuditActionHubSkillReject,
+						ToolName:     "github_skill_install",
+						RiskLevel:    RiskCritical,
+						PolicyAction: PolicyDeny,
+						Result:       fmt.Sprintf("rejected github skill %s from %s: critical risk", imported.Name, ghCandidates[0].RepoURL),
+					})
+				}
+				return "", "", fmt.Errorf("GitHub Skill 包含高风险操作，已拒绝自动安装")
+			}
+		}
+
+		sendStatus(fmt.Sprintf("正在从 GitHub 安装 Skill: %s ...", imported.Name))
+		if err := d.skillExecutor.Register(*imported); err != nil {
+			return "", "", fmt.Errorf("register github skill: %w", err)
+		}
+
+		// Audit log for GitHub install.
+		if d.auditLog != nil {
+			_ = d.auditLog.Log(AuditEntry{
+				Timestamp:    time.Now(),
+				Action:       AuditActionHubSkillInstall,
+				ToolName:     "github_skill_install",
+				RiskLevel:    ghAssessment.Level,
+				PolicyAction: PolicyAllow,
+				Result:       fmt.Sprintf("installed github skill %s from %s, risk=%s", imported.Name, ghCandidates[0].RepoURL, ghAssessment.Level),
+			})
+		}
+
+		execResult, execErr := d.skillExecutor.Execute(imported.Name)
+		return imported.Name, execResult, execErr
 	}
 
 	// Step 3: Select best matching Skill.
@@ -341,7 +401,7 @@ func (d *CapabilityGapDetector) llmEvaluateScore(execResult string, execErr erro
 // AutoPublishSkill publishes a locally created skill to the hub so other
 // MaClaws can discover and use it. Called after a skill is created and tested.
 // It scans steps for dependency hints and packages local files from
-// ~/.maclaw/skills/<name>/ into the upload payload.
+// ~/.maclaw/data/skills/<name>/ into the upload payload.
 func (d *CapabilityGapDetector) AutoPublishSkill(ctx context.Context, entry NLSkillEntry, sendStatus func(string)) error {
 	if d.hubClient == nil {
 		return fmt.Errorf("hub client not initialized")
@@ -368,7 +428,7 @@ func (d *CapabilityGapDetector) AutoPublishSkill(ctx context.Context, entry NLSk
 	// Scan steps for dependency hints.
 	deps := d.scanDependencies(entry.Steps)
 
-	// Package local files from ~/.maclaw/skills/<name>/.
+	// Package local files from ~/.maclaw/data/skills/<name>/.
 	files := d.packageLocalFiles(entry.Name)
 
 	full := hubSkillFull{
@@ -496,17 +556,28 @@ func (d *CapabilityGapDetector) scanDependencies(steps []NLSkillStep) []hubSkill
 	return deps
 }
 
-// packageLocalFiles reads files from ~/.maclaw/skills/<name>/ and returns
+// packageLocalFiles reads files from ~/.maclaw/data/skills/<name>/ and returns
 // a map of relative path → base64 content, respecting size and extension limits.
 func (d *CapabilityGapDetector) packageLocalFiles(skillName string) map[string]string {
-	home, err := os.UserHomeDir()
+	skillsRoot, err := cskill.PrimarySkillsDir()
 	if err != nil {
 		return nil
 	}
-	skillDir := filepath.Join(home, ".maclaw", "skills", skillName)
+	skillDir := filepath.Join(skillsRoot, skillName)
 	info, err := os.Stat(skillDir)
 	if err != nil || !info.IsDir() {
-		return nil
+		// Fallback: check legacy path in case migration hasn't moved this skill.
+		for _, root := range cskill.SkillScanRoots() {
+			alt := filepath.Join(root, skillName)
+			if fi, e := os.Stat(alt); e == nil && fi.IsDir() {
+				skillDir = alt
+				break
+			}
+		}
+		// Re-check after fallback.
+		if fi, e := os.Stat(skillDir); e != nil || !fi.IsDir() {
+			return nil
+		}
 	}
 
 	files := make(map[string]string)

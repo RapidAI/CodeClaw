@@ -148,7 +148,18 @@ func (a *App) initRemoteInfra() {
 	}
 	if a.localMCPManager == nil {
 		a.localMCPManager = NewLocalMCPManager(a.mcpRegistry)
-		go a.localMCPManager.SyncFromConfig()
+		// Only start local MCP server processes if at least one has AutoStart enabled.
+		// This avoids spawning unnecessary Node.js/Bun child processes on startup.
+		hasAutoStart := false
+		for _, e := range a.mcpRegistry.ListLocalServers() {
+			if !e.Disabled && e.AutoStart {
+				hasAutoStart = true
+				break
+			}
+		}
+		if hasAutoStart {
+			go a.localMCPManager.SyncFromConfig()
+		}
 	}
 	if a.skillExecutor == nil {
 		a.skillExecutor = NewSkillExecutor(a, a.mcpRegistry, a.remoteSessions)

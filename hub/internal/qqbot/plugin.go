@@ -990,6 +990,44 @@ func ed25519KeyFromSecret(secret string) (ed25519.PublicKey, ed25519.PrivateKey)
 }
 
 // ---------------------------------------------------------------------------
+// C2C message dedup — QQ Bot platform may deliver the same event multiple
+// times (WebSocket reconnect replay, webhook retry, or WS+webhook overlap).
+// ---------------------------------------------------------------------------
+
+var c2cDedup = struct {
+	mu        sync.Mutex
+	seen      map[string]time.Time
+	lastEvict time.Time
+}{seen: make(map[string]time.Time)}
+
+const c2cDedupTTL = 5 * time.Minute
+
+func isDuplicateC2C(msgID string) bool {
+	if msgID == "" {
+		return false
+	}
+	now := time.Now()
+	c2cDedup.mu.Lock()
+	defer c2cDedup.mu.Unlock()
+
+	// Evict stale entries at most once per minute to avoid O(n) on every call.
+	if now.Sub(c2cDedup.lastEvict) > time.Minute {
+		for id, t := range c2cDedup.seen {
+			if now.Sub(t) > c2cDedupTTL {
+				delete(c2cDedup.seen, id)
+			}
+		}
+		c2cDedup.lastEvict = now
+	}
+
+	if _, exists := c2cDedup.seen[msgID]; exists {
+		return true
+	}
+	c2cDedup.seen[msgID] = now
+	return false
+}
+
+// ---------------------------------------------------------------------------
 // C2C message handling (shared by WebSocket and Webhook paths)
 // ---------------------------------------------------------------------------
 
@@ -1010,6 +1048,12 @@ func (p *Plugin) handleC2CMessage(data json.RawMessage) {
 	openID := event.Author.UserOpenID
 	text := strings.TrimSpace(event.Content)
 	if openID == "" || text == "" {
+		return
+	}
+
+	// Dedup: skip if we've already processed this message ID.
+	if isDuplicateC2C(event.ID) {
+		log.Printf("[qqbot] duplicate C2C msg_id=%s, skipping", event.ID)
 		return
 	}
 

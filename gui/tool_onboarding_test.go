@@ -268,8 +268,9 @@ func TestEnsureCodeBuddyOnboardingIdempotent(t *testing.T) {
 
 	configPath := filepath.Join(tmpHome, ".codebuddy.json")
 	existing := map[string]any{
-		"hasCompletedOnboarding": true,
-		"theme":                  "dark",
+		"hasCompletedOnboarding":       true,
+		"bypassPermissionsModeAccepted": true,
+		"theme":                        "dark",
 		"projects": map[string]any{
 			"D:/test": map[string]any{
 				"hasTrustDialogAccepted": true,

@@ -48,7 +48,7 @@ func (m *LocalMCPManager) SyncFromConfig() {
 	// Build a set of desired server IDs
 	desired := make(map[string]LocalMCPServerEntry, len(entries))
 	for _, e := range entries {
-		if !e.Disabled {
+		if !e.Disabled && e.AutoStart {
 			desired[e.ID] = e
 		}
 	}

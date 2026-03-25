@@ -131,6 +131,18 @@ func configGetLocal(args []string) error {
 	return nil
 }
 
+// ConfigSecurityReadOnlyFn is set by the main package. When it returns true,
+// security-related config set operations are blocked (centralized security mode).
+var ConfigSecurityReadOnlyFn func() bool
+
+// securitySections lists config sections that are read-only under centralized security.
+var securitySections = map[string]bool{
+	"security": true,
+	"guardrail": true,
+	"sandbox": true,
+	"network": true,
+}
+
 func configSetLocal(args []string) error {
 	fs := flag.NewFlagSet("config set --local", flag.ExitOnError)
 	local := fs.Bool("local", false, "写入本地文件")
@@ -143,6 +155,11 @@ func configSetLocal(args []string) error {
 		return NewUsageError("usage: config set --local <section> <key> <value>")
 	}
 	section, key, value := remaining[0], remaining[1], remaining[2]
+
+	// Block security-related config changes when centralized security is active (Req 4.6)
+	if securitySections[section] && ConfigSecurityReadOnlyFn != nil && ConfigSecurityReadOnlyFn() {
+		return fmt.Errorf("安全设置已由 Hub 集中管控，无法本地修改")
+	}
 
 	mgr := config.NewManager(NewFileConfigStore(ResolveDataDir()))
 	oldVal, err := mgr.UpdateConfig(section, key, value)

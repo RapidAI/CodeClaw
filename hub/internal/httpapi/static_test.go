@@ -53,7 +53,7 @@ func TestRegisterPWAStaticRoutesServesIndexAndAssets(t *testing.T) {
 
 func TestRegisterAdminStaticRoutesServesIndexAndAssets(t *testing.T) {
     dir := t.TempDir()
-    if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("admin-index"), 0644); err != nil {
+    if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<title>MaClaw Hub Admin</title>"), 0644); err != nil {
         t.Fatalf("write index: %v", err)
     }
     if err := os.WriteFile(filepath.Join(dir, "admin.js"), []byte("console.log('admin');"), 0644); err != nil {
@@ -69,7 +69,8 @@ func TestRegisterAdminStaticRoutesServesIndexAndAssets(t *testing.T) {
     if indexRec.Code != http.StatusOK {
         t.Fatalf("index status = %d", indexRec.Code)
     }
-    if body := indexRec.Body.String(); body != "admin-index" {
+    // Default brand is MaClaw, so content should be served as-is (no replacement needed).
+    if body := indexRec.Body.String(); body != "<title>MaClaw Hub Admin</title>" {
         t.Fatalf("index body = %q", body)
     }
 
@@ -89,7 +90,7 @@ func TestRegisterAdminStaticRoutesServesIndexAndAssets(t *testing.T) {
     if spaRec.Code != http.StatusOK {
         t.Fatalf("spa fallback status = %d", spaRec.Code)
     }
-    if body := spaRec.Body.String(); body != "admin-index" {
+    if body := spaRec.Body.String(); body != "<title>MaClaw Hub Admin</title>" {
         t.Fatalf("spa fallback body = %q", body)
     }
 }

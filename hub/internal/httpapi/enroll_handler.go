@@ -1,21 +1,20 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net/http"
-	"time"
 
+	"github.com/RapidAI/CodeClaw/corelib/brand"
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
-	"github.com/RapidAI/CodeClaw/hub/internal/feishu"
+	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
+	"github.com/RapidAI/CodeClaw/hub/internal/security"
 )
 
 type EnrollStartRequest struct {
 	Email                string `json:"email"`
-	Mobile               string `json:"mobile"`
 	MachineName          string `json:"machine_name"`
 	Platform             string `json:"platform"`
 	Hostname             string `json:"hostname"`
@@ -24,6 +23,7 @@ type EnrollStartRequest struct {
 	HeartbeatIntervalSec int    `json:"heartbeat_interval_sec"`
 	ClientID             string `json:"client_id"`
 	InvitationCode       string `json:"invitation_code"`
+	GroupID              string `json:"group_id"`
 }
 
 type EmailRequestLoginRequest struct {
@@ -38,7 +38,7 @@ type EmailPollLoginRequest struct {
 	PollID string `json:"poll_id"`
 }
 
-func EnrollStartHandler(identity *auth.IdentityService, feishuNotifier *feishu.Notifier) http.HandlerFunc {
+func EnrollStartHandler(identity *auth.IdentityService, invSvc *invitation.Service, securitySvc *security.SecurityService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req EnrollStartRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
@@ -51,7 +51,7 @@ func EnrollStartHandler(identity *auth.IdentityService, feishuNotifier *feishu.N
 			return
 		}
 
-		resp, err := identity.StartEnrollment(r.Context(), req.Email, req.MachineName, req.Platform, req.ClientID, req.InvitationCode, req.Mobile)
+		resp, err := identity.StartEnrollment(r.Context(), req.Email, req.MachineName, req.Platform, req.ClientID, req.InvitationCode)
 		if err != nil {
 			switch {
 			case errors.Is(err, auth.ErrInvitationExpired):
@@ -97,6 +97,7 @@ func EnrollStartHandler(identity *auth.IdentityService, feishuNotifier *feishu.N
 		// the original EnrollmentResult omitempty behavior.
 		respMap := map[string]any{
 			"status": resp.Status,
+			"brand":  brand.Current().DisplayName,
 		}
 		if resp.Message != "" {
 			respMap["message"] = resp.Message
@@ -120,46 +121,35 @@ func EnrollStartHandler(identity *auth.IdentityService, feishuNotifier *feishu.N
 			respMap["expires_at"] = resp.ExpiresAt
 		}
 
-		// Synchronous feishu auto-enroll with 30-second timeout.
-		// Only run when enrollment is approved (user actually created).
-		if resp != nil && resp.Status == "approved" && feishuNotifier != nil {
-			if ae := feishuNotifier.AutoEnroller(); ae != nil {
-				feishuCtx, feishuCancel := context.WithTimeout(r.Context(), 30*time.Second)
-				defer feishuCancel()
-				feishuResult, feishuErr := ae.AddToFeishuOrg(feishuCtx, req.Email, "", req.Mobile)
-				if feishuErr != nil {
-					log.Printf("[enroll] feishu auto-enroll failed for %s: %v", req.Email, feishuErr)
-				}
-				if feishuResult != nil {
-					respMap["feishu_status"] = feishuResult.Status
-					if feishuResult.Message != "" {
-						respMap["feishu_message"] = feishuResult.Message
+		// Look up VIP status from the invitation code used during enrollment.
+		if resp != nil && resp.Status == "approved" && invSvc != nil && req.Email != "" {
+			if ic, err := invSvc.GetCodeByEmail(r.Context(), req.Email); err == nil && ic != nil {
+				respMap["vip_flag"] = ic.VIP
+			}
+		}
+
+		// Inject org_structure data into enrollment response.
+		// When org_structure_enabled is true, include the group tree for department selection.
+		// When false, just include the flag so the client knows to skip department selection.
+		if securitySvc != nil {
+			if settings, err := securitySvc.GetSettings(r.Context()); err == nil {
+				respMap["org_structure_enabled"] = settings.OrgStructureEnabled
+				if settings.OrgStructureEnabled {
+					if tree, err := securitySvc.GetGroupTree(r.Context()); err == nil && tree != nil {
+						respMap["org_group_tree"] = tree
 					}
-					// If the synchronous attempt failed, schedule a background retry.
-					if feishuResult.Status == "failed" {
-						email, mobile := req.Email, req.Mobile
-						go func() {
-							retryCtx, retryCancel := context.WithTimeout(context.Background(), 60*time.Second)
-							defer retryCancel()
-							// Wait before retrying to give transient issues time to resolve.
-							time.Sleep(5 * time.Second)
-							log.Printf("[enroll] background feishu retry for %s", email)
-							// Clear cooldown so the retry is not skipped.
-							ae.ClearCooldown(email)
-							result, err := ae.AddToFeishuOrg(retryCtx, email, "", mobile)
-							if err != nil {
-								log.Printf("[enroll] background feishu retry failed for %s: %v", email, err)
-							} else if result != nil {
-								log.Printf("[enroll] background feishu retry for %s: status=%s msg=%s", email, result.Status, result.Message)
-							}
-						}()
+					if settings.DefaultGroupID != "" {
+						respMap["default_group_id"] = settings.DefaultGroupID
 					}
-				} else {
-					respMap["feishu_status"] = "failed"
-					respMap["feishu_message"] = "unknown error"
 				}
-			} else {
-				respMap["feishu_status"] = "disabled"
+			}
+		}
+
+		// Assign newly approved user to the appropriate security group.
+		// Uses org_structure_enabled, user's selected group_id, and default_group_id.
+		if resp != nil && resp.Status == "approved" && securitySvc != nil && req.Email != "" {
+			if err := securitySvc.AssignNewUser(r.Context(), req.Email, req.GroupID); err != nil {
+				log.Printf("[enroll] security group assignment failed for %s: %v", req.Email, err)
 			}
 		}
 

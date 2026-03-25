@@ -195,10 +195,8 @@ func (m *ConfigManager) formatMaclawLLMConfig(cfg AppConfig, raw bool) string {
 	switch {
 	case maxIter > 0:
 		b.WriteString(fmt.Sprintf("maclaw_agent_max_iterations: %d\n", maxIter))
-	case maxIter < 0:
-		b.WriteString("maclaw_agent_max_iterations: unlimited\n")
 	default:
-		b.WriteString("maclaw_agent_max_iterations: 12 (default)\n")
+		b.WriteString(fmt.Sprintf("maclaw_agent_max_iterations: %d (default)\n", maxAgentIterationsCap))
 	}
 	return b.String()
 }
@@ -655,17 +653,16 @@ func (m *ConfigManager) applyMaclawLLMChange(cfg *AppConfig, key, value string) 
 		if err != nil {
 			return "", fmt.Errorf("invalid integer value for maclaw_agent_max_iterations: %q", value)
 		}
-		switch {
-		case n > 0:
-			if n > maxAgentIterationsCap {
-				n = maxAgentIterationsCap
-			}
-			cfg.MaclawAgentMaxIterations = n
-		case n == 0:
-			cfg.MaclawAgentMaxIterations = -1 // sentinel for "unlimited"
-		default:
-			cfg.MaclawAgentMaxIterations = 0 // zero-value = not configured → default(12)
+		if n <= 0 {
+			n = maxAgentIterationsCap // default 300
 		}
+		if n < minAgentIterations {
+			n = minAgentIterations
+		}
+		if n > maxAgentIterationsCap {
+			n = maxAgentIterationsCap
+		}
+		cfg.MaclawAgentMaxIterations = n // 30-300
 		return old, nil
 	}
 	return "", fmt.Errorf("unsupported maclaw_llm key %q", key)
@@ -838,7 +835,7 @@ func (m *ConfigManager) initSchema() {
 				{Key: "maclaw_llm_model", Description: "Maclaw LLM 模型名称", Type: "string"},
 				{Key: "maclaw_llm_context_length", Description: "LLM 上下文长度 (tokens)，0=默认128000", Type: "int", Default: "0"},
 				{Key: "maclaw_llm_current_provider", Description: "当前 LLM 提供商", Type: "string"},
-				{Key: "maclaw_agent_max_iterations", Description: "Agent 最大推理轮次（正整数=固定上限，0=无限制，负数=恢复默认12）", Type: "int", Default: "12"},
+				{Key: "maclaw_agent_max_iterations", Description: "Agent 最大推理轮次（30-300，默认300）", Type: "int", Default: "300"},
 			},
 		},
 

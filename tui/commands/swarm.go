@@ -4,11 +4,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/RapidAI/CodeClaw/corelib/misc"
+	"github.com/RapidAI/CodeClaw/corelib/swarm"
 )
+
+// swarmOrchestrator is the package-level orchestrator instance, lazily created.
+var swarmOrchestrator *swarm.SwarmOrchestrator
+
+// SwarmOrchestratorProvider allows the TUI app to inject a pre-configured
+// orchestrator. If nil, a minimal one is created on demand.
+var SwarmOrchestratorProvider func() *swarm.SwarmOrchestrator
+
+func getSwarmOrchestrator() *swarm.SwarmOrchestrator {
+	if swarmOrchestrator != nil {
+		return swarmOrchestrator
+	}
+	if SwarmOrchestratorProvider != nil {
+		swarmOrchestrator = SwarmOrchestratorProvider()
+		return swarmOrchestrator
+	}
+	// Fallback: create a minimal orchestrator (no session manager, limited use).
+	swarmOrchestrator = swarm.NewSwarmOrchestrator(nil, &swarm.NoopNotifier{})
+	return swarmOrchestrator
+}
 
 // RunSwarm 处理 swarm 子命令。
 func RunSwarm(args []string) error {
@@ -22,8 +42,6 @@ func RunSwarm(args []string) error {
 		return swarmStatus(args[1:])
 	case "cancel":
 		return swarmCancel(args[1:])
-	case "resume":
-		return swarmResume(args[1:])
 	case "list":
 		return swarmList()
 	default:
@@ -35,160 +53,182 @@ func swarmUsage() string {
 	return `用法: maclaw-tui swarm <command>
 
 Commands:
-  create   创建执行计划（从 JSON 文件或内联）
-  status   查看计划状态
-  cancel   取消计划
-  resume   恢复失败的计划
-  list     列出可恢复的计划`
-}
-
-func getOrchestrator() *misc.TaskOrchestrator {
-	dataDir := ResolveDataDir()
-	persistPath := filepath.Join(dataDir, "swarm_plans.json")
-	return misc.NewTaskOrchestratorWithPersist(nil, persistPath)
+  create   创建并执行 Swarm Run
+           --mode greenfield --requirements <file> --project <path>
+           --mode maintenance --tasks <file> --project <path>
+  status   查看 Swarm Run 状态
+  cancel   取消 Swarm Run
+  list     列出所有 Swarm Run`
 }
 
 func swarmCreate(args []string) error {
-	if len(args) == 0 {
-		return &UsageError{Msg: "用法: maclaw-tui swarm create <plan.json> 或 --desc <描述> --tasks <task1,task2,...>"}
-	}
+	var mode, reqFile, tasksFile, projectPath, techStack, tool string
+	var maxAgents, maxRounds int
 
-	var description string
-	var subTasks []misc.PlanSubTask
-
-	// 从 JSON 文件加载
-	if !strings.HasPrefix(args[0], "--") {
-		data, err := os.ReadFile(args[0])
-		if err != nil {
-			return fmt.Errorf("读取计划文件失败: %w", err)
-		}
-		var plan struct {
-			Description string             `json:"description"`
-			SubTasks    []misc.PlanSubTask `json:"sub_tasks"`
-		}
-		if err := json.Unmarshal(data, &plan); err != nil {
-			return fmt.Errorf("解析计划文件失败: %w", err)
-		}
-		description = plan.Description
-		subTasks = plan.SubTasks
-	} else {
-		// 内联模式
-		for i := 0; i < len(args); i++ {
-			switch args[i] {
-			case "--desc":
-				if i+1 < len(args) {
-					description = args[i+1]
-					i++
-				}
-			case "--tasks":
-				if i+1 < len(args) {
-					for _, t := range strings.Split(args[i+1], ",") {
-						t = strings.TrimSpace(t)
-						if t != "" {
-							subTasks = append(subTasks, misc.PlanSubTask{Description: t})
-						}
-					}
-					i++
-				}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--mode":
+			if i+1 < len(args) {
+				mode = args[i+1]
+				i++
+			}
+		case "--requirements":
+			if i+1 < len(args) {
+				reqFile = args[i+1]
+				i++
+			}
+		case "--tasks":
+			if i+1 < len(args) {
+				tasksFile = args[i+1]
+				i++
+			}
+		case "--project":
+			if i+1 < len(args) {
+				projectPath = args[i+1]
+				i++
+			}
+		case "--tech-stack":
+			if i+1 < len(args) {
+				techStack = args[i+1]
+				i++
+			}
+		case "--tool":
+			if i+1 < len(args) {
+				tool = args[i+1]
+				i++
+			}
+		case "--max-agents":
+			if i+1 < len(args) {
+				fmt.Sscanf(args[i+1], "%d", &maxAgents)
+				i++
+			}
+		case "--max-rounds":
+			if i+1 < len(args) {
+				fmt.Sscanf(args[i+1], "%d", &maxRounds)
+				i++
 			}
 		}
 	}
 
-	if description == "" {
-		description = "TUI Swarm Plan"
-	}
-	if len(subTasks) == 0 {
-		return fmt.Errorf("至少需要一个子任务")
+	if projectPath == "" {
+		cwd, _ := os.Getwd()
+		projectPath = cwd
 	}
 
-	orch := getOrchestrator()
-	plan, err := orch.CreatePlan(description, subTasks)
+	var req swarm.SwarmRunRequest
+	req.ProjectPath = projectPath
+	req.TechStack = techStack
+	req.Tool = tool
+	req.MaxAgents = maxAgents
+	req.MaxRounds = maxRounds
+
+	switch strings.ToLower(mode) {
+	case "greenfield":
+		if reqFile == "" {
+			return fmt.Errorf("greenfield 模式需要 --requirements <file>")
+		}
+		data, err := os.ReadFile(reqFile)
+		if err != nil {
+			return fmt.Errorf("读取需求文件失败: %w", err)
+		}
+		req.Mode = swarm.SwarmModeGreenfield
+		req.Requirements = string(data)
+	case "maintenance":
+		if tasksFile == "" {
+			return fmt.Errorf("maintenance 模式需要 --tasks <file>")
+		}
+		data, err := os.ReadFile(tasksFile)
+		if err != nil {
+			return fmt.Errorf("读取任务文件失败: %w", err)
+		}
+		var taskInput swarm.TaskListInput
+		if err := json.Unmarshal(data, &taskInput); err != nil {
+			return fmt.Errorf("解析任务文件失败: %w", err)
+		}
+		req.Mode = swarm.SwarmModeMaintenance
+		req.TaskInput = &taskInput
+	default:
+		return fmt.Errorf("请指定 --mode greenfield 或 --mode maintenance")
+	}
+
+	orch := getSwarmOrchestrator()
+	run, err := orch.StartSwarmRun(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("启动 Swarm Run 失败: %w", err)
 	}
 
-	fmt.Printf("计划已创建: %s\n", plan.ID)
-	fmt.Printf("描述: %s\n", plan.Description)
-	fmt.Printf("子任务数: %d\n", len(plan.SubTasks))
+	fmt.Printf("Swarm Run 已启动: %s\n", run.ID)
+	fmt.Printf("模式: %s  项目: %s\n", run.Mode, run.ProjectPath)
 
-	// 立即执行
-	fmt.Println("开始执行...")
-	if err := orch.Execute(plan.ID); err != nil {
-		return fmt.Errorf("执行失败: %w", err)
+	// 轮询等待完成
+	for {
+		time.Sleep(2 * time.Second)
+		r, err := orch.GetSwarmRun(run.ID)
+		if err != nil {
+			return err
+		}
+		if r.Status == swarm.SwarmStatusCompleted || r.Status == swarm.SwarmStatusFailed || r.Status == swarm.SwarmStatusCancelled {
+			fmt.Printf("Swarm Run %s 完成，状态: %s\n", r.ID, r.Status)
+			break
+		}
 	}
-	fmt.Println("执行完成")
 	return nil
 }
 
 func swarmStatus(args []string) error {
 	if len(args) == 0 {
-		return &UsageError{Msg: "用法: maclaw-tui swarm status <plan_id>"}
+		return &UsageError{Msg: "用法: maclaw-tui swarm status <run_id>"}
 	}
-	orch := getOrchestrator()
-	plan, err := orch.GetStatus(args[0])
+	orch := getSwarmOrchestrator()
+	run, err := orch.GetSwarmRun(args[0])
 	if err != nil {
 		return err
 	}
-	printPlan(plan)
+	printSwarmRun(run)
 	return nil
 }
 
 func swarmCancel(args []string) error {
 	if len(args) == 0 {
-		return &UsageError{Msg: "用法: maclaw-tui swarm cancel <plan_id>"}
+		return &UsageError{Msg: "用法: maclaw-tui swarm cancel <run_id>"}
 	}
-	orch := getOrchestrator()
-	if err := orch.Cancel(args[0]); err != nil {
+	orch := getSwarmOrchestrator()
+	if err := orch.CancelSwarmRun(args[0]); err != nil {
 		return err
 	}
-	fmt.Printf("计划 %s 已取消\n", args[0])
-	return nil
-}
-
-func swarmResume(args []string) error {
-	if len(args) == 0 {
-		return &UsageError{Msg: "用法: maclaw-tui swarm resume <plan_id>"}
-	}
-	orch := getOrchestrator()
-	fmt.Printf("恢复计划 %s...\n", args[0])
-	if err := orch.Resume(args[0]); err != nil {
-		return fmt.Errorf("恢复失败: %w", err)
-	}
-	fmt.Println("执行完成")
+	fmt.Printf("Swarm Run %s 已取消\n", args[0])
 	return nil
 }
 
 func swarmList() error {
-	orch := getOrchestrator()
-	plans := orch.ListResumable()
-	if len(plans) == 0 {
-		fmt.Println("无可恢复的计划")
+	orch := getSwarmOrchestrator()
+	runs := orch.ListSwarmRuns()
+	if len(runs) == 0 {
+		fmt.Println("无 Swarm Run 记录")
 		return nil
 	}
-	for _, p := range plans {
-		printPlan(p)
-		fmt.Println()
+	for _, r := range runs {
+		fmt.Printf("  %s  mode=%s  status=%s  phase=%s  tasks=%d  round=%d  created=%s\n",
+			r.ID, r.Mode, r.Status, r.Phase, r.TaskCount, r.Round,
+			r.CreatedAt.Format("2006-01-02 15:04:05"))
 	}
 	return nil
 }
 
-func printPlan(plan *misc.TaskPlan) {
-	fmt.Printf("计划: %s  状态: %s\n", plan.ID, plan.Status)
-	fmt.Printf("描述: %s\n", plan.Description)
-	fmt.Printf("创建时间: %s\n", plan.CreatedAt.Format("2006-01-02 15:04:05"))
-	for _, st := range plan.SubTasks {
-		icon := "⏳"
-		switch st.Status {
-		case "completed":
-			icon = "✅"
-		case "failed":
-			icon = "❌"
-		case "running":
-			icon = "🔄"
+func printSwarmRun(run *swarm.SwarmRun) {
+	fmt.Printf("Run: %s  Mode: %s  Status: %s  Phase: %s\n", run.ID, run.Mode, run.Status, run.Phase)
+	fmt.Printf("Project: %s  TechStack: %s\n", run.ProjectPath, run.TechStack)
+	fmt.Printf("Round: %d/%d  Created: %s\n", run.CurrentRound, run.MaxRounds, run.CreatedAt.Format("2006-01-02 15:04:05"))
+	if len(run.Tasks) > 0 {
+		fmt.Printf("Tasks (%d):\n", len(run.Tasks))
+		for _, t := range run.Tasks {
+			fmt.Printf("  [%d] %s (group=%d, deps=%v)\n", t.Index, t.Description, t.GroupID, t.Dependencies)
 		}
-		fmt.Printf("  %s [%s] %s: %s\n", icon, st.ID, st.Description, st.Status)
-		if st.Result != "" {
-			fmt.Printf("      结果: %s\n", st.Result)
+	}
+	if len(run.Agents) > 0 {
+		fmt.Printf("Agents (%d):\n", len(run.Agents))
+		for _, a := range run.Agents {
+			fmt.Printf("  %s  role=%s  task=%d  status=%s\n", a.ID, a.Role, a.TaskIndex, a.Status)
 		}
 	}
 }

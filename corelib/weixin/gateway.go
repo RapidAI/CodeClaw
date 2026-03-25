@@ -361,6 +361,15 @@ type Gateway struct {
 	// Session pause state
 	pauseMu    sync.Mutex
 	pauseUntil time.Time
+
+	// Per-user message processing locks — ensures messages from the same
+	// user are handled sequentially while different users run concurrently.
+	userLocks   map[string]*sync.Mutex
+	userLocksMu sync.Mutex
+
+	// handlerWg tracks in-flight handler goroutines so Stop() can wait
+	// for them to finish before returning.
+	handlerWg sync.WaitGroup
 }
 
 // NewGateway creates a new WeChat gateway.
@@ -370,6 +379,7 @@ func NewGateway(config Config, handler MessageHandler) *Gateway {
 		handler:   handler,
 		client:    &http.Client{},
 		ctxTokens: newContextTokenCache(),
+		userLocks: make(map[string]*sync.Mutex),
 	}
 }
 
@@ -412,7 +422,8 @@ func (g *Gateway) Stop() error {
 	g.cancel = nil
 	g.mu.Unlock()
 
-	g.wg.Wait()
+	g.wg.Wait()        // wait for pollLoop to exit
+	g.handlerWg.Wait() // wait for in-flight handler goroutines
 	log.Printf("[weixin/gw] stopped")
 	g.emitStatus("disconnected")
 	return nil
@@ -632,6 +643,18 @@ func (g *Gateway) pollLoop(ctx context.Context) {
 	}
 }
 
+// userLock returns a per-user mutex, creating one if it doesn't exist yet.
+func (g *Gateway) userLock(userID string) *sync.Mutex {
+	g.userLocksMu.Lock()
+	defer g.userLocksMu.Unlock()
+	ul, ok := g.userLocks[userID]
+	if !ok {
+		ul = &sync.Mutex{}
+		g.userLocks[userID] = ul
+	}
+	return ul
+}
+
 func (g *Gateway) processIncomingMessage(ctx context.Context, msg weixinMessage) {
 	// Skip bot's own messages (echoes) and deleted messages
 	if msg.MessageType == MsgTypeBot || msg.DeleteTimeMs > 0 {
@@ -666,7 +689,7 @@ func (g *Gateway) processIncomingMessage(ctx context.Context, msg weixinMessage)
 		ts = time.Now()
 	}
 
-	g.handler(IncomingMessage{
+	incoming := IncomingMessage{
 		FromUserID:   fromUserID,
 		Text:         text,
 		ContextToken: msg.ContextToken,
@@ -674,7 +697,19 @@ func (g *Gateway) processIncomingMessage(ctx context.Context, msg weixinMessage)
 		MediaType:    mediaType,
 		MediaData:    mediaData,
 		MediaName:    mediaName,
-	})
+	}
+
+	// Dispatch handler in a goroutine so the poll loop is never blocked by
+	// slow handler processing (e.g. LLM calls). A per-user mutex ensures
+	// messages from the same user are still processed sequentially.
+	ul := g.userLock(fromUserID)
+	g.handlerWg.Add(1)
+	go func() {
+		defer g.handlerWg.Done()
+		ul.Lock()
+		defer ul.Unlock()
+		g.handler(incoming)
+	}()
 }
 
 func extractTextBody(items []messageItem) string {

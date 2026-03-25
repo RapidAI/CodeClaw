@@ -13,7 +13,7 @@ import cursorIcon from './assets/images/qodercli.png';
 import lobsterOffline from './assets/images/lobster_offline.svg';
 import lobsterHalf from './assets/images/lobster_half.svg';
 import clawnetIcon from './assets/images/clawnet.svg';
-import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, ClawNetIsRunning, ClawNetEnsureDaemonWithDownload, GetQQBotStatus, RestartQQBot, GetTelegramStatus, RestartTelegram, GetWeixinStatus, RestartWeixin, StopWeixin, StartWeixinQRLogin, WaitWeixinQRLogin, GetWeixinLocalMode, SetWeixinLocalMode, GetQQBotLocalMode, SetQQBotLocalMode, GetTelegramLocalMode, SetTelegramLocalMode } from "../wailsjs/go/main/App";
+import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, ClawNetIsRunning, ClawNetEnsureDaemonWithDownload, GetQQBotStatus, RestartQQBot, GetTelegramStatus, RestartTelegram, GetWeixinStatus, RestartWeixin, StopWeixin, StartWeixinQRLogin, WaitWeixinQRLogin, GetWeixinLocalMode, SetWeixinLocalMode, GetQQBotLocalMode, SetQQBotLocalMode, GetTelegramLocalMode, SetTelegramLocalMode, IsGossipAllowed } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
 import ReactMarkdown from 'react-markdown';
@@ -1505,6 +1505,7 @@ function App() {
     const [skills, setSkills] = useState<main.Skill[]>([]);
     const [showAddSkillModal, setShowAddSkillModal] = useState(false);
     const [showHelpMenu, setShowHelpMenu] = useState(false);
+    const [gossipAllowed, setGossipAllowed] = useState(true);
     const aiAssistant = useAIAssistant();
     const [showRemoteActivationModal, setShowRemoteActivationModal] = useState(false);
     const [pendingRemoteLaunchTool, setPendingRemoteLaunchTool] = useState<string>("");
@@ -1934,6 +1935,12 @@ function App() {
             });
         });
 
+        // Hub security policy: refresh gossip visibility when policy changes (Req 6.1)
+        IsGossipAllowed().then(setGossipAllowed).catch(() => {});
+        EventsOn("hub-security-policy-changed", () => {
+            IsGossipAllowed().then(setGossipAllowed).catch(() => {});
+        });
+
         return () => {
             EventsOff("env-log");
             EventsOff("env-check-done");
@@ -1949,6 +1956,7 @@ function App() {
             EventsOff("tool-installed");
             EventsOff("tool-updated");
             EventsOff("tools-install-done");
+            EventsOff("hub-security-policy-changed");
         };
     }, []);
 
@@ -3138,7 +3146,7 @@ ${instruction}`;
                     <div style={{ flex: 1 }}></div>
 
                     {/* Gossip icon — only visible in lite mode (in pro mode it's in the right panel) */}
-                    {isLiteMode && (
+                    {isLiteMode && gossipAllowed && (
                         <div
                             className={`sidebar-item ${navTab === 'gossip' ? 'active' : ''}`}
                             onClick={() => { switchTool('gossip'); }}
@@ -3244,7 +3252,7 @@ ${instruction}`;
                             </div>
                         </div>
                         <div style={{ display: 'flex', gap: '2px', width: '100%' }}>
-                            <div
+                            {gossipAllowed && (<div
                                 className={`sidebar-item ${navTab === 'gossip' ? 'active' : ''}`}
                                 onClick={() => switchTool('gossip')}
                                 style={{ flexDirection: 'column', padding: '6px 0', flex: 1, gap: '2px', borderLeft: 'none', borderBottom: navTab === 'gossip' ? '2px solid var(--primary-color)' : '2px solid transparent', justifyContent: 'center', borderRight: 'none' }}
@@ -3252,7 +3260,7 @@ ${instruction}`;
                             >
                                 <span className="sidebar-icon" style={{ margin: 0, fontSize: '1rem' }}>🗣️</span>
                                 <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{t("gossip")}</span>
-                            </div>
+                            </div>)}
                             <div style={{ flex: 1 }} />
                         </div>
                     </div>
@@ -3617,7 +3625,7 @@ ${instruction}`;
                             </div>
                         </div>
                     )}
-                    {navTab === 'gossip' && (
+                    {navTab === 'gossip' && gossipAllowed && (
                         <GossipPanel lang={lang} />
                     )}
                     {navTab === 'remote' && (

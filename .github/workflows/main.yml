@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - '[Vv]*'
+  workflow_dispatch:
+    inputs:
+      BRAND:
+        description: 'OEM brand identifier (empty = default MaClaw)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -21,6 +28,27 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute brand variables
+        shell: pwsh
+        run: |
+          $brand = "${{ inputs.BRAND }}"
+          if ($brand -ne "") {
+            # Brand display name mapping
+            $displayNames = @{ "qianxin" = "TigerClaw" }
+            $displayName = if ($displayNames.ContainsKey($brand)) { $displayNames[$brand] } else { $brand }
+            echo "BRAND_TAG=oem_${brand}" >> $env:GITHUB_ENV
+            echo "BRAND_ICON_ICO=assets/${brand}.ico" >> $env:GITHUB_ENV
+            echo "BRAND_ICON_PNG=assets/${brand}.png" >> $env:GITHUB_ENV
+            echo "BRAND_APP_NAME=${displayName}" >> $env:GITHUB_ENV
+            echo "BRAND_DISPLAY_NAME=${displayName}" >> $env:GITHUB_ENV
+          } else {
+            echo "BRAND_TAG=" >> $env:GITHUB_ENV
+            echo "BRAND_ICON_ICO=build/windows/icon.ico" >> $env:GITHUB_ENV
+            echo "BRAND_ICON_PNG=build/appicon.png" >> $env:GITHUB_ENV
+            echo "BRAND_APP_NAME=$env:APP_NAME" >> $env:GITHUB_ENV
+            echo "BRAND_DISPLAY_NAME=$env:APP_NAME" >> $env:GITHUB_ENV
+          }
 
       - uses: actions/setup-go@v5
         with:
@@ -81,16 +109,21 @@ jobs:
           $goversioninfo = Join-Path (go env GOPATH) "bin/goversioninfo.exe"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
+          # Determine build tags
+          $guiTags = "desktop,production"
+          if ($env:BRAND_TAG -ne "") { $guiTags = "$guiTags,$($env:BRAND_TAG)" }
+          $outName = $env:BRAND_APP_NAME
+
           # --- amd64 ---
-          & $goversioninfo -64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest.tmp -o gui/resource_windows_amd64.syso build/windows/versioninfo.json.tmp
+          & $goversioninfo -64 -icon $env:BRAND_ICON_ICO -manifest build/windows/wails.exe.manifest.tmp -o gui/resource_windows_amd64.syso build/windows/versioninfo.json.tmp
           $env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
-          go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "dist/${env:APP_NAME}_amd64.exe" ./gui/
+          go build -tags $guiTags -ldflags "-s -w -H windowsgui" -o "dist/${outName}_amd64.exe" ./gui/
           Remove-Item gui/resource_windows_amd64.syso
 
           # --- arm64 ---
-          & $goversioninfo -64 -arm -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest.tmp -o gui/resource_windows_arm64.syso build/windows/versioninfo.json.tmp
+          & $goversioninfo -64 -arm -icon $env:BRAND_ICON_ICO -manifest build/windows/wails.exe.manifest.tmp -o gui/resource_windows_arm64.syso build/windows/versioninfo.json.tmp
           $env:GOARCH='arm64'
-          go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o "dist/${env:APP_NAME}_arm64.exe" ./gui/
+          go build -tags $guiTags -ldflags "-s -w -H windowsgui" -o "dist/${outName}_arm64.exe" ./gui/
           Remove-Item gui/resource_windows_arm64.syso
 
           Remove-Item build/windows/wails.exe.manifest.tmp, build/windows/versioninfo.json.tmp
@@ -99,10 +132,18 @@ jobs:
         shell: pwsh
         run: |
           $ldflags = "-s -w -X main.version=$env:VERSION"
+          $tuiTags = ""
+          if ($env:BRAND_TAG -ne "") { $tuiTags = $env:BRAND_TAG }
+          $outPrefix = $env:BRAND_APP_NAME.ToLower()
           foreach ($arch in @('amd64','arm64')) {
             $env:GOOS='windows'; $env:GOARCH=$arch; $env:CGO_ENABLED='0'
-            go build -ldflags $ldflags -o "dist/maclaw-tui_${arch}.exe" ./tui/
-            go build -ldflags $ldflags -o "dist/maclaw-tool_${arch}.exe" ./cmd/maclaw-tool/
+            if ($tuiTags -ne "") {
+              go build -tags $tuiTags -ldflags $ldflags -o "dist/${outPrefix}-tui_${arch}.exe" ./tui/
+              go build -tags $tuiTags -ldflags $ldflags -o "dist/${outPrefix}-tool_${arch}.exe" ./cmd/maclaw-tool/
+            } else {
+              go build -ldflags $ldflags -o "dist/maclaw-tui_${arch}.exe" ./tui/
+              go build -ldflags $ldflags -o "dist/maclaw-tool_${arch}.exe" ./cmd/maclaw-tool/
+            }
           }
 
       - name: Install NSIS
@@ -115,34 +156,48 @@ jobs:
           $cfg = Get-Content wails.json -Raw | ConvertFrom-Json
           $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
           $root = (Get-Location).Path
-          & $nsis /DINFO_PROJECTNAME="$env:APP_NAME" `
-                  /DPRODUCT_EXECUTABLE="${env:APP_NAME}.exe" `
-                  /DINFO_PRODUCTNAME="$($cfg.info.productName)" `
+          $outName = $env:BRAND_APP_NAME
+          & $nsis /DINFO_PROJECTNAME="${outName}" `
+                  /DPRODUCT_EXECUTABLE="${outName}.exe" `
+                  /DINFO_PRODUCTNAME="$($env:BRAND_DISPLAY_NAME)" `
                   /DINFO_COMPANYNAME="$($cfg.info.companyName)" `
                   /DINFO_COPYRIGHT="$($cfg.info.copyright)" `
                   /DINFO_PRODUCTVERSION="$env:VERSION" `
-                  /DARG_WAILS_AMD64_BINARY="$root\dist\${env:APP_NAME}_amd64.exe" `
-                  /DARG_WAILS_ARM64_BINARY="$root\dist\${env:APP_NAME}_arm64.exe" `
+                  /DARG_WAILS_AMD64_BINARY="$root\dist\${outName}_amd64.exe" `
+                  /DARG_WAILS_ARM64_BINARY="$root\dist\${outName}_arm64.exe" `
                   build/windows/installer/multiarch.nsi
 
       - name: Create portable zip
         shell: pwsh
         run: |
-          Copy-Item "dist/${env:APP_NAME}_amd64.exe" "dist/${env:APP_NAME}.exe"
-          Copy-Item "dist/maclaw-tui_amd64.exe" "dist/maclaw-tui.exe"
-          Copy-Item "dist/maclaw-tool_amd64.exe" "dist/maclaw-tool.exe"
-          Compress-Archive -Path "dist/${env:APP_NAME}.exe","dist/maclaw-tui.exe","dist/maclaw-tool.exe" `
-            -DestinationPath "dist/${env:APP_NAME}-Windows-Portable.zip" -Force
+          $outName = $env:BRAND_APP_NAME
+          $outPrefix = $env:BRAND_APP_NAME.ToLower()
+          Copy-Item "dist/${outName}_amd64.exe" "dist/${outName}.exe"
+          if ($env:BRAND_TAG -ne "") {
+            Copy-Item "dist/${outPrefix}-tui_amd64.exe" "dist/${outPrefix}-tui.exe"
+            Copy-Item "dist/${outPrefix}-tool_amd64.exe" "dist/${outPrefix}-tool.exe"
+            Compress-Archive -Path "dist/${outName}.exe","dist/${outPrefix}-tui.exe","dist/${outPrefix}-tool.exe" `
+              -DestinationPath "dist/${outName}-Windows-Portable.zip" -Force
+          } else {
+            Copy-Item "dist/maclaw-tui_amd64.exe" "dist/maclaw-tui.exe"
+            Copy-Item "dist/maclaw-tool_amd64.exe" "dist/maclaw-tool.exe"
+            Compress-Archive -Path "dist/${outName}.exe","dist/maclaw-tui.exe","dist/maclaw-tool.exe" `
+              -DestinationPath "dist/${outName}-Windows-Portable.zip" -Force
+          }
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-artifacts
           path: |
-            dist/${{ env.APP_NAME }}-Setup.exe
-            dist/${{ env.APP_NAME }}-Windows-Portable.zip
-            dist/${{ env.APP_NAME }}_amd64.exe
-            dist/${{ env.APP_NAME }}_arm64.exe
+            dist/${{ env.BRAND_APP_NAME }}-Setup.exe
+            dist/${{ env.BRAND_APP_NAME }}-Windows-Portable.zip
+            dist/${{ env.BRAND_APP_NAME }}_amd64.exe
+            dist/${{ env.BRAND_APP_NAME }}_arm64.exe
+            dist/*-tui_amd64.exe
+            dist/*-tui_arm64.exe
+            dist/*-tool_amd64.exe
+            dist/*-tool_arm64.exe
             dist/maclaw-tui_amd64.exe
             dist/maclaw-tui_arm64.exe
             dist/maclaw-tool_amd64.exe
@@ -156,6 +211,24 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute brand variables
+        run: |
+          BRAND="${{ inputs.BRAND }}"
+          if [ -n "$BRAND" ]; then
+            # Brand display name mapping
+            declare -A DISPLAY_NAMES=( ["qianxin"]="TigerClaw" )
+            DISPLAY_NAME="${DISPLAY_NAMES[$BRAND]:-$BRAND}"
+            echo "BRAND_TAG=oem_${BRAND}" >> $GITHUB_ENV
+            echo "BRAND_ICON_PNG=assets/${BRAND}.png" >> $GITHUB_ENV
+            echo "BRAND_APP_NAME=${DISPLAY_NAME}" >> $GITHUB_ENV
+            echo "BRAND_DISPLAY_NAME=${DISPLAY_NAME}" >> $GITHUB_ENV
+          else
+            echo "BRAND_TAG=" >> $GITHUB_ENV
+            echo "BRAND_ICON_PNG=build/appicon.png" >> $GITHUB_ENV
+            echo "BRAND_APP_NAME=${APP_NAME}" >> $GITHUB_ENV
+            echo "BRAND_DISPLAY_NAME=${APP_NAME}" >> $GITHUB_ENV
+          fi
 
       - uses: actions/setup-go@v5
         with:
@@ -184,32 +257,46 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: '10.15'
         run: |
           mkdir -p dist build/bin
+          GUI_TAGS="desktop,production"
+          if [ -n "$BRAND_TAG" ]; then GUI_TAGS="${GUI_TAGS},${BRAND_TAG}"; fi
+          OUT_NAME="${BRAND_APP_NAME}"
           # amd64
           CGO_ENABLED=1 CGO_LDFLAGS="-weak_framework UniformTypeIdentifiers" \
             GOOS=darwin GOARCH=amd64 \
-            go build -tags desktop,production -o build/bin/${APP_NAME}_amd64 ./gui/
+            go build -tags "${GUI_TAGS}" -o "build/bin/${OUT_NAME}_amd64" ./gui/
           # arm64
           CGO_ENABLED=1 CGO_LDFLAGS="-weak_framework UniformTypeIdentifiers" \
             GOOS=darwin GOARCH=arm64 \
-            go build -tags desktop,production -o build/bin/${APP_NAME}_arm64 ./gui/
+            go build -tags "${GUI_TAGS}" -o "build/bin/${OUT_NAME}_arm64" ./gui/
 
       - name: Build TUI & maclaw-tool (darwin)
         run: |
           LDFLAGS="-s -w -X main.version=${VERSION}"
+          TUI_TAGS=""
+          if [ -n "$BRAND_TAG" ]; then TUI_TAGS="$BRAND_TAG"; fi
+          OUT_PREFIX=$(echo "$BRAND_APP_NAME" | tr '[:upper:]' '[:lower:]')
           for ARCH in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=darwin GOARCH=$ARCH \
-              go build -ldflags "$LDFLAGS" -o "dist/maclaw-tui_${ARCH}_darwin" ./tui/
-            CGO_ENABLED=0 GOOS=darwin GOARCH=$ARCH \
-              go build -ldflags "$LDFLAGS" -o "dist/maclaw-tool_${ARCH}_darwin" ./cmd/maclaw-tool/
+            if [ -n "$TUI_TAGS" ]; then
+              CGO_ENABLED=0 GOOS=darwin GOARCH=$ARCH \
+                go build -tags "$TUI_TAGS" -ldflags "$LDFLAGS" -o "dist/${OUT_PREFIX}-tui_${ARCH}_darwin" ./tui/
+              CGO_ENABLED=0 GOOS=darwin GOARCH=$ARCH \
+                go build -tags "$TUI_TAGS" -ldflags "$LDFLAGS" -o "dist/${OUT_PREFIX}-tool_${ARCH}_darwin" ./cmd/maclaw-tool/
+            else
+              CGO_ENABLED=0 GOOS=darwin GOARCH=$ARCH \
+                go build -ldflags "$LDFLAGS" -o "dist/maclaw-tui_${ARCH}_darwin" ./tui/
+              CGO_ENABLED=0 GOOS=darwin GOARCH=$ARCH \
+                go build -ldflags "$LDFLAGS" -o "dist/maclaw-tool_${ARCH}_darwin" ./cmd/maclaw-tool/
+            fi
           done
 
       - name: Generate .icns
         run: |
-          if [ -f build/appicon.png ]; then
+          ICON_SRC="${BRAND_ICON_PNG}"
+          if [ -f "$ICON_SRC" ]; then
             ICONSET=build/appicon.iconset
             mkdir -p "$ICONSET"
             for sz in 16 32 64 128 256 512 1024; do
-              sips -z $sz $sz build/appicon.png --out "$ICONSET/icon_${sz}x${sz}.png" > /dev/null
+              sips -z $sz $sz "$ICON_SRC" --out "$ICONSET/icon_${sz}x${sz}.png" > /dev/null
             done
             # Retina variants
             cp "$ICONSET/icon_32x32.png"   "$ICONSET/icon_16x16@2x.png"
@@ -225,19 +312,21 @@ jobs:
       - name: Create App Bundles & Universal Binary
         run: |
           IDENTIFIER="com.wails.MaClaw"
+          OUT_NAME="${BRAND_APP_NAME}"
+          DISPLAY_NAME="${BRAND_DISPLAY_NAME}"
           for ARCH in amd64 arm64; do
-            BUNDLE="dist/${APP_NAME}_${ARCH}.app"
+            BUNDLE="dist/${OUT_NAME}_${ARCH}.app"
             mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
-            cp "build/bin/${APP_NAME}_${ARCH}" "$BUNDLE/Contents/MacOS/${APP_NAME}"
-            chmod +x "$BUNDLE/Contents/MacOS/${APP_NAME}"
+            cp "build/bin/${OUT_NAME}_${ARCH}" "$BUNDLE/Contents/MacOS/${OUT_NAME}"
+            chmod +x "$BUNDLE/Contents/MacOS/${OUT_NAME}"
             [ -f build/AppIcon.icns ] && cp build/AppIcon.icns "$BUNDLE/Contents/Resources/"
             cat > "$BUNDLE/Contents/Info.plist" <<PEOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
             <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleName</key><string>${APP_NAME}</string>
-            <key>CFBundleExecutable</key><string>${APP_NAME}</string>
+            <key>CFBundleName</key><string>${DISPLAY_NAME}</string>
+            <key>CFBundleExecutable</key><string>${OUT_NAME}</string>
             <key>CFBundleIdentifier</key><string>${IDENTIFIER}</string>
             <key>CFBundleVersion</key><string>${VERSION}</string>
             <key>CFBundleShortVersionString</key><string>${VERSION}</string>
@@ -250,30 +339,31 @@ jobs:
             sed -i '' 's/^[[:space:]]*//' "$BUNDLE/Contents/Info.plist"
           done
           # Universal
-          UBUNDLE="dist/${APP_NAME}.app"
+          UBUNDLE="dist/${OUT_NAME}.app"
           mkdir -p "$UBUNDLE/Contents/MacOS" "$UBUNDLE/Contents/Resources"
-          lipo -create "build/bin/${APP_NAME}_amd64" "build/bin/${APP_NAME}_arm64" \
-            -output "$UBUNDLE/Contents/MacOS/${APP_NAME}"
-          cp "dist/${APP_NAME}_arm64.app/Contents/Info.plist" "$UBUNDLE/Contents/Info.plist"
-          cp -R "dist/${APP_NAME}_arm64.app/Contents/Resources/" "$UBUNDLE/Contents/Resources/"
+          lipo -create "build/bin/${OUT_NAME}_amd64" "build/bin/${OUT_NAME}_arm64" \
+            -output "$UBUNDLE/Contents/MacOS/${OUT_NAME}"
+          cp "dist/${OUT_NAME}_arm64.app/Contents/Info.plist" "$UBUNDLE/Contents/Info.plist"
+          cp -R "dist/${OUT_NAME}_arm64.app/Contents/Resources/" "$UBUNDLE/Contents/Resources/"
 
       - name: Create PKGs
         run: |
           IDENTIFIER="com.wails.MaClaw"
+          OUT_NAME="${BRAND_APP_NAME}"
           for ARCH in amd64 arm64 universal; do
             if [ "$ARCH" = "universal" ]; then
-              BUNDLE="dist/${APP_NAME}.app"
-              PKG_NAME="${APP_NAME}-Universal.pkg"
+              BUNDLE="dist/${OUT_NAME}.app"
+              PKG_NAME="${OUT_NAME}-Universal.pkg"
               SCRIPTS_DIR="build/scripts_universal"
             else
-              BUNDLE="dist/${APP_NAME}_${ARCH}.app"
-              PKG_NAME="${APP_NAME}-${ARCH}.pkg"
+              BUNDLE="dist/${OUT_NAME}_${ARCH}.app"
+              PKG_NAME="${OUT_NAME}-${ARCH}.pkg"
               [ "$ARCH" = "arm64" ] && SCRIPTS_DIR="build/scripts_arm64" || SCRIPTS_DIR="build/scripts_x64"
             fi
             TEMP_ROOT="build/pkg_root_${ARCH}"
             rm -rf "$TEMP_ROOT"
             mkdir -p "$TEMP_ROOT/Applications"
-            cp -R "$BUNDLE" "$TEMP_ROOT/Applications/${APP_NAME}.app"
+            cp -R "$BUNDLE" "$TEMP_ROOT/Applications/${OUT_NAME}.app"
             chmod +x "$SCRIPTS_DIR/preinstall" "$SCRIPTS_DIR/postinstall"
             pkgbuild --root "$TEMP_ROOT" --identifier "$IDENTIFIER" --version "$VERSION" \
               --install-location "/" --scripts "$SCRIPTS_DIR" "dist/${PKG_NAME}"
@@ -285,9 +375,13 @@ jobs:
         with:
           name: macos-artifacts
           path: |
-            dist/${{ env.APP_NAME }}-Universal.pkg
-            dist/${{ env.APP_NAME }}-amd64.pkg
-            dist/${{ env.APP_NAME }}-arm64.pkg
+            dist/${{ env.BRAND_APP_NAME }}-Universal.pkg
+            dist/${{ env.BRAND_APP_NAME }}-amd64.pkg
+            dist/${{ env.BRAND_APP_NAME }}-arm64.pkg
+            dist/*-tui_amd64_darwin
+            dist/*-tui_arm64_darwin
+            dist/*-tool_amd64_darwin
+            dist/*-tool_arm64_darwin
             dist/maclaw-tui_amd64_darwin
             dist/maclaw-tui_arm64_darwin
             dist/maclaw-tool_amd64_darwin
@@ -301,6 +395,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute brand variables
+        run: |
+          BRAND="${{ inputs.BRAND }}"
+          if [ -n "$BRAND" ]; then
+            declare -A DISPLAY_NAMES=( ["qianxin"]="TigerClaw" )
+            DISPLAY_NAME="${DISPLAY_NAMES[$BRAND]:-$BRAND}"
+            echo "BRAND_TAG=oem_${BRAND}" >> $GITHUB_ENV
+            echo "BRAND_ICON_PNG=assets/${BRAND}.png" >> $GITHUB_ENV
+            echo "BRAND_APP_NAME=${DISPLAY_NAME}" >> $GITHUB_ENV
+            echo "BRAND_DISPLAY_NAME=${DISPLAY_NAME}" >> $GITHUB_ENV
+          else
+            echo "BRAND_TAG=" >> $GITHUB_ENV
+            echo "BRAND_ICON_PNG=build/appicon.png" >> $GITHUB_ENV
+            echo "BRAND_APP_NAME=${APP_NAME}" >> $GITHUB_ENV
+            echo "BRAND_DISPLAY_NAME=${APP_NAME}" >> $GITHUB_ENV
+          fi
 
       - uses: actions/setup-go@v5
         with:
@@ -318,11 +429,13 @@ jobs:
           sudo apt-get update
           # Try 4.0 first (Ubuntu 22.04), fall back to 4.1 (Ubuntu 24.04+)
           if sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev 2>/dev/null; then
-            echo "WEBKIT_TAGS=desktop,production" >> $GITHUB_ENV
+            TAGS="desktop,production"
           else
             sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
-            echo "WEBKIT_TAGS=desktop,production,webkit2_41" >> $GITHUB_ENV
+            TAGS="desktop,production,webkit2_41"
           fi
+          if [ -n "$BRAND_TAG" ]; then TAGS="${TAGS},${BRAND_TAG}"; fi
+          echo "WEBKIT_TAGS=${TAGS}" >> $GITHUB_ENV
 
       - name: Extract version from wails.json
         run: |
@@ -338,47 +451,60 @@ jobs:
       - name: Build Linux GUI (amd64)
         run: |
           mkdir -p dist build/bin
+          OUT_NAME="${BRAND_APP_NAME}"
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-            go build -tags "${WEBKIT_TAGS}" -o "build/bin/${APP_NAME}_amd64_linux" ./gui/
+            go build -tags "${WEBKIT_TAGS}" -o "build/bin/${OUT_NAME}_amd64_linux" ./gui/
 
       - name: Build TUI & maclaw-tool (linux)
         run: |
           LDFLAGS="-s -w -X main.version=${VERSION}"
+          TUI_TAGS=""
+          if [ -n "$BRAND_TAG" ]; then TUI_TAGS="$BRAND_TAG"; fi
+          OUT_PREFIX=$(echo "$BRAND_APP_NAME" | tr '[:upper:]' '[:lower:]')
           for ARCH in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH \
-              go build -ldflags "$LDFLAGS" -o "dist/maclaw-tui_${ARCH}_linux" ./tui/
-            CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH \
-              go build -ldflags "$LDFLAGS" -o "dist/maclaw-tool_${ARCH}_linux" ./cmd/maclaw-tool/
+            if [ -n "$TUI_TAGS" ]; then
+              CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH \
+                go build -tags "$TUI_TAGS" -ldflags "$LDFLAGS" -o "dist/${OUT_PREFIX}-tui_${ARCH}_linux" ./tui/
+              CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH \
+                go build -tags "$TUI_TAGS" -ldflags "$LDFLAGS" -o "dist/${OUT_PREFIX}-tool_${ARCH}_linux" ./cmd/maclaw-tool/
+            else
+              CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH \
+                go build -ldflags "$LDFLAGS" -o "dist/maclaw-tui_${ARCH}_linux" ./tui/
+              CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH \
+                go build -ldflags "$LDFLAGS" -o "dist/maclaw-tool_${ARCH}_linux" ./cmd/maclaw-tool/
+            fi
           done
 
       - name: Create AppImage (amd64)
         run: |
+          OUT_NAME="${BRAND_APP_NAME}"
+          OUT_LOWER=$(echo "$OUT_NAME" | tr '[:upper:]' '[:lower:]')
           # Prepare AppDir
           APP_DIR="build/linux/AppDir_amd64"
           rm -rf "$APP_DIR"
           mkdir -p "$APP_DIR/usr/bin"
           mkdir -p "$APP_DIR/usr/share/icons/hicolor/512x512/apps"
-          cp "build/bin/${APP_NAME}_amd64_linux" "$APP_DIR/usr/bin/maclaw"
-          cp build/appicon.png "$APP_DIR/maclaw.png"
-          cp build/appicon.png "$APP_DIR/.DirIcon"
+          cp "build/bin/${OUT_NAME}_amd64_linux" "$APP_DIR/usr/bin/${OUT_LOWER}"
+          cp "${BRAND_ICON_PNG}" "$APP_DIR/${OUT_LOWER}.png"
+          cp "${BRAND_ICON_PNG}" "$APP_DIR/.DirIcon"
 
           # Desktop file (no leading spaces allowed)
-          cat > "$APP_DIR/maclaw.desktop" << 'DEOF'
+          cat > "$APP_DIR/${OUT_LOWER}.desktop" << DEOF
           [Desktop Entry]
-          Name=MaClaw
-          Exec=maclaw
-          Icon=maclaw
+          Name=${BRAND_DISPLAY_NAME}
+          Exec=${OUT_LOWER}
+          Icon=${OUT_LOWER}
           Type=Application
           Categories=Development;
           DEOF
-          sed -i 's/^[[:space:]]*//' "$APP_DIR/maclaw.desktop"
+          sed -i 's/^[[:space:]]*//' "$APP_DIR/${OUT_LOWER}.desktop"
 
           # AppRun (shebang must be at column 0)
-          cat > "$APP_DIR/AppRun" << 'REOF'
+          cat > "$APP_DIR/AppRun" << REOF
           #!/bin/bash
-          HERE="$(dirname "$(readlink -f "${0}")")"
-          export PATH="${HERE}/usr/bin:${PATH}"
-          exec maclaw "$@"
+          HERE="\$(dirname "\$(readlink -f "\${0}")")"
+          export PATH="\${HERE}/usr/bin:\${PATH}"
+          exec ${OUT_LOWER} "\$@"
           REOF
           sed -i 's/^[[:space:]]*//' "$APP_DIR/AppRun"
           chmod +x "$APP_DIR/AppRun"
@@ -387,14 +513,18 @@ jobs:
           wget -q -O appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APP_DIR" \
-            "dist/MaClaw-${VERSION}-x86_64.AppImage"
+            "dist/${OUT_NAME}-${VERSION}-x86_64.AppImage"
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts
           path: |
-            dist/MaClaw-*-x86_64.AppImage
+            dist/${{ env.BRAND_APP_NAME }}-*-x86_64.AppImage
+            dist/*-tui_amd64_linux
+            dist/*-tui_arm64_linux
+            dist/*-tool_amd64_linux
+            dist/*-tool_arm64_linux
             dist/maclaw-tui_amd64_linux
             dist/maclaw-tui_arm64_linux
             dist/maclaw-tool_amd64_linux

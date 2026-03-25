@@ -31,6 +31,7 @@ type HubSkillMeta struct {
 	RequiredEnv        []string `json:"required_env,omitempty"`        // 需要的环境变量/API Key
 	Platforms          []string `json:"platforms,omitempty"`           // "windows","linux","macos"; empty = universal
 	RequiresGUI        bool     `json:"requires_gui,omitempty"`        // Linux 下是否需要 GUI 环境
+	SourceURL          string   `json:"source_url,omitempty"`          // 远程导入来源 URL
 }
 
 // SkillRating 记录单个 MaClaw 对 Skill 的评分。

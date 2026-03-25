@@ -1,5 +1,5 @@
-//go:build linux
-// +build linux
+//go:build linux && !oem_qianxin
+// +build linux,!oem_qianxin
 
 package main
 

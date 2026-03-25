@@ -21,6 +21,9 @@ type TUISession struct {
 	Pipeline      *remote.OutputPipeline
 	CreatedAt     time.Time
 	ExitCode      *int
+	LastOutputAt  time.Time            // 最后一次收到输出的时间
+	StallState    remote.StallState    // 停滞检测状态
+	NudgeCount    int                  // 已发送的 nudge 次数
 }
 
 // TUISessionManager 管理 TUI 端的本地会话生命周期。
@@ -183,13 +186,15 @@ func (m *TUISessionManager) runOutputLoop(s *TUISession) {
 			continue
 		}
 		lines := splitOutputLines(chunk)
+		now := time.Now()
 		s.mu.Lock()
 		s.PreviewLines = append(s.PreviewLines, lines...)
 		// 限制预览行数
 		if len(s.PreviewLines) > 1000 {
 			s.PreviewLines = s.PreviewLines[len(s.PreviewLines)-1000:]
 		}
-		s.Summary.UpdatedAt = time.Now().Unix()
+		s.LastOutputAt = now
+		s.Summary.UpdatedAt = now.Unix()
 		s.mu.Unlock()
 
 		m.mu.RLock()

@@ -27,6 +27,7 @@ func (r *stubUserRepo) GetByEmail(_ context.Context, _ string) (*store.User, err
 }
 func (r *stubUserRepo) List(_ context.Context) ([]*store.User, error) { return nil, nil }
 func (r *stubUserRepo) DeleteByEmail(_ context.Context, _ string) error { return nil }
+func (r *stubUserRepo) UpdateSmartRoute(_ context.Context, _ string, _ bool) error { return nil }
 
 func TestNewReturnsNotifierWithNilBot(t *testing.T) {
 	n := New("", "", &stubUserRepo{}, nil, nil)
@@ -48,7 +49,7 @@ func TestResolveEmail(t *testing.T) {
 	repo := &stubUserRepo{users: map[string]*store.User{
 		"u1": {ID: "u1", Email: "alice@example.com"},
 	}}
-	n := &Notifier{users: repo, idCache: make(map[string]string), oidCache: make(map[string]string), pending: make(map[string]*pendingBind)}
+	n := &Notifier{users: repo, idCache: make(map[string]string), oidCache: make(map[string]BindingInfo), pending: make(map[string]*pendingBind)}
 
 	email := n.resolveEmail("u1")
 	if email != "alice@example.com" {
@@ -129,7 +130,7 @@ func TestOnSessionSummarySkipsRunning(t *testing.T) {
 	repo := &stubUserRepo{users: map[string]*store.User{
 		"u1": {ID: "u1", Email: "test@example.com"},
 	}}
-	n := &Notifier{users: repo, idCache: make(map[string]string), oidCache: make(map[string]string), pending: make(map[string]*pendingBind)}
+	n := &Notifier{users: repo, idCache: make(map[string]string), oidCache: make(map[string]BindingInfo), pending: make(map[string]*pendingBind)}
 	// bot is nil so sendToUser will fail gracefully — that's fine for this test.
 
 	n.onSessionSummary(session.Event{

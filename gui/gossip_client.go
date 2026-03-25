@@ -146,8 +146,23 @@ func (c *GossipClient) requireWrite() (base, mid string, err error) {
 	return base, mid, nil
 }
 
+// errGossipForbidden is returned when gossip operations are blocked by Hub security policy.
+var errGossipForbidden = fmt.Errorf("Gossip 功能已被管理员禁止")
+
+// checkGossipPermission returns an error if gossip is disallowed by Hub security policy (Req 6.4).
+func (c *GossipClient) checkGossipPermission() error {
+	if c.app != nil && !c.app.isGossipAllowed() {
+		return errGossipForbidden
+	}
+	return nil
+}
+
 // PublishPost 发布帖子。POST /api/gossip/publish
 func (c *GossipClient) PublishPost(ctx context.Context, content, category string) (*GossipPublishResult, error) {
+	if err := c.checkGossipPermission(); err != nil {
+		return nil, err
+	}
+
 	base, mid, err := c.requireWrite()
 	if err != nil {
 		return nil, err
@@ -216,6 +231,10 @@ func (c *GossipClient) BrowsePosts(ctx context.Context, page int) (*GossipBrowse
 
 // AddComment 提交评论。POST /api/gossip/comment
 func (c *GossipClient) AddComment(ctx context.Context, postID, content string, rating int) (*GossipCommentResult, error) {
+	if err := c.checkGossipPermission(); err != nil {
+		return nil, err
+	}
+
 	base, mid, err := c.requireWrite()
 	if err != nil {
 		return nil, err
@@ -255,6 +274,10 @@ func (c *GossipClient) AddComment(ctx context.Context, postID, content string, r
 
 // RatePost 评分帖子。POST /api/gossip/rate
 func (c *GossipClient) RatePost(ctx context.Context, postID string, rating int) error {
+	if err := c.checkGossipPermission(); err != nil {
+		return err
+	}
+
 	base, mid, err := c.requireWrite()
 	if err != nil {
 		return err

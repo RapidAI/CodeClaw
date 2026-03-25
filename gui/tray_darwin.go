@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/RapidAI/CodeClaw/corelib/brand"
 	"github.com/energye/systray"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -36,7 +37,7 @@ func setupTrayTahoe(app *App, appOptions *options.App) {
 			origStartup(ctx)
 		}
 
-		t := trayTranslations["en"]
+		t := trayTranslations()["en"]
 
 		setupTahoeTray(icon, t["title"], t["show"], t["quit"],
 			func() {
@@ -50,9 +51,10 @@ func setupTrayTahoe(app *App, appOptions *options.App) {
 		)
 
 		UpdateTrayMenu = func(lang string) {
-			t, ok := trayTranslations[lang]
+			tr := trayTranslations()
+			t, ok := tr[lang]
 			if !ok {
-				t = trayTranslations["en"]
+				t = tr["en"]
 			}
 			updateTahoeTrayMenu(t["title"], t["show"], t["quit"])
 		}
@@ -93,7 +95,7 @@ func setupTrayPreTahoe(app *App, appOptions *options.App) {
 			}()
 
 			systray.SetIcon(icon)
-			systray.SetTooltip("MaClaw Dashboard")
+			systray.SetTooltip(brand.Current().TrayTooltip)
 			systray.CreateMenu()
 
 			mShow := systray.AddMenuItem("Show Main Window", "Show Main Window")
@@ -101,9 +103,10 @@ func setupTrayPreTahoe(app *App, appOptions *options.App) {
 			mQuit := systray.AddMenuItem("Quit", "Quit Application")
 
 			UpdateTrayMenu = func(lang string) {
-				t, ok := trayTranslations[lang]
+				tr := trayTranslations()
+				t, ok := tr[lang]
 				if !ok {
-					t = trayTranslations["en"]
+					t = tr["en"]
 				}
 				systray.SetTooltip(t["title"])
 				mShow.SetTitle(t["show"])

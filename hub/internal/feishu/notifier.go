@@ -40,6 +40,12 @@ func newLarkBot(appID, appSecret string) *lark.Bot {
 
 const openIDMapKey = "feishu_openid_map"
 
+// BindingInfo holds the open_id and optional mobile for a Feishu binding.
+type BindingInfo struct {
+	OpenID string `json:"open_id"`
+	Mobile string `json:"mobile,omitempty"`
+}
+
 // Mailer is the subset of mail.Service used by the Feishu notifier.
 type Mailer interface {
 	Send(ctx context.Context, to []string, subject string, body string) error
@@ -95,7 +101,7 @@ type Notifier struct {
 
 	// cache email → open_id for personal Feishu users.
 	oidMu    sync.RWMutex
-	oidCache map[string]string // email → open_id
+	oidCache map[string]BindingInfo // email → BindingInfo
 
 	// active session context per user (open_id → session_id).
 	activeMu      sync.RWMutex
@@ -160,7 +166,7 @@ func New(appID, appSecret string, users store.UserRepository, system store.Syste
 		system:          system,
 		mailer:          mailer,
 		idCache:         make(map[string]string),
-		oidCache:        make(map[string]string),
+		oidCache:        make(map[string]BindingInfo),
 		activeSession:   make(map[string]string),
 		previewLastPush: make(map[string]time.Time),
 		previewBuf:      make(map[string][]string),
@@ -268,22 +274,33 @@ func (n *Notifier) Bot() *lark.Bot {
 }
 
 // BindOpenID stores an email → open_id mapping for personal Feishu users.
-func (n *Notifier) BindOpenID(email, openID string) {
+func (n *Notifier) BindOpenID(email, openID, mobile string) {
 	if email == "" || openID == "" {
 		return
 	}
 	n.oidMu.Lock()
-	n.oidCache[email] = openID
+	n.oidCache[email] = BindingInfo{OpenID: openID, Mobile: mobile}
 	n.oidMu.Unlock()
 	n.saveOpenIDMap()
 	log.Printf("[feishu] bound open_id for email=%s", email)
 }
 
-// GetOpenIDMap returns a copy of the current email→open_id bindings.
+// GetOpenIDMap returns a copy of the current email→open_id bindings (legacy).
 func (n *Notifier) GetOpenIDMap() map[string]string {
 	n.oidMu.RLock()
 	defer n.oidMu.RUnlock()
 	m := make(map[string]string, len(n.oidCache))
+	for k, v := range n.oidCache {
+		m[k] = v.OpenID
+	}
+	return m
+}
+
+// GetBindingsMap returns a copy of the current email→BindingInfo bindings.
+func (n *Notifier) GetBindingsMap() map[string]BindingInfo {
+	n.oidMu.RLock()
+	defer n.oidMu.RUnlock()
+	m := make(map[string]BindingInfo, len(n.oidCache))
 	for k, v := range n.oidCache {
 		m[k] = v
 	}
@@ -306,14 +323,30 @@ func (n *Notifier) loadOpenIDMap() {
 	if err != nil || raw == "" {
 		return
 	}
-	var m map[string]string
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+	// Try new format first: map[string]BindingInfo (values are JSON objects).
+	var m map[string]BindingInfo
+	if err := json.Unmarshal([]byte(raw), &m); err == nil {
+		n.oidMu.Lock()
+		n.oidCache = m
+		n.oidMu.Unlock()
+		log.Printf("[feishu] loaded %d open_id binding(s)", len(m))
 		return
 	}
+	// Fallback: old format map[string]string (email → open_id).
+	var legacy map[string]string
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		return
+	}
+	migrated := make(map[string]BindingInfo, len(legacy))
+	for email, oid := range legacy {
+		migrated[email] = BindingInfo{OpenID: oid}
+	}
 	n.oidMu.Lock()
-	n.oidCache = m
+	n.oidCache = migrated
 	n.oidMu.Unlock()
-	log.Printf("[feishu] loaded %d open_id binding(s)", len(m))
+	log.Printf("[feishu] migrated %d open_id binding(s) from legacy format", len(migrated))
+	// Persist in new format.
+	n.saveOpenIDMap()
 }
 
 func (n *Notifier) saveOpenIDMap() {
@@ -394,7 +427,7 @@ func (n *Notifier) clearDedup(sessionID string) {
 func (n *Notifier) resolveOpenID(email string) string {
 	n.oidMu.RLock()
 	defer n.oidMu.RUnlock()
-	return n.oidCache[email]
+	return n.oidCache[email].OpenID
 }
 
 // ---------------------------------------------------------------------------

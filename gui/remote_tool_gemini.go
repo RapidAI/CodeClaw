@@ -38,13 +38,9 @@ func (a *GeminiAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 		return CommandSpec{}, fmt.Errorf("gemini is not installed")
 	}
 
-	// Ensure Gemini CLI's first-run settings are pre-configured
-	// so it doesn't block with interactive prompts.
-	if err := ensureGeminiOnboardingComplete(a.app); err != nil {
-		if a.app != nil {
-			a.app.log(fmt.Sprintf("[gemini-adapter] onboarding pre-check warning: %v", err))
-		}
-	}
+	// NOTE: Gemini onboarding (theme, auth type, UI flags) is handled by
+	// ensureToolOnboardingComplete in remote_session_manager.go before
+	// BuildCommand is called.  No need to call it again here.
 
 	// In original (Google native) mode, don't inject model env or args
 	// so Gemini CLI uses its own Google OAuth login and default settings.

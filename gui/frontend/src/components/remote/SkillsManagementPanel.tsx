@@ -12,6 +12,7 @@ import {
     ExportLearnedSkillsZip,
     ImportLearnedSkillsZip,
     UploadNLSkillToMarket,
+    DiagnoseSkillFiles,
 } from "../../../wailsjs/go/main/App";
 
 interface NLSkillStep {
@@ -63,6 +64,13 @@ type Props = {
     translate: (key: string) => string;
 };
 
+interface SkillDiagEntry {
+    dir: string;
+    name: string;
+    ok: boolean;
+    reason?: string;
+}
+
 const emptySkill: NLSkillDefinition = {
     name: "",
     description: "",
@@ -113,12 +121,22 @@ export function SkillsManagementPanel({ translate }: Props) {
     const [importReport, setImportReport] = useState<{ restored: number; skipped: number; failed: number; details: string[] } | null>(null);
     const [uploadingSkill, setUploadingSkill] = useState<string | null>(null);
 
+    // Diagnose state
+    const [diagEntries, setDiagEntries] = useState<SkillDiagEntry[] | null>(null);
+    const [diagLoading, setDiagLoading] = useState(false);
+
     const loadData = useCallback(async () => {
         setLoading(true);
         setError("");
         try {
             const skillList = await ListNLSkills();
-            const list = Array.isArray(skillList) ? skillList : [];
+            const raw = Array.isArray(skillList) ? skillList : [];
+            // Normalize: ensure triggers/steps are always arrays (Go nil → JSON null)
+            const list = raw.map((s: NLSkillDefinition) => ({
+                ...s,
+                triggers: s.triggers || [],
+                steps: s.steps || [],
+            }));
             setSkills(list);
             // Clean up learned selection: remove names no longer present
             const learnedNames = new Set(
@@ -470,6 +488,22 @@ export function SkillsManagementPanel({ translate }: Props) {
                             {skills.length} {translate("skillsRegistered") || "个已注册 Skill"}
                         </span>
                         <div style={{ display: "flex", gap: "6px" }}>
+                            <button className="btn-secondary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={() => { loadData(); setDiagEntries(null); }} disabled={loading}>
+                                {loading ? "刷新中..." : "🔄 刷新"}
+                            </button>
+                            <button className="btn-secondary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={async () => {
+                                setDiagLoading(true);
+                                try {
+                                    const res = await DiagnoseSkillFiles();
+                                    setDiagEntries(Array.isArray(res) ? res : []);
+                                } catch (err) {
+                                    setDiagEntries([{ dir: "error", name: "", ok: false, reason: String(err) }]);
+                                } finally {
+                                    setDiagLoading(false);
+                                }
+                            }} disabled={diagLoading}>
+                                {diagLoading ? "诊断中..." : "🔍 诊断"}
+                            </button>
                             <button className="btn-secondary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={handleImportZip} disabled={busy || importing}>
                                 {importing ? "导入中..." : "📦 上传 Skill 包"}
                             </button>
@@ -478,6 +512,27 @@ export function SkillsManagementPanel({ translate }: Props) {
                             </button>
                         </div>
                     </div>
+
+                    {/* Diagnose results */}
+                    {diagEntries && diagEntries.length > 0 && (
+                        <div style={{ border: "1px solid #e1e4e8", borderRadius: "6px", padding: "10px", background: "#f9fafb", fontSize: "0.76rem" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                                <span style={{ fontWeight: 500, color: "#24292e" }}>📋 Skill 目录诊断结果</span>
+                                <button className="btn-secondary" style={{ fontSize: "0.7rem", padding: "2px 8px" }} onClick={() => setDiagEntries(null)}>关闭</button>
+                            </div>
+                            {diagEntries.map((d, i) => (
+                                <div key={i} style={{ display: "flex", gap: "6px", alignItems: "baseline", padding: "3px 0", borderTop: i > 0 ? "1px solid #eaecef" : undefined }}>
+                                    <span>{d.ok ? "✅" : "❌"}</span>
+                                    <span style={{ fontWeight: 500, minWidth: "100px" }}>{d.dir}</span>
+                                    {d.ok ? (
+                                        <span style={{ color: "#22863a" }}>加载成功{d.name ? ` → ${d.name}` : ""}</span>
+                                    ) : (
+                                        <span style={{ color: "#cb2431" }}>{d.reason}</span>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
 
                     {/* Loading */}
                     {loading && (

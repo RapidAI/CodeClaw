@@ -24,6 +24,44 @@ var CoreToolNames = map[string]bool{
 	"call_mcp_tool": true, "run_skill": true,
 	"screenshot": true, "send_file": true,
 	"memory": true,
+	"web_search": true, "web_fetch": true,
+}
+
+// CodingSessionToolNames lists tools that require a coding LLM session provider.
+// When the coding LLM is not configured (simple mode), these tools should be
+// filtered out since they would be non-functional.
+var CodingSessionToolNames = map[string]bool{
+	"create_session":    true,
+	"list_sessions":     true,
+	"send_input":        true,
+	"get_session_output": true,
+	"get_session_events": true,
+	"interrupt_session":  true,
+	"kill_session":       true,
+	"send_and_observe":   true,
+	"control_session":    true,
+	"list_providers":     true,
+	"parallel_execute":   true,
+	"recommend_tool":     true,
+	"create_template":    true,
+	"list_templates":     true,
+	"launch_template":    true,
+}
+
+// IsCodingSessionTool returns true if the tool requires a coding LLM session.
+func IsCodingSessionTool(name string) bool {
+	return CodingSessionToolNames[name]
+}
+
+// FilterCodingTools removes coding session tools from the tool list.
+func FilterCodingTools(tools []map[string]interface{}) []map[string]interface{} {
+	filtered := make([]map[string]interface{}, 0, len(tools))
+	for _, t := range tools {
+		if !CodingSessionToolNames[ExtractToolName(t)] {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
 }
 
 // BuiltinToolNames is the complete set of all builtin tool names.
@@ -47,6 +85,7 @@ var BuiltinToolNames = map[string]bool{
 	"switch_llm_provider": true,
 	"send_and_observe": true, "control_session": true, "manage_config": true,
 	"query_audit_log": true,
+	"web_search": true, "web_fetch": true,
 }
 
 // IsBuiltinToolName returns true if the tool name is a known builtin tool (static fallback).

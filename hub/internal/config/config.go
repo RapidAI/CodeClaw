@@ -71,6 +71,12 @@ type Config struct {
 		Dir string `yaml:"dir"` // path to openclaw-bridge directory
 	} `yaml:"bridge"`
 
+	ContentAudit struct {
+		ProgramPath    string `yaml:"program_path"`
+		TimeoutSeconds int    `yaml:"timeout_seconds"`
+		TimeoutPolicy  string `yaml:"timeout_policy"` // "block" or "pass"
+	} `yaml:"content_audit"`
+
 	// TLS enables HTTPS/WSS on the same listen port (default 9399).
 	// When enabled with auto_generate, Hub creates a self-signed certificate
 	// on first start. Clients must use https:// URLs and accept self-signed certs.
@@ -141,6 +147,9 @@ func Default() *Config {
 	cfg.Logging.Dir = "./data/logs"
 
 	cfg.Bridge.Dir = "./openclaw-bridge"
+
+	cfg.ContentAudit.TimeoutSeconds = 30
+	cfg.ContentAudit.TimeoutPolicy = "block"
 
 	cfg.TLS.Enabled = false
 	cfg.TLS.CertFile = "./data/tls/hub.crt"

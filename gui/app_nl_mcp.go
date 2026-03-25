@@ -576,6 +576,20 @@ func (r *MCPRegistry) UnregisterLocal(serverID string) error {
 	return fmt.Errorf("local MCP server %s not found", serverID)
 }
 
+// SetLocalAutoStart updates the AutoStart flag for a local MCP server entry.
+func (r *MCPRegistry) SetLocalAutoStart(serverID string, enabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	servers := r.loadLocalServers()
+	for i := range servers {
+		if servers[i].ID == serverID {
+			servers[i].AutoStart = enabled
+			return r.saveLocalServers(servers)
+		}
+	}
+	return fmt.Errorf("local MCP server %s not found", serverID)
+}
+
 // ListLocalServers returns all local MCP server entries.
 func (r *MCPRegistry) ListLocalServers() []LocalMCPServerEntry {
 	r.mu.RLock()
@@ -624,6 +638,23 @@ func (a *App) SyncLocalMCPServers() error {
 		return fmt.Errorf("local MCP manager not initialized")
 	}
 	a.localMCPManager.SyncFromConfig()
+	return nil
+}
+
+// SetLocalMCPAutoStart sets the AutoStart flag for a local MCP server and
+// triggers a sync. When enabled=true the server starts immediately and will
+// auto-start on future app launches. When enabled=false the server is stopped.
+func (a *App) SetLocalMCPAutoStart(serverID string, enabled bool) error {
+	if a.mcpRegistry == nil {
+		return fmt.Errorf("MCP registry not initialized")
+	}
+	if err := a.mcpRegistry.SetLocalAutoStart(serverID, enabled); err != nil {
+		return err
+	}
+	// Sync immediately so the server starts/stops now.
+	if a.localMCPManager != nil {
+		a.localMCPManager.SyncFromConfig()
+	}
 	return nil
 }
 

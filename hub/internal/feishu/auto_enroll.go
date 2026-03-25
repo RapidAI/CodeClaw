@@ -68,7 +68,7 @@ type AutoEnroller struct {
 	bot func() *lark.Bot
 
 	// binder persists the email↔open_id mapping in the Notifier.
-	binder func(email, openID string)
+	binder func(email, openID, mobile string)
 
 	// welcomeSender sends a welcome message to the user after enrollment.
 	// If nil, no welcome message is sent.
@@ -82,7 +82,7 @@ type AutoEnroller struct {
 }
 
 // NewAutoEnroller creates an AutoEnroller. Starts disabled.
-func NewAutoEnroller(botFunc func() *lark.Bot, binder func(email, openID string)) *AutoEnroller {
+func NewAutoEnroller(botFunc func() *lark.Bot, binder func(email, openID, mobile string)) *AutoEnroller {
 	return &AutoEnroller{
 		bot:      botFunc,
 		binder:   binder,
@@ -212,7 +212,7 @@ func (ae *AutoEnroller) AddToFeishuOrg(ctx context.Context, email, displayName, 
 	}
 	if existingOpenID != "" {
 		log.Printf("[feishu/auto-enroll] user %s already in Feishu org (open_id=%s), binding only", email, existingOpenID)
-		ae.binder(email, existingOpenID)
+		ae.binder(email, existingOpenID, mobile)
 		ae.trySendWelcome(existingOpenID)
 		return &AutoEnrollResult{Status: "ok", Message: "already in org", OpenID: existingOpenID}, nil
 	}
@@ -250,7 +250,7 @@ func (ae *AutoEnroller) AddToFeishuOrg(ctx context.Context, email, displayName, 
 		openID, createErr := ae.createFeishuUser(ctx, token, email, displayName, deptID, mobile)
 		if createErr == nil {
 			if openID != "" {
-				ae.binder(email, openID)
+				ae.binder(email, openID, mobile)
 				ae.trySendWelcome(openID)
 				log.Printf("[feishu/auto-enroll] ✅ added %s to Feishu org (open_id=%s, dept=%s, attempt=%d)", email, openID, deptID, attempt)
 				return &AutoEnrollResult{Status: "ok", OpenID: openID}, nil
@@ -269,7 +269,7 @@ func (ae *AutoEnroller) AddToFeishuOrg(ctx context.Context, email, displayName, 
 		if strings.Contains(errMsg, "already exist") || strings.Contains(errMsg, "40003") {
 			log.Printf("[feishu/auto-enroll] user %s may already exist, attempting lookup", email)
 			if oid, lookupErr := ae.lookupUserByEmail(ctx, token, email); lookupErr == nil && oid != "" {
-				ae.binder(email, oid)
+				ae.binder(email, oid, mobile)
 				ae.trySendWelcome(oid)
 				return &AutoEnrollResult{Status: "ok", Message: "already in org", OpenID: oid}, nil
 			}

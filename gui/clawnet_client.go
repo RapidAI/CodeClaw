@@ -206,6 +206,35 @@ func (c *ClawNetClient) EnsureDaemonWithProgress(emitProgress func(stage string,
 		return nil
 	}
 
+	// --- Cross-process file lock ---
+	// Only one process at a time may attempt to start the daemon.
+	// If another process holds the lock, wait for it to finish and then
+	// just check if the daemon is now reachable.
+	lockFile, lockErr := acquireGUIDaemonLock()
+	if lockErr != nil {
+		// Another process is starting the daemon — wait for it.
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if c.ping() {
+				c.mu.Lock()
+				c.running = true
+				c.mu.Unlock()
+				return nil
+			}
+			time.Sleep(1 * time.Second)
+		}
+		return fmt.Errorf("another process is starting clawnet daemon but it did not become reachable")
+	}
+	defer lockFile.Close() // releases the file lock
+
+	// Re-check after acquiring lock — the previous holder may have started it.
+	if c.ping() {
+		c.mu.Lock()
+		c.running = true
+		c.mu.Unlock()
+		return nil
+	}
+
 	c.mu.Lock()
 	bin := c.binPath
 	if bin == "" {

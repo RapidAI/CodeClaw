@@ -738,18 +738,46 @@ func timePtrString(v *time.Time) any {
 
 func (r *gossipRepo) CreatePost(ctx context.Context, post *store.GossipPost) error {
 	return execWrite(ctx, r.batch, r.db,
-		`INSERT INTO gossip_posts (id, machine_id, user_email, nickname, content, category, score, votes, locked, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?)`,
-		post.ID, post.MachineID, post.UserEmail, post.Nickname, post.Content, post.Category, post.CreatedAt.Format(time.RFC3339))
+		`INSERT INTO gossip_posts (id, machine_id, user_email, nickname, content, category, score, votes, locked, flagged, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`,
+		post.ID, post.MachineID, post.UserEmail, post.Nickname, post.Content, post.Category, boolToInt(post.Flagged), post.CreatedAt.Format(time.RFC3339))
 }
 
 func (r *gossipRepo) ListPosts(ctx context.Context, offset, limit int) ([]*store.GossipPost, int, error) {
+	var total int
+	if err := r.readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM gossip_posts WHERE flagged = 0`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.readDB.QueryContext(ctx,
+		`SELECT id, machine_id, user_email, nickname, content, category, score, votes, locked, flagged, created_at
+		 FROM gossip_posts WHERE flagged = 0 ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var items []*store.GossipPost
+	for rows.Next() {
+		var p store.GossipPost
+		var locked, flagged int
+		var createdAt string
+		if err := rows.Scan(&p.ID, &p.MachineID, &p.UserEmail, &p.Nickname, &p.Content, &p.Category, &p.Score, &p.Votes, &locked, &flagged, &createdAt); err != nil {
+			return nil, 0, err
+		}
+		p.Locked = locked != 0
+		p.Flagged = flagged != 0
+		p.CreatedAt = mustParseTime(createdAt)
+		items = append(items, &p)
+	}
+	return items, total, rows.Err()
+}
+
+func (r *gossipRepo) ListAllPosts(ctx context.Context, offset, limit int) ([]*store.GossipPost, int, error) {
 	var total int
 	if err := r.readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM gossip_posts`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := r.readDB.QueryContext(ctx,
-		`SELECT id, machine_id, user_email, nickname, content, category, score, votes, locked, created_at
+		`SELECT id, machine_id, user_email, nickname, content, category, score, votes, locked, flagged, created_at
 		 FROM gossip_posts ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -758,12 +786,13 @@ func (r *gossipRepo) ListPosts(ctx context.Context, offset, limit int) ([]*store
 	var items []*store.GossipPost
 	for rows.Next() {
 		var p store.GossipPost
-		var locked int
+		var locked, flagged int
 		var createdAt string
-		if err := rows.Scan(&p.ID, &p.MachineID, &p.UserEmail, &p.Nickname, &p.Content, &p.Category, &p.Score, &p.Votes, &locked, &createdAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.MachineID, &p.UserEmail, &p.Nickname, &p.Content, &p.Category, &p.Score, &p.Votes, &locked, &flagged, &createdAt); err != nil {
 			return nil, 0, err
 		}
 		p.Locked = locked != 0
+		p.Flagged = flagged != 0
 		p.CreatedAt = mustParseTime(createdAt)
 		items = append(items, &p)
 	}
@@ -772,16 +801,17 @@ func (r *gossipRepo) ListPosts(ctx context.Context, offset, limit int) ([]*store
 
 func (r *gossipRepo) GetPost(ctx context.Context, id string) (*store.GossipPost, error) {
 	var p store.GossipPost
-	var locked int
+	var locked, flagged int
 	var createdAt string
 	err := r.readDB.QueryRowContext(ctx,
-		`SELECT id, machine_id, user_email, nickname, content, category, score, votes, locked, created_at
+		`SELECT id, machine_id, user_email, nickname, content, category, score, votes, locked, flagged, created_at
 		 FROM gossip_posts WHERE id = ?`, id).Scan(
-		&p.ID, &p.MachineID, &p.UserEmail, &p.Nickname, &p.Content, &p.Category, &p.Score, &p.Votes, &locked, &createdAt)
+		&p.ID, &p.MachineID, &p.UserEmail, &p.Nickname, &p.Content, &p.Category, &p.Score, &p.Votes, &locked, &flagged, &createdAt)
 	if err != nil {
 		return nil, err
 	}
 	p.Locked = locked != 0
+	p.Flagged = flagged != 0
 	p.CreatedAt = mustParseTime(createdAt)
 	return &p, nil
 }
@@ -803,6 +833,38 @@ func (r *gossipRepo) DeletePost(ctx context.Context, id string) error {
 
 func (r *gossipRepo) LockPost(ctx context.Context, id string, locked bool) error {
 	return execWrite(ctx, r.batch, r.db, `UPDATE gossip_posts SET locked = ? WHERE id = ?`, boolToInt(locked), id)
+}
+
+func (r *gossipRepo) FlagPost(ctx context.Context, id string, flagged bool) error {
+	return execWrite(ctx, r.batch, r.db, `UPDATE gossip_posts SET flagged = ? WHERE id = ?`, boolToInt(flagged), id)
+}
+
+func (r *gossipRepo) ListFlaggedPosts(ctx context.Context, offset, limit int) ([]*store.GossipPost, int, error) {
+	var total int
+	if err := r.readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM gossip_posts WHERE flagged = 1`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.readDB.QueryContext(ctx,
+		`SELECT id, machine_id, user_email, nickname, content, category, score, votes, locked, flagged, created_at
+		 FROM gossip_posts WHERE flagged = 1 ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var items []*store.GossipPost
+	for rows.Next() {
+		var p store.GossipPost
+		var locked, flagged int
+		var createdAt string
+		if err := rows.Scan(&p.ID, &p.MachineID, &p.UserEmail, &p.Nickname, &p.Content, &p.Category, &p.Score, &p.Votes, &locked, &flagged, &createdAt); err != nil {
+			return nil, 0, err
+		}
+		p.Locked = locked != 0
+		p.Flagged = flagged != 0
+		p.CreatedAt = mustParseTime(createdAt)
+		items = append(items, &p)
+	}
+	return items, total, rows.Err()
 }
 
 func (r *gossipRepo) CreateComment(ctx context.Context, comment *store.GossipComment) error {

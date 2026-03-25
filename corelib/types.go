@@ -90,13 +90,14 @@ type MCPServerEntry struct {
 
 // LocalMCPServerEntry 描述一个本地 MCP 服务器配置（通过命令启动，如 npx）。
 type LocalMCPServerEntry struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name"`
-	Command  string            `json:"command"`
-	Args     []string          `json:"args,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`
-	Disabled bool              `json:"disabled,omitempty"`
-	CreatedAt string           `json:"created_at"`
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Command   string            `json:"command"`
+	Args      []string          `json:"args,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	Disabled  bool              `json:"disabled,omitempty"`
+	AutoStart bool              `json:"auto_start,omitempty"` // only start on app launch when true
+	CreatedAt string            `json:"created_at"`
 }
 
 // NLSkillStep 描述自然语言技能中的单个操作步骤。
@@ -130,13 +131,14 @@ type NLSkillEntry struct {
 
 // MaclawLLMProvider 描述一个 MaClaw LLM 提供商配置。
 type MaclawLLMProvider struct {
-	Name          string `json:"name"`
-	URL           string `json:"url"`
-	Key           string `json:"key"`
-	Model         string `json:"model"`
-	Protocol      string `json:"protocol,omitempty"`
-	ContextLength int    `json:"context_length,omitempty"`
-	IsCustom      bool   `json:"is_custom,omitempty"`
+	Name           string `json:"name"`
+	URL            string `json:"url"`
+	Key            string `json:"key"`
+	Model          string `json:"model"`
+	Protocol       string `json:"protocol,omitempty"`
+	ContextLength  int    `json:"context_length,omitempty"`
+	IsCustom       bool   `json:"is_custom,omitempty"`
+	SupportsVision bool   `json:"supports_vision,omitempty"`
 	// ── 新增 OAuth 字段 ──
 	AuthType       string `json:"auth_type,omitempty"`
 	RefreshToken   string `json:"refresh_token,omitempty"`
@@ -145,11 +147,12 @@ type MaclawLLMProvider struct {
 
 // MaclawLLMConfig 是 MaClaw 桌面 Agent 的 LLM 配置。
 type MaclawLLMConfig struct {
-	URL           string `json:"url"`
-	Key           string `json:"key"`
-	Model         string `json:"model"`
-	Protocol      string `json:"protocol,omitempty"`
-	ContextLength int    `json:"context_length,omitempty"`
+	URL            string `json:"url"`
+	Key            string `json:"key"`
+	Model          string `json:"model"`
+	Protocol       string `json:"protocol,omitempty"`
+	ContextLength  int    `json:"context_length,omitempty"`
+	SupportsVision bool   `json:"supports_vision,omitempty"`
 }
 
 // EffectiveContextTokens returns the usable context window in tokens.

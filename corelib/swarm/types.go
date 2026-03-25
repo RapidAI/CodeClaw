@@ -285,6 +285,23 @@ type PromptContext struct {
 	TestCode           string
 }
 
+// TaskVerdict is the result of verifying an agent's output against its task.
+type TaskVerdict struct {
+	Pass    bool   `json:"pass"`
+	Score   int    `json:"score"`   // 0-100
+	Reason  string `json:"reason"`
+	Missing string `json:"missing"` // what's missing if not pass
+}
+
+// DocType 文档类型
+type DocType string
+
+const (
+	DocTypeRequirements DocType = "requirements" // 需求文档
+	DocTypeDesign       DocType = "design"       // 设计文档
+	DocTypeTaskPlan     DocType = "task_plan"     // 任务计划
+)
+
 // NewSwarmRunID 生成唯一的 Swarm 运行 ID。
 func NewSwarmRunID() string {
 	var buf [4]byte

@@ -55,6 +55,12 @@
     #tab-governance .item .grid3,#tab-governance .item .grid2,#tab-center .item .grid3,#tab-system .item .grid3{margin-top:0}
     #tab-governance #boundUsers .item,#tab-governance #blockedEmails .item{padding:14px 15px;border-radius:16px;background:var(--soft);border:1px solid rgba(16,31,56,.08)}
     .user-grid{display:grid;gap:10px}
+    .feishu-bind-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+    .feishu-bind-card{border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:6px;background:linear-gradient(180deg,rgba(255,255,255,.98) 0%,rgba(247,251,255,.98) 100%);box-shadow:0 4px 12px rgba(47,128,237,.04)}
+    .feishu-bind-card .fbc-email{font-size:13px;font-weight:700;word-break:break-all;line-height:1.35}
+    .feishu-bind-card .fbc-oid{font-size:11px;color:var(--muted);word-break:break-all;font-family:Consolas,monospace}
+    @media (max-width:1180px){.feishu-bind-grid{grid-template-columns:repeat(2,1fr)}}
+    @media (max-width:760px){.feishu-bind-grid{grid-template-columns:1fr}}
     .user-card{padding:12px 14px;border-radius:14px;background:var(--soft);border:1px solid rgba(16,31,56,.08);display:flex;gap:4px}
     .user-card-head{display:flex;justify-content:space-between;align-items:center;gap:6px}
     .user-card-actions{display:flex;align-items:center;gap:6px;margin-top:2px}
@@ -88,6 +94,34 @@
       <button class="close-btn" onclick="closeSessionModal()" aria-label="Close">&times;</button>
       <h3 id="sessionModalTitle"></h3>
       <div id="sessionModalContent"></div>
+    </div>
+  </div>
+  <div id="defaultGroupModalOverlay" class="session-modal-overlay" onclick="if(event.target===this)closeDefaultGroupModal()">
+    <div class="session-modal" style="width:min(420px,calc(100% - 48px))">
+      <button class="close-btn" onclick="closeDefaultGroupModal()" aria-label="Close">&times;</button>
+      <h3>选择默认组</h3>
+      <div style="color:var(--muted);font-size:13px;margin-bottom:14px">新用户注册后将自动分配到此组</div>
+      <div id="defaultGroupTreePicker" style="font-size:13px;line-height:1.8;max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:8px"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+        <button class="btn-ghost" onclick="closeDefaultGroupModal()">取消</button>
+        <button class="btn-primary" id="defaultGroupConfirmBtn" onclick="confirmDefaultGroup()">确定</button>
+      </div>
+    </div>
+  </div>
+  <div id="assignUsersModalOverlay" class="session-modal-overlay" onclick="if(event.target===this)closeAssignUsersModal()">
+    <div class="session-modal" style="width:min(520px,calc(100% - 48px))">
+      <button class="close-btn" onclick="closeAssignUsersModal()" aria-label="Close">&times;</button>
+      <h3 id="assignUsersModalTitle">分配用户</h3>
+      <div style="color:var(--muted);font-size:13px;margin-bottom:10px">从组织架构中选择用户分配到目标组（可多选）</div>
+      <div style="margin-bottom:10px"><input id="assignUsersSearch" placeholder="搜索用户邮箱..." oninput="filterAssignUsers()" style="width:100%;max-width:100%"></div>
+      <div id="assignUsersTree" style="font-size:13px;line-height:1.6;max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:8px"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
+        <span id="assignUsersCount" style="font-size:12px;color:var(--muted)">已选 0 人</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn-ghost" onclick="closeAssignUsersModal()">取消</button>
+          <button class="btn-primary" onclick="confirmAssignUsers()">确定分配</button>
+        </div>
+      </div>
     </div>
   </div>
   <div id="setupGate" class="hidden" style="position:fixed;top:16px;right:16px;z-index:9998;width:min(480px,calc(100% - 32px))">
@@ -181,6 +215,7 @@
         <button data-tab="invitationcodes" onclick="openTab('invitationcodes')"><span id="navInvitationCodes"></span><small id="navInvitationCodesDesc"></small></button>
         <button data-tab="pwarequests" onclick="openTab('pwarequests')"><span id="navPwaRequests"></span><small id="navPwaRequestsDesc"></small></button>
         <button data-tab="console" onclick="openTab('console')"><span data-i18n="navConsole"></span><small data-i18n="navConsoleDesc"></small></button>
+        <button data-tab="security" onclick="openTab('security')"><span id="navSecurity">安全管理</span><small id="navSecurityDesc">Security Management</small></button>
         <button data-tab="voiceprint" onclick="openTab('voiceprint')"><span id="navVoiceprint">声纹管理</span><small id="navVoiceprintDesc">Speaker Voiceprint</small></button>
       </nav>
       <div class="side-note"><span data-i18n="defaultCenter"></span><br><span class="mono">http://hubs.mypapers.top:9388</span><br><br><span data-i18n="deployHint"></span></div>
@@ -202,15 +237,71 @@
         <div class="metric"><label data-i18n="metricCenter"></label><strong id="centerStatusHero"></strong><span id="centerStatusHint"></span></div>
         <div class="metric"><label data-i18n="metricMachines"></label><strong id="machineCountHero">0</strong><span data-i18n="metricMachinesHint"></span></div>
         <div class="metric"><label data-i18n="metricBlocked"></label><strong id="blockedCountHero">0</strong><span data-i18n="metricBlockedHint"></span></div>
+        <div class="metric"><label data-i18n="metricInvites"></label><strong id="inviteCountHero">0</strong><span data-i18n="metricInvitesHint"></span></div>
       </div>
       <section id="tab-overview" class="panel card active"><div class="head"><div><h3 data-i18n="overviewTitle"></h3><div class="desc" data-i18n="overviewDesc"></div></div><button class="btn-ghost" onclick="refreshAll()" data-i18n="refreshAll"></button></div><div class="grid2"><div class="hint" id="centerStatusDetail"></div><div class="item"><div class="item-title" data-i18n="endpointTitle"></div><div class="item-meta" data-i18n="endpointDesc"></div><div class="mono" id="centerAdvertisedURL" style="margin-top:8px;color:var(--text)"></div></div></div></section>
       <section id="tab-center" class="panel card"><div class="head"><div><h3 data-i18n="centerTitle"></h3><div class="desc" data-i18n="centerDesc"></div></div><button class="btn-ghost" onclick="loadCenterStatus()" data-i18n="refreshStatus"></button></div><div class="grid2"><div class="item"><div id="centerConfigForm"><label for="centerBaseURL" data-i18n="centerUrl"></label><input id="centerBaseURL" placeholder="http://hubs.mypapers.top:9388"><label for="centerPublicBaseURL" style="margin-top:12px" data-i18n="publicHubUrl"></label><input id="centerPublicBaseURL" placeholder="https://hub.example.com"><label for="centerVisibility" style="margin-top:12px" data-i18n="visibilityMode"></label><select id="centerVisibility"><option value="private" data-i18n="visibilityPrivate"></option><option value="shared" data-i18n="visibilityShared"></option></select><label for="centerEnrollmentMode" style="margin-top:12px" data-i18n="enrollmentMode"></label><select id="centerEnrollmentMode"><option value="open" data-i18n="enrollmentOpen"></option><option value="approval" data-i18n="enrollmentApproval"></option><option value="manual" data-i18n="enrollmentManual"></option></select><div id="centerRegisterActions" class="actions"><button class="btn-secondary" onclick="saveCenterConfig()" data-i18n="saveAddress"></button><button id="registerNowButton" class="btn-primary" onclick="registerWithCenter()" data-i18n="registerNow"></button></div></div><div id="centerRegisteredNotice" class="hint hidden" style="margin-top:14px"><strong id="centerRegisteredTitle"></strong><div class="item-meta" id="centerRegisteredHint" style="margin-top:8px"></div></div></div><div class="item"><div class="item-title" data-i18n="registrationStatus"></div><div class="item-meta" id="centerStatusDetailTab"></div><div class="grid3" style="margin-top:14px"><div><label data-i18n="advertisedHost"></label><div class="mono" id="centerAdvertisedHost"></div></div><div><label data-i18n="advertisedPort"></label><div class="mono" id="centerAdvertisedPort"></div></div><div><label data-i18n="visibilityMode"></label><div class="mono" id="visibilityHero"></div></div></div><div class="grid2" style="margin-top:14px"><div><label data-i18n="enrollmentMode"></label><div class="mono" id="modeHero"></div></div><div><label data-i18n="publicHubUrl"></label><div class="mono" id="centerPublicBaseURLHero"></div></div></div></div></div></section>
-      <section id="tab-governance" class="panel card"><div class="head"><div><h3 data-i18n="governanceTitle"></h3><div class="desc" data-i18n="governanceDesc"></div></div></div><div class="grid2"><div class="item"><label for="bindEmail" data-i18n="manualBindEmail"></label><input id="bindEmail" placeholder="user@example.com"><div class="actions"><button class="btn-secondary" onclick="manualBind()" data-i18n="generateBinding"></button></div></div><div class="item"><label for="blockedEmail" data-i18n="blockedEmail"></label><input id="blockedEmail" placeholder="blocked@example.com"><label for="blockedReason" style="margin-top:12px" data-i18n="reason"></label><input id="blockedReason"><div class="actions"><button class="btn-danger" onclick="addBlockedEmail()" data-i18n="addBlock"></button></div></div></div><div class="item" style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" data-i18n="blockedEmailsTitle"></div><div class="item-meta" data-i18n="blockedEmailsDesc"></div></div><button class="btn-ghost" onclick="loadBlockedEmails()" data-i18n="reload"></button></div><div id="blockedEmails"><div class="hint" data-i18n="emptyBlocked"></div></div></div><div class="item" style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" data-i18n="boundUsersTitle"></div><div class="item-meta" data-i18n="boundUsersDesc"></div></div><div style="display:flex;align-items:center;gap:8px"><label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap;cursor:pointer" title="全员智能路由"><input type="checkbox" id="smartRouteAllToggle" onchange="toggleSmartRouteAll(this.checked)"><span>🤖 全员</span></label><button class="btn-ghost" onclick="loadBoundUsers()" data-i18n="reload"></button></div></div><div id="boundUsers"><div class="hint" data-i18n="emptyBoundUsers"></div></div></div></section>
+      <section id="tab-governance" class="panel card"><div class="head"><div><h3 data-i18n="governanceTitle"></h3><div class="desc" data-i18n="governanceDesc"></div></div></div><div class="grid2"><div class="item"><label for="bindEmail" data-i18n="manualBindEmail"></label><input id="bindEmail" placeholder="user@example.com"><div class="actions"><button class="btn-secondary" onclick="manualBind()" data-i18n="generateBinding"></button></div></div><div class="item"><label for="blockedEmail" data-i18n="blockedEmail"></label><input id="blockedEmail" placeholder="blocked@example.com"><label for="blockedReason" style="margin-top:12px" data-i18n="reason"></label><input id="blockedReason"><div class="actions"><button class="btn-danger" onclick="addBlockedEmail()" data-i18n="addBlock"></button></div></div></div><div class="grid2" style="margin-top:18px"><div class="item"><label for="inviteEmail" data-i18n="inviteEmail"></label><input id="inviteEmail" placeholder="user@example.com"><label for="inviteRole" style="margin-top:12px" data-i18n="role"></label><select id="inviteRole"><option value="viewer" data-i18n="roleViewer"></option><option value="member" data-i18n="roleMember"></option><option value="admin" data-i18n="roleAdmin"></option></select><div class="actions" style="margin-top:12px"><button class="btn-primary" onclick="addInvite()" data-i18n="createInvite"></button></div></div></div><div class="item" style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" data-i18n="blockedEmailsTitle"></div><div class="item-meta" data-i18n="blockedEmailsDesc"></div></div><button class="btn-ghost" onclick="loadBlockedEmails()" data-i18n="reload"></button></div><div id="blockedEmails"><div class="hint" data-i18n="emptyBlocked"></div></div></div><div class="item" style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" data-i18n="boundUsersTitle"></div><div class="item-meta" data-i18n="boundUsersDesc"></div></div><div style="display:flex;align-items:center;gap:8px"><label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap;cursor:pointer" title="全员智能路由"><input type="checkbox" id="smartRouteAllToggle" onchange="toggleSmartRouteAll(this.checked)"><span>🤖 全员</span></label><button class="btn-ghost" onclick="loadBoundUsers()" data-i18n="reload"></button></div></div><div id="boundUsers"><div class="hint" data-i18n="emptyBoundUsers"></div></div></div><div class="item" style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" data-i18n="invitesTitle"></div><div class="item-meta" data-i18n="invitesDesc"></div></div><button class="btn-ghost" onclick="loadInvites()" data-i18n="reload"></button></div><div id="invites"><div class="hint">暂无邀请记录。</div></div></div></section>
       <section id="tab-system" class="panel card"><div class="head"><div><h3 data-i18n="systemTitle"></h3><div class="desc" data-i18n="systemDesc"></div></div></div><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title" data-i18n="mailConfigTitle"></div><div class="item-meta" data-i18n="mailConfigDesc"></div></div><button class="btn-ghost" onclick="loadMailConfig()" data-i18n="reload"></button></div><div class="grid3"><div><label for="mailProvider" data-i18n="mailProvider"></label><select id="mailProvider" onchange="applyMailPreset()"><option value="custom" data-i18n="mailPresetCustom"></option><option value="qq" data-i18n="mailPresetQQ"></option><option value="163" data-i18n="mailPreset163"></option><option value="126" data-i18n="mailPreset126"></option><option value="gmail" data-i18n="mailPresetGmail"></option><option value="outlook" data-i18n="mailPresetOutlook"></option></select></div><div><label for="mailHost" data-i18n="mailHost"></label><input id="mailHost" placeholder="smtp.example.com"></div><div><label for="mailPort" data-i18n="mailPort"></label><input id="mailPort" type="number" min="1" max="65535" placeholder="587"></div></div><div class="grid3" style="margin-top:12px"><div><label for="mailEncryption" data-i18n="mailEncryption"></label><select id="mailEncryption"><option value="auto" data-i18n="mailEncryptionAuto"></option><option value="ssl" data-i18n="mailEncryptionSSL"></option><option value="starttls" data-i18n="mailEncryptionStartTLS"></option><option value="plain" data-i18n="mailEncryptionPlain"></option></select></div><div><label for="mailUsername" data-i18n="mailUsername"></label><input id="mailUsername" placeholder="account@example.com"></div><div><label for="mailPassword" data-i18n="mailPassword"></label><input id="mailPassword" type="password"></div></div><div class="grid3" style="margin-top:12px"><div><label for="mailFromName" data-i18n="mailFromName"></label><input id="mailFromName" placeholder="MaClaw Hub"></div><div><label for="mailFromEmail" data-i18n="mailFromEmail"></label><input id="mailFromEmail" placeholder="account@example.com"></div><div><label for="testMailEmail" data-i18n="mailTestRecipient"></label><input id="testMailEmail" placeholder="ops@example.com"></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveMailConfig()" data-i18n="saveMailConfig"></button><button class="btn-primary" onclick="sendTestMail()" data-i18n="sendTestMail"></button></div></div><div class="item" style="margin-top:18px"><div class="item-title" id="profileCardTitle"></div><div class="item-meta" id="profileCardDesc" style="margin-bottom:12px"></div><div class="grid2"><div><label for="adminEmailInput" id="adminEmailLabel"></label><input id="adminEmailInput" type="email" placeholder="admin@example.com"></div><div><label id="adminUsernameLabel"></label><input id="adminUsernameInput" disabled></div></div><div class="actions" style="margin-top:14px"><button class="btn-primary" onclick="updateAdminProfile()" id="saveProfileButton"></button></div></div><div class="item" style="margin-top:18px"><div class="item-title" id="passwordCardTitle"></div><div class="item-meta" id="passwordCardDesc" style="margin-bottom:12px"></div><div class="grid3"><div><label for="currentPasswordInput" id="currentPasswordLabel"></label><input id="currentPasswordInput" type="password"></div><div><label for="newPasswordInput" id="newPasswordLabel"></label><input id="newPasswordInput" type="password"></div><div><label for="confirmPasswordInput" id="confirmPasswordLabel"></label><input id="confirmPasswordInput" type="password"></div></div><div class="actions" style="margin-top:14px"><button class="btn-primary" onclick="changeAdminPassword()" id="changePasswordButton"></button></div></div><div class="item" style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title">🔒 TLS / HTTPS</div><div class="item-meta">启用自签名证书 HTTPS，防止 WebSocket 被 WAF/GFW 重置</div></div><button class="btn-ghost" onclick="loadTlsConfig()">刷新</button></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="tlsEnabled"> 启用 TLS</label></div><div><span id="tlsCertBadge" class="badge info" style="font-size:12px">未检测</span></div></div><div class="grid2" style="margin-top:12px"><div><label>证书文件</label><div class="mono" id="tlsCertFile">-</div></div><div><label>密钥文件</label><div class="mono" id="tlsKeyFile">-</div></div></div><div id="tlsCertInfo" style="margin-top:12px"></div><div class="actions" style="margin-top:14px"><button class="btn-primary" onclick="saveTlsConfig()" id="tlsSaveBtn">保存并重启</button></div><div class="hint" style="margin-top:14px"><div style="font-weight:700;margin-bottom:8px">使用说明</div><div style="font-size:13px;line-height:1.8">• 启用后 Hub 在同一端口 (9399) 提供 HTTPS/WSS<br>• 首次启用自动生成自签名证书（ECDSA P-256，10年有效期）<br>• 客户端需使用 https:// 或 wss:// 地址连接<br>• 保存后进程会自动重启，页面将自动跳转到新协议<br>• 如果后续使用 nginx 反代，关闭此开关即可</div></div><div class="hint" style="margin-top:10px"><div style="font-weight:700;margin-bottom:8px">Nginx 反代配置参考</div><div style="font-size:12px;line-height:1.8;font-family:Consolas,monospace">server {<br>&nbsp;&nbsp;listen 443 ssl;<br>&nbsp;&nbsp;ssl_certificate /path/to/cert.pem;<br>&nbsp;&nbsp;ssl_certificate_key /path/to/key.pem;<br>&nbsp;&nbsp;location / {<br>&nbsp;&nbsp;&nbsp;&nbsp;proxy_pass http://127.0.0.1:9399;<br>&nbsp;&nbsp;&nbsp;&nbsp;proxy_http_version 1.1;<br>&nbsp;&nbsp;&nbsp;&nbsp;proxy_set_header Upgrade $http_upgrade;<br>&nbsp;&nbsp;&nbsp;&nbsp;proxy_set_header Connection "upgrade";<br>&nbsp;&nbsp;&nbsp;&nbsp;proxy_read_timeout 3600s;<br>&nbsp;&nbsp;}<br>}</div></div></div></section>
-      <section id="tab-im" class="panel card"><div class="head"><div><h3 id="imTabTitle"></h3><div class="desc" id="imTabSubtitle"></div></div></div><div class="im-layout"><div class="im-sidebar"><button class="active" data-imsub="feishu" onclick="openImSub('feishu')"><span id="imSubFeishuNav"></span><small id="imSubFeishuNavDesc"></small></button><button data-imsub="openclaw" onclick="openImSub('openclaw')"><span id="imSubOpenclawNav"></span><small id="imSubOpenclawNavDesc"></small></button><button data-imsub="qqbot" onclick="openImSub('qqbot')"><span id="imSubQQBotNav"></span><small id="imSubQQBotNavDesc"></small></button><button data-imsub="hubllm" onclick="openImSub('hubllm')"><span>Hub LLM</span><small>智能协调</small></button></div><div class="im-content"><div id="im-pane-feishu" class="im-pane active"><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="feishuConfigTitle"></div><div class="item-meta" id="feishuConfigDesc"></div></div><button class="btn-ghost" onclick="loadFeishuConfig()" data-i18n="reload"></button></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="feishuEnabled"> <span id="feishuEnabledLabel"></span></label></div><div></div></div><div class="grid2" style="margin-top:12px"><div><label for="feishuAppId" id="feishuAppIdLabel"></label><input id="feishuAppId" placeholder="cli_xxxxxxxx"></div><div><label for="feishuAppSecret" id="feishuAppSecretLabel"></label><input id="feishuAppSecret" type="password" placeholder=""></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveFeishuConfig()" id="feishuSaveBtn"></button></div><div class="item" style="margin-top:18px;border-top:1px solid var(--line);padding-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="feishuAutoEnrollTitle"></div><div class="item-meta" id="feishuAutoEnrollDesc"></div></div></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="feishuAutoEnrollEnabled"> <span id="feishuAutoEnrollEnabledLabel"></span></label></div><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="feishuUseLark"> <span id="feishuUseLarkLabel"></span></label></div></div><div class="grid2" style="margin-top:12px"><div><label for="feishuDepartmentId" id="feishuDepartmentIdLabel"></label><input id="feishuDepartmentId" placeholder="0"><div class="item-meta" id="feishuDepartmentIdHint" style="margin-top:4px"></div></div><div><label for="feishuEmployeeType" id="feishuEmployeeTypeLabel"></label><select id="feishuEmployeeType"><option value="1" id="feishuEmpTypeRegular"></option><option value="2" id="feishuEmpTypeIntern"></option></select></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveFeishuAutoEnroll()" id="feishuAutoEnrollSaveBtn"></button></div></div><div class="hint" style="margin-top:14px"><div id="feishuGuideTitle" style="font-weight:700;margin-bottom:8px"></div><div id="feishuGuideContent" style="font-size:13px;line-height:1.8"></div></div><div style="margin-top:14px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="feishuBindingsTitle"></div><div class="item-meta" id="feishuBindingsDesc"></div></div><button class="btn-ghost" onclick="loadFeishuBindings()" data-i18n="reload"></button></div><div class="actions" style="margin-bottom:10px;gap:10px;align-items:center"><input id="feishuBindingsSearchInput" placeholder="user@example.com / 13800138000" style="max-width:280px" oninput="onFeishuBindingsSearchInput()" onkeydown="if(event.key==='Enter'){clearTimeout(feishuBindingsDebounce);onFeishuBindingsSearch()}"><button class="btn-secondary" style="height:34px;font-size:12px;padding:0 12px" onclick="onFeishuBindingsSearch()" id="feishuBindingsSearchBtn"></button><span id="feishuBindingsStats" class="badge ok" style="font-size:12px;margin-left:6px"></span></div><div id="feishuBindingsList"></div><div id="feishuBindingsPager" class="pager hidden"><div id="feishuBindingsPagerMeta" class="pager-meta"></div><div class="pager-actions"><button id="feishuBindingsPrevBtn" class="btn-ghost" type="button" onclick="changeFeishuBindingsPage(-1)" data-i18n="pagePrev"></button><button id="feishuBindingsNextBtn" class="btn-ghost" type="button" onclick="changeFeishuBindingsPage(1)" data-i18n="pageNext"></button></div></div></div></div></div><div id="im-pane-openclaw" class="im-pane"><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="openclawImTitle"></div><div class="item-meta" id="openclawImDesc"></div></div></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="openclawImEnabled"> <span id="openclawImEnabledLabel"></span></label></div><div></div></div><div class="grid2" style="margin-top:12px"><div><label for="openclawImWebhookUrl" id="openclawImWebhookUrlLabel"></label><input id="openclawImWebhookUrl" placeholder="http://127.0.0.1:3210/outbound"></div><div><label for="openclawImSecret" id="openclawImSecretLabel"></label><input id="openclawImSecret" type="password" placeholder=""></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveOpenclawImConfig()" id="openclawImSaveBtn"></button><button class="btn-primary" onclick="testOpenclawImWebhook()" id="openclawImTestBtn"></button></div><div class="hint" style="margin-top:14px"><div id="openclawImGuideTitle" style="font-weight:700;margin-bottom:8px"></div><div id="openclawImGuideContent" style="font-size:13px;line-height:1.8"></div></div><div style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="bridgeChannelsTitle"></div><div class="item-meta" id="bridgeChannelsDesc"></div></div><div class="actions"><span id="bridgeStatusBadge" class="badge warn" style="font-size:12px"></span><button class="btn-ghost" onclick="loadBridgeChannels()" id="bridgeReloadBtn"></button></div></div><div id="bridgeChannelsList"></div></div></div></div><div id="im-pane-qqbot" class="im-pane"><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="qqbotConfigTitle"></div><div class="item-meta" id="qqbotConfigDesc"></div></div><button class="btn-ghost" onclick="loadQQBotConfig()" data-i18n="reload"></button></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="qqbotEnabled"> <span id="qqbotEnabledLabel"></span></label></div><div></div></div><div class="grid2" style="margin-top:12px"><div><label for="qqbotAppId" id="qqbotAppIdLabel"></label><input id="qqbotAppId" placeholder=""></div><div><label for="qqbotAppSecret" id="qqbotAppSecretLabel"></label><input id="qqbotAppSecret" type="password" placeholder=""></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveQQBotConfig()" id="qqbotSaveBtn"></button></div><div class="hint" style="margin-top:14px"><div id="qqbotGuideTitle" style="font-weight:700;margin-bottom:8px"></div><div id="qqbotGuideContent" style="font-size:13px;line-height:1.8"></div></div><div style="margin-top:14px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="qqbotBindingsTitle"></div><div class="item-meta" id="qqbotBindingsDesc"></div></div><button class="btn-ghost" onclick="loadQQBotBindings()" data-i18n="reload"></button></div><div id="qqbotBindingsList"></div></div></div></div><div id="im-pane-hubllm" class="im-pane"><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title">Hub LLM 配置</div><div class="item-meta">配置 Hub 侧 LLM，启用群聊智能化（无感智能模式、意图分类、讨论编排、回复合并）</div></div></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="hubLlmEnabled"> 启用 Hub LLM</label></div><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="hubLlmSmartRouteSingle"> 单设备也走 LLM 路由</label></div></div><div class="grid2" style="margin-top:12px"><div><label for="hubLlmApiUrl">API Base URL</label><input id="hubLlmApiUrl" placeholder="https://api.deepseek.com/v1"></div><div><label for="hubLlmApiKey">API Key</label><input id="hubLlmApiKey" type="password" placeholder="sk-..."></div></div><div class="grid2" style="margin-top:12px"><div><label for="hubLlmModel">Model</label><input id="hubLlmModel" placeholder="deepseek-chat"></div><div><label for="hubLlmProtocol">Protocol</label><select id="hubLlmProtocol"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveHubLlmConfig()">保存配置</button><button class="btn-primary" onclick="testHubLlm()" id="hubLlmTestBtn">测试连接</button><span id="hubLlmStatusBadge" class="badge info" style="font-size:12px">⚪ 未配置</span></div><div id="hubLlmTestResult" class="hint hidden" style="margin-top:14px"></div><div class="hint" style="margin-top:14px"><div style="font-weight:700;margin-bottom:8px">使用说明</div><div style="font-size:13px;line-height:1.8">• 推荐 DeepSeek V3（便宜、国内可达、OpenAI 兼容）<br>• 请求自带 User-Agent: OpenClaw/1.0，兼容龙虾包月套餐<br>• 启用后多设备用户自动进入无感智能模式<br>• 未启用时行为完全不变<br>• 单设备 LLM 路由默认关闭（零延迟），可打开体验</div></div></div></div></div></div></section>
+      <section id="tab-im" class="panel card"><div class="head"><div><h3 id="imTabTitle"></h3><div class="desc" id="imTabSubtitle"></div></div></div><div class="im-layout"><div class="im-sidebar"><button class="active" data-imsub="feishu" onclick="openImSub('feishu')"><span id="imSubFeishuNav"></span><small id="imSubFeishuNavDesc"></small></button><button data-imsub="openclaw" onclick="openImSub('openclaw')"><span id="imSubOpenclawNav"></span><small id="imSubOpenclawNavDesc"></small></button><button data-imsub="qqbot" onclick="openImSub('qqbot')"><span id="imSubQQBotNav"></span><small id="imSubQQBotNavDesc"></small></button><button data-imsub="hubllm" onclick="openImSub('hubllm')"><span>Hub LLM</span><small>智能协调</small></button><button data-imsub="contentaudit" onclick="openImSub('contentaudit')"><span>内容审核</span><small>Content Audit</small></button></div><div class="im-content"><div id="im-pane-feishu" class="im-pane active"><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="feishuConfigTitle"></div><div class="item-meta" id="feishuConfigDesc"></div></div><button class="btn-ghost" onclick="loadFeishuConfig()" data-i18n="reload"></button></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="feishuEnabled"> <span id="feishuEnabledLabel"></span></label></div><div></div></div><div class="grid2" style="margin-top:12px"><div><label for="feishuAppId" id="feishuAppIdLabel"></label><input id="feishuAppId" placeholder="cli_xxxxxxxx"></div><div><label for="feishuAppSecret" id="feishuAppSecretLabel"></label><input id="feishuAppSecret" type="password" placeholder=""></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveFeishuConfig()" id="feishuSaveBtn"></button></div><div class="item" style="margin-top:18px;border-top:1px solid var(--line);padding-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="feishuAutoEnrollTitle"></div><div class="item-meta" id="feishuAutoEnrollDesc"></div></div></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="feishuAutoEnrollEnabled"> <span id="feishuAutoEnrollEnabledLabel"></span></label></div><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="feishuUseLark"> <span id="feishuUseLarkLabel"></span></label></div></div><div class="grid2" style="margin-top:12px"><div><label for="feishuDepartmentId" id="feishuDepartmentIdLabel"></label><input id="feishuDepartmentId" placeholder="0"><div class="item-meta" id="feishuDepartmentIdHint" style="margin-top:4px"></div></div><div><label for="feishuEmployeeType" id="feishuEmployeeTypeLabel"></label><select id="feishuEmployeeType"><option value="1" id="feishuEmpTypeRegular"></option><option value="2" id="feishuEmpTypeIntern"></option></select></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveFeishuAutoEnroll()" id="feishuAutoEnrollSaveBtn"></button></div></div><div class="hint" style="margin-top:14px"><div id="feishuGuideTitle" style="font-weight:700;margin-bottom:8px"></div><div id="feishuGuideContent" style="font-size:13px;line-height:1.8"></div></div><div style="margin-top:14px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="feishuBindingsTitle"></div><div class="item-meta" id="feishuBindingsDesc"></div></div><button class="btn-ghost" onclick="loadFeishuBindings()" data-i18n="reload"></button></div><div class="actions" style="margin-bottom:10px;gap:10px;align-items:center"><input id="feishuBindingsSearchInput" placeholder="user@example.com / 13800138000" style="max-width:280px" oninput="onFeishuBindingsSearchInput()" onkeydown="if(event.key==='Enter'){clearTimeout(feishuBindingsDebounce);onFeishuBindingsSearch()}"><button class="btn-secondary" style="height:34px;font-size:12px;padding:0 12px" onclick="onFeishuBindingsSearch()" id="feishuBindingsSearchBtn"></button><span id="feishuBindingsStats" class="badge ok" style="font-size:12px;margin-left:6px"></span></div><div id="feishuBindingsList"></div><div id="feishuBindingsPager" class="pager hidden"><div id="feishuBindingsPagerMeta" class="pager-meta"></div><div class="pager-actions"><button id="feishuBindingsPrevBtn" class="btn-ghost" type="button" onclick="changeFeishuBindingsPage(-1)" data-i18n="pagePrev"></button><button id="feishuBindingsNextBtn" class="btn-ghost" type="button" onclick="changeFeishuBindingsPage(1)" data-i18n="pageNext"></button></div></div></div></div></div><div id="im-pane-openclaw" class="im-pane"><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="openclawImTitle"></div><div class="item-meta" id="openclawImDesc"></div></div></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="openclawImEnabled"> <span id="openclawImEnabledLabel"></span></label></div><div></div></div><div class="grid2" style="margin-top:12px"><div><label for="openclawImWebhookUrl" id="openclawImWebhookUrlLabel"></label><input id="openclawImWebhookUrl" placeholder="http://127.0.0.1:3210/outbound"></div><div><label for="openclawImSecret" id="openclawImSecretLabel"></label><input id="openclawImSecret" type="password" placeholder=""></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveOpenclawImConfig()" id="openclawImSaveBtn"></button><button class="btn-primary" onclick="testOpenclawImWebhook()" id="openclawImTestBtn"></button></div><div class="hint" style="margin-top:14px"><div id="openclawImGuideTitle" style="font-weight:700;margin-bottom:8px"></div><div id="openclawImGuideContent" style="font-size:13px;line-height:1.8"></div></div><div style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="bridgeChannelsTitle"></div><div class="item-meta" id="bridgeChannelsDesc"></div></div><div class="actions"><span id="bridgeStatusBadge" class="badge warn" style="font-size:12px"></span><button class="btn-ghost" onclick="loadBridgeChannels()" id="bridgeReloadBtn"></button></div></div><div id="bridgeChannelsList"></div></div></div></div><div id="im-pane-qqbot" class="im-pane"><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="qqbotConfigTitle"></div><div class="item-meta" id="qqbotConfigDesc"></div></div><button class="btn-ghost" onclick="loadQQBotConfig()" data-i18n="reload"></button></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="qqbotEnabled"> <span id="qqbotEnabledLabel"></span></label></div><div></div></div><div class="grid2" style="margin-top:12px"><div><label for="qqbotAppId" id="qqbotAppIdLabel"></label><input id="qqbotAppId" placeholder=""></div><div><label for="qqbotAppSecret" id="qqbotAppSecretLabel"></label><input id="qqbotAppSecret" type="password" placeholder=""></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveQQBotConfig()" id="qqbotSaveBtn"></button></div><div class="hint" style="margin-top:14px"><div id="qqbotGuideTitle" style="font-weight:700;margin-bottom:8px"></div><div id="qqbotGuideContent" style="font-size:13px;line-height:1.8"></div></div><div style="margin-top:14px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="qqbotBindingsTitle"></div><div class="item-meta" id="qqbotBindingsDesc"></div></div><button class="btn-ghost" onclick="loadQQBotBindings()" data-i18n="reload"></button></div><div id="qqbotBindingsList"></div></div></div></div><div id="im-pane-hubllm" class="im-pane"><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title">Hub LLM 配置</div><div class="item-meta">配置 Hub 侧 LLM，启用群聊智能化（无感智能模式、意图分类、讨论编排、回复合并）</div></div></div><div class="grid2"><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="hubLlmEnabled"> 启用 Hub LLM</label></div><div><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="hubLlmSmartRouteSingle"> 单设备也走 LLM 路由</label></div></div><div class="grid2" style="margin-top:12px"><div><label for="hubLlmApiUrl">API Base URL</label><input id="hubLlmApiUrl" placeholder="https://api.deepseek.com/v1"></div><div><label for="hubLlmApiKey">API Key</label><input id="hubLlmApiKey" type="password" placeholder="sk-..."></div></div><div class="grid2" style="margin-top:12px"><div><label for="hubLlmModel">Model</label><input id="hubLlmModel" placeholder="deepseek-chat"></div><div><label for="hubLlmProtocol">Protocol</label><select id="hubLlmProtocol"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></div></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveHubLlmConfig()">保存配置</button><button class="btn-primary" onclick="testHubLlm()" id="hubLlmTestBtn">测试连接</button><span id="hubLlmStatusBadge" class="badge info" style="font-size:12px">⚪ 未配置</span></div><div id="hubLlmTestResult" class="hint hidden" style="margin-top:14px"></div><div class="hint" style="margin-top:14px"><div style="font-weight:700;margin-bottom:8px">使用说明</div><div style="font-size:13px;line-height:1.8">• 推荐 DeepSeek V3（便宜、国内可达、OpenAI 兼容）<br>• 请求自带 User-Agent: OpenClaw/1.0，兼容龙虾包月套餐<br>• 启用后多设备用户自动进入无感智能模式<br>• 未启用时行为完全不变<br>• 单设备 LLM 路由默认关闭（零延迟），可打开体验</div></div></div></div><div id="im-pane-contentaudit" class="im-pane"><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title">内容审核配置</div><div class="item-meta">配置 IM 出站内容审核程序路径、超时策略和关键字列表</div></div><button class="btn-ghost" onclick="loadContentAuditConfig()">刷新</button></div><div class="grid2" style="margin-top:12px"><div><label for="caProgPath">审核程序路径</label><input id="caProgPath" placeholder="./audit_program"></div><div><label for="caTimeoutSec">超时时间（秒）</label><input id="caTimeoutSec" type="number" min="1" max="300" placeholder="30"></div></div><div class="grid2" style="margin-top:12px"><div><label for="caTimeoutPolicy">超时策略</label><select id="caTimeoutPolicy"><option value="block">block（拦截）</option><option value="pass">pass（放行）</option></select></div><div></div></div><div style="margin-top:12px"><label for="caKeywords">关键字列表（每行一个）</label><textarea id="caKeywords" rows="8" style="width:100%;font-family:Consolas,monospace;font-size:13px;padding:10px;border:1px solid var(--line);border-radius:10px;resize:vertical" placeholder="敏感词1&#10;敏感词2&#10;测试关键字"></textarea></div><div class="actions" style="margin-top:14px"><button class="btn-secondary" onclick="saveContentAuditConfig()">保存配置</button></div><div class="hint" style="margin-top:14px"><div style="font-weight:700;margin-bottom:8px">使用说明</div><div style="font-size:13px;line-height:1.8">• 审核程序路径为空时，不启用内容审核<br>• 内置默认审核程序位于 hub/cmd/audit_program/<br>• 超时策略控制审核程序异常时的降级行为<br>• 关键字列表通过 stdin JSON 传递给审核程序<br>• 支持自定义审核程序，遵循 stdin/stdout JSON 协议</div></div></div></div></div></div></section>
       <section id="tab-machines" class="panel card"><div class="head"><div><h3 data-i18n="machinesTitle"></h3><div class="desc" data-i18n="machinesDesc"></div></div><div class="actions"><button class="btn-danger" onclick="clearOfflineMachines()" id="clearOfflineButton" style="min-width:120px">清除离线主机</button><button class="btn-ghost" onclick="loadMachines()" data-i18n="refreshMachines"></button></div></div><div class="actions" style="margin-bottom:14px;gap:14px;align-items:center"><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="machinesShowAll" onchange="loadMachines()" checked> <span id="machinesShowAllLabel"></span></label></div><div class="actions" style="margin-bottom:14px;gap:10px;align-items:center"><label for="machineEmailSearch" id="machineEmailSearchLabel" style="margin:0;font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap"></label><input id="machineEmailSearch" placeholder="user@example.com" style="max-width:320px"><button class="btn-secondary" onclick="searchMachinesByEmail()" id="machineEmailSearchButton"></button><button class="btn-danger" onclick="deleteAllMachinesByEmail()" id="machineEmailDeleteAllButton"></button><button class="btn-danger" onclick="forceDeleteAllMachinesByEmail()" id="machineEmailForceDeleteButton"></button></div><div class="hint" style="margin-bottom:14px" data-i18n="machinesHint"></div><div class="table" id="machines"></div><div id="machinesPager" class="pager hidden"><div id="machinesPagerMeta" class="pager-meta"></div><div class="pager-actions"><button id="machinesPrevButton" class="btn-ghost" type="button" onclick="changeMachinesPage(-1)"></button><button id="machinesNextButton" class="btn-ghost" type="button" onclick="changeMachinesPage(1)"></button></div></div></section>
-      <section id="tab-invitationcodes" class="panel card"><div class="head"><div><h3 id="invCodePageTitle"></h3><div class="desc" id="invCodePageDesc"></div></div></div><div class="grid2"><div class="item"><div class="item-title" id="invCodeToggleTitle"></div><div class="item-meta" id="invCodeToggleDesc" style="margin-bottom:12px"></div><div class="actions" style="align-items:center;gap:12px"><span id="invCodeToggleBadge" class="badge warn"></span><button id="invCodeToggleBtn" class="btn-primary" onclick="toggleInvitationCodeRequired()"></button></div></div><div class="item"><div class="item-title" id="invCodeGenTitle"></div><div class="item-meta" id="invCodeGenDesc" style="margin-bottom:12px"></div><div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap"><div><label for="invCodeCount" id="invCodeCountLabel"></label><input id="invCodeCount" type="number" min="1" max="50" value="5" style="max-width:160px"></div><div style="padding-bottom:6px"><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="invCodePermanent" checked onchange="toggleValidityInputs()"> <span id="invCodePermanentLabel"></span></label></div><div id="invCodeValidityRow" style="display:none"><label for="invCodeValidityValue" id="invCodeValidityLabel"></label><div style="display:flex;gap:8px;align-items:center"><input id="invCodeValidityValue" type="number" min="1" value="" placeholder="1" style="max-width:120px"><select id="invCodeValidityUnit" style="max-width:120px"><option value="1" id="invCodeUnitDays"></option><option value="30" id="invCodeUnitMonths"></option><option value="365" id="invCodeUnitYears"></option></select></div></div></div><div class="actions" style="margin-top:12px"><button class="btn-primary" id="invCodeGenBtn" onclick="generateInvitationCodes()"></button></div></div></div><div class="item" style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="invCodeListTitle"></div><div class="item-meta" id="invCodeListDesc"></div></div><button class="btn-ghost" id="invCodeExportBtn" onclick="exportInvitationCodes()"></button><select id="invCodeExportFilter" style="max-width:140px;height:34px;font-size:12px"><option value="unexported" id="invExportFilterUnexported"></option><option value="exported" id="invExportFilterExported"></option><option value="all" id="invExportFilterAll"></option></select><button class="btn-ghost" id="invCodeReloadBtn" onclick="loadInvitationCodes()"></button></div><div class="actions" style="margin-bottom:14px;gap:10px;align-items:center"><input id="invCodeSearch" oninput="onInvitationSearch()" style="max-width:320px"><select id="invCodeFilter" onchange="onInvitationFilterChange()" style="max-width:160px"><option value="" id="invFilterAll"></option><option value="unused" id="invFilterUnused"></option><option value="used" id="invFilterUsed"></option></select></div><div id="invitationCodeList"></div><div id="invitationCodesPager" class="pager hidden"><div id="invitationCodesPagerMeta" class="pager-meta"></div><div class="pager-actions"><button id="invitationCodesPrevButton" class="btn-ghost" type="button" onclick="changeInvitationPage(-1)"></button><button id="invitationCodesNextButton" class="btn-ghost" type="button" onclick="changeInvitationPage(1)"></button></div></div></div></section>
+      <section id="tab-invitationcodes" class="panel card"><div class="head"><div><h3 id="invCodePageTitle"></h3><div class="desc" id="invCodePageDesc"></div></div></div><div class="grid2"><div class="item"><div class="item-title" id="invCodeToggleTitle"></div><div class="item-meta" id="invCodeToggleDesc" style="margin-bottom:12px"></div><div class="actions" style="align-items:center;gap:12px"><span id="invCodeToggleBadge" class="badge warn"></span><button id="invCodeToggleBtn" class="btn-primary" onclick="toggleInvitationCodeRequired()"></button></div></div><div class="item"><div class="item-title" id="invCodeGenTitle"></div><div class="item-meta" id="invCodeGenDesc" style="margin-bottom:12px"></div><div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap"><div><label for="invCodeCount" id="invCodeCountLabel"></label><input id="invCodeCount" type="number" min="1" max="50" value="5" style="max-width:160px"></div><div style="padding-bottom:6px"><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)"><input type="checkbox" id="invCodePermanent" checked onchange="toggleValidityInputs()"> <span id="invCodePermanentLabel"></span></label></div><div id="invCodeValidityRow" style="display:none"><label for="invCodeValidityValue" id="invCodeValidityLabel"></label><div style="display:flex;gap:8px;align-items:center"><input id="invCodeValidityValue" type="number" min="1" value="" placeholder="1" style="max-width:120px"><select id="invCodeValidityUnit" style="max-width:120px"><option value="1" id="invCodeUnitDays"></option><option value="30" id="invCodeUnitMonths"></option><option value="365" id="invCodeUnitYears"></option></select></div></div></div><div class="actions" style="margin-top:12px"><div style="padding-bottom:6px"><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600;color:#f5a623"><input type="checkbox" id="invCodeVIP"> 👑 VIP</label></div><button class="btn-primary" id="invCodeGenBtn" onclick="generateInvitationCodes()"></button></div></div></div><div class="item" style="margin-top:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="invCodeListTitle"></div><div class="item-meta" id="invCodeListDesc"></div></div><button class="btn-ghost" id="invCodeExportBtn" onclick="exportInvitationCodes()"></button><select id="invCodeExportFilter" style="max-width:140px;height:34px;font-size:12px"><option value="unexported" id="invExportFilterUnexported"></option><option value="exported" id="invExportFilterExported"></option><option value="all" id="invExportFilterAll"></option></select><label style="display:inline-flex;align-items:center;gap:4px;margin:0;cursor:pointer;font-size:12px;font-weight:600;color:#f5a623"><input type="checkbox" id="invCodeExportVIP"> 👑 VIP only</label><button class="btn-ghost" id="invCodeReloadBtn" onclick="loadInvitationCodes()"></button></div><div class="actions" style="margin-bottom:14px;gap:10px;align-items:center"><input id="invCodeSearch" oninput="onInvitationSearch()" style="max-width:320px"><select id="invCodeFilter" onchange="onInvitationFilterChange()" style="max-width:160px"><option value="" id="invFilterAll"></option><option value="unused" id="invFilterUnused"></option><option value="used" id="invFilterUsed"></option></select></div><div id="invitationCodeList"></div><div id="invitationCodesPager" class="pager hidden"><div id="invitationCodesPagerMeta" class="pager-meta"></div><div class="pager-actions"><button id="invitationCodesPrevButton" class="btn-ghost" type="button" onclick="changeInvitationPage(-1)"></button><button id="invitationCodesNextButton" class="btn-ghost" type="button" onclick="changeInvitationPage(1)"></button></div></div></div></section>
       <section id="tab-pwarequests" class="panel card"><div class="head"><div><h3 id="pwaPageTitle"></h3><div class="desc" id="pwaPageDesc"></div></div></div><div class="item" style="margin-bottom:18px"><div class="item-title" id="pwaManualTitle"></div><div class="item-meta" id="pwaManualDesc" style="margin-bottom:12px"></div><div><label for="pwaManualEmail" id="pwaManualLabel"></label><input id="pwaManualEmail" placeholder="user@example.com" style="max-width:360px"></div><div class="actions" style="margin-top:12px"><button class="btn-primary" id="pwaManualBtn" onclick="manualApprovePwaEmail()"></button></div></div><div class="item" style="margin-bottom:18px"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="pendingLoginsTitle"></div><div class="item-meta" id="pendingLoginsDesc"></div></div><button class="btn-ghost" id="pendingLoginsReloadBtn" onclick="loadPendingLogins()"></button></div><div id="pendingLoginsList"><div class="hint">No pending email confirmations.</div></div></div><div class="item"><div class="head" style="margin-bottom:12px"><div><div class="item-title" id="pwaListTitle"></div><div class="item-meta" id="pwaListDesc"></div></div><button class="btn-ghost" id="pwaReloadBtn" onclick="loadPwaEnrollments()"></button></div><div id="pwaEnrollmentList"><div class="hint">No pending enrollment requests.</div></div></div></section>
+      <section id="tab-security" class="panel card">
+        <div class="head"><div><h3 id="secTitle">安全管理</h3><div class="desc" id="secDesc">管理用户组、安全策略和集中管控设置</div></div><button class="btn-ghost" onclick="loadSecurityTab()">刷新</button></div>
+        <!-- Top: switches -->
+        <div id="secTopBar" style="display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start;margin-bottom:18px">
+          <div style="display:grid;gap:10px">
+            <div class="item" style="min-height:auto;padding:14px">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <div><div class="item-title" style="font-size:14px">集中管控</div><div class="item-meta" id="secCentralizedHint">关闭</div></div>
+                <label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600"><input type="checkbox" id="secCentralizedToggle" onchange="toggleSecCentralized(this.checked)"></label>
+              </div>
+            </div>
+            <div class="item" style="min-height:auto;padding:14px">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <div><div class="item-title" style="font-size:14px">组织机构</div><div class="item-meta" id="secOrgHint">关闭</div></div>
+                <label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;font-size:13px;font-weight:600"><input type="checkbox" id="secOrgToggle" onchange="toggleSecOrg(this.checked)"></label>
+              </div>
+            </div>
+          </div>
+          <div class="item" style="min-height:auto;padding:14px">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div><div class="item-title" style="font-size:14px">默认组</div><div class="item-meta" id="secDefaultGroupHint">未设置</div></div>
+              <button class="btn-secondary" style="height:32px;font-size:12px;padding:0 12px" onclick="showSetDefaultGroup()">设置</button>
+            </div>
+          </div>
+        </div>
+        <!-- Main: left tree + right policy -->
+        <div style="display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start">
+          <div class="item" style="min-height:400px;position:relative">
+            <div class="item-title" style="margin-bottom:12px">用户组</div>
+            <div id="secGroupTree" style="font-size:13px;line-height:1.8"></div>
+            <div id="secContextMenu" class="hidden" style="position:fixed;z-index:9999;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:6px 0;min-width:160px">
+              <div style="padding:8px 16px;cursor:pointer;font-size:13px" onmousedown="secCtxAction('create')">创建子组</div>
+              <div style="padding:8px 16px;cursor:pointer;font-size:13px" onmousedown="secCtxAction('rename')">重命名</div>
+              <div style="padding:8px 16px;cursor:pointer;font-size:13px" onmousedown="secCtxAction('assign')">分配用户</div>
+              <div style="padding:8px 16px;cursor:pointer;font-size:13px;color:var(--danger)" onmousedown="secCtxAction('delete')">删除</div>
+            </div>
+          </div>
+          <div class="item" style="min-height:400px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+              <div><div class="item-title" id="secPolicyTitle">策略配置</div><div class="item-meta" id="secPolicySubtitle">选择左侧用户组查看策略</div></div>
+              <div id="secPolicyActions" class="hidden" style="display:flex;gap:8px">
+                <button class="btn-secondary" style="height:32px;font-size:12px;padding:0 12px" onclick="saveSecPolicy()">保存策略</button>
+              </div>
+            </div>
+            <div id="secPolicyPanel"></div>
+            <div id="secGroupMembers" class="hidden" style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+                <div class="item-title" style="font-size:14px">组成员</div>
+                <button class="btn-secondary" style="height:28px;font-size:11px;padding:0 10px" onclick="loadSecGroupMembers()">刷新</button>
+              </div>
+              <div id="secMembersList"></div>
+            </div>
+          </div>
+        </div>
+      </section>
       <section id="tab-voiceprint" class="panel card">
         <div class="head"><div><h3 id="vpTitle">声纹管理</h3><div class="desc" id="vpDesc">管理用户声纹注册、1:N 识别测试、RapidSpeech 服务配置</div></div></div>
         <div class="grid2">
@@ -261,7 +352,9 @@ const I18N = {
   },
   zh: { title: 'MaClaw Hub \u7ba1\u7406\u53f0', loginHeroTitle: '\u81ea\u6258\u7ba1 Hub \u7ba1\u7406\u63a7\u5236\u53f0', loginHeroDesc: '\u5728\u4e00\u5904\u7ba1\u7406 Hub Center \u6ce8\u518c\u3001\u7528\u6237\u6cbb\u7406\u3001\u673a\u5668\u53ef\u89c1\u6027\u548c\u8bca\u65ad\u3002', loginBullet1: '\u521d\u59cb\u5316\u7b2c\u4e00\u4e2a\u7ba1\u7406\u5458', loginBullet2: '\u5c06\u6b64 Hub \u6ce8\u518c\u5230 Hub Center', loginBullet3: '\u67e5\u770b\u673a\u5668\u3001\u9080\u8bf7\u548c\u9ed1\u540d\u5355', adminAccess: '\u7ba1\u7406\u5458\u8bbf\u95ee', loginTitle: 'Hub \u7ba1\u7406\u63a7\u5236\u53f0', firstSetup: '\u9996\u6b21\u8bbe\u7f6e', adminLogin: '\u7ba1\u7406\u5458\u767b\u5f55', setupDesc: '\u9996\u6b21\u4f7f\u7528\u53ea\u9700\u7528\u6237\u540d\u548c\u5bc6\u7801\u3002', signinDesc: '\u5e38\u89c4\u767b\u5f55\u53ea\u9700\u7528\u6237\u540d\u548c\u5bc6\u7801\u3002', adminUsername: '\u7ba1\u7406\u5458\u7528\u6237\u540d', adminPassword: '\u7ba1\u7406\u5458\u5bc6\u7801', adminEmail: '\u7ba1\u7406\u5458\u90ae\u7bb1', publicHubUrl: 'Hub \u516c\u5171\u5730\u5740', saveInit: '\u4fdd\u5b58\u5e76\u521d\u59cb\u5316', signIn: '\u767b\u5f55', brandTitle: '\u8fd0\u8425\u7ba1\u7406', brandDesc: '\u901a\u8fc7\u6e05\u6670\u7684\u5de6\u4fa7\u5bfc\u822a\u7ba1\u7406 Hub \u8bbe\u7f6e\u3001\u6ce8\u518c\u3001\u6cbb\u7406\u89c4\u5219\u548c\u673a\u5668\u6d3b\u52a8\u3002', navOverview: '\u6982\u89c8', navOverviewDesc: '\u72b6\u6001\u3001\u6307\u6807\u548c\u6458\u8981', navCenter: 'Hub Center', navCenterDesc: '\u6ce8\u518c\u3001\u516c\u544a\u4e3b\u673a\u548c\u540c\u6b65', navGovernance: '\u7528\u6237\u6cbb\u7406', navGovernanceDesc: '\u7ed1\u5b9a\u3001\u9ed1\u540d\u5355\u548c\u9080\u8bf7', navSystem: '\u7cfb\u7edf\u8bbe\u7f6e', navSystemDesc: '\u90ae\u4ef6\u53d1\u9001\u548c\u7ba1\u7406\u5458\u5bc6\u7801', navMachines: '\u673a\u5668\u7ba1\u7406', navMachinesDesc: '\u8bbe\u5907\u6e05\u5355\u548c\u5fc3\u8df3\u72b6\u6001', navConsole: '\u63a7\u5236\u53f0', navConsoleDesc: '\u7ba1\u7406\u8bf7\u6c42\u8ffd\u8e2a', defaultCenter: '\u9ed8\u8ba4 Hub Center\uff1a', deployHint: '\u5bf9\u4e8e\u865a\u62df\u4e3b\u673a\u90e8\u7f72\uff0c\u8bf7\u5728 Hub \u516c\u5171\u5730\u5740\u4e2d\u914d\u7f6e\u57df\u540d\uff0c\u4ee5\u4fbf\u6ce8\u518c\u65f6\u516c\u544a\u4e3b\u673a\u540d\u800c\u975e\u68c0\u6d4b\u5230\u7684 IP\u3002', logout: '\u9000\u51fa\u767b\u5f55', metricCenter: 'Hub Center \u8fde\u63a5', metricMachines: '\u53ef\u89c1\u673a\u5668', metricMachinesHint: '\u5f53\u524d\u7528\u6237\u8303\u56f4\u7684\u673a\u5668\u5217\u8868\u3002', metricBlocked: '\u5df2\u5c4f\u853d\u90ae\u7bb1', metricBlockedHint: '\u6b64 Hub \u4e0a\u751f\u6548\u7684\u8eab\u4efd\u9650\u5236\u3002', metricInvites: '\u9080\u8bf7', metricInvitesHint: '\u5f85\u5904\u7406\u6216\u5df2\u751f\u6548\u7684\u9080\u8bf7\u6761\u76ee\u3002', overviewTitle: '\u8fd0\u8425\u6982\u89c8', overviewDesc: '\u6ce8\u518c\u72b6\u6001\u3001\u6cbb\u7406\u6001\u52bf\u548c\u673a\u5668\u53ef\u89c1\u6027\u7684\u7b80\u660e\u6982\u89c8\u3002', endpointTitle: '\u516c\u544a\u8bbf\u95ee\u7aef\u70b9', endpointDesc: '\u6b64 Hub \u5411 Hub Center \u62a5\u544a\u7684\u4e3b\u673a\u540d\u548c\u7aef\u53e3\u3002', refreshAll: '\u5168\u90e8\u5237\u65b0', centerTitle: 'Hub Center \u6ce8\u518c', centerDesc: '\u914d\u7f6e\u6b64 Hub \u7684 Hub Center \u5730\u5740\u3001\u53ef\u89c1\u6027\u548c\u6ce8\u518c\u884c\u4e3a\u3002', refreshStatus: '\u5237\u65b0\u72b6\u6001', centerUrl: 'Hub Center \u5730\u5740', saveAddress: '\u4fdd\u5b58\u8bbe\u7f6e', registerNow: '\u7acb\u5373\u6ce8\u518c', registrationStatus: '\u6ce8\u518c\u72b6\u6001', registeredTitle: 'Hub \u5df2\u6ce8\u518c\u6fc0\u6d3b', registeredHint: '\u6b64 Hub \u5df2\u5728 Hub Center \u6ce8\u518c\u3002\u60a8\u4ecd\u53ef\u5728\u6b64\u4fdd\u5b58\u53ef\u89c1\u6027\u66f4\u6539\uff0cHub Center \u7ba1\u7406\u5458\u4e5f\u53ef\u5728\u4e0a\u6e38\u7f16\u8f91\u3002', advertisedHost: '\u516c\u544a\u4e3b\u673a\u540d', advertisedPort: '\u516c\u544a\u7aef\u53e3', enrollmentMode: '\u6ce8\u518c\u6a21\u5f0f', enrollmentOpen: '\u5f00\u653e\u6ce8\u518c', enrollmentApproval: '\u5ba1\u6279\u6ce8\u518c', enrollmentManual: '\u4ec5\u624b\u52a8\u7ed1\u5b9a', visibilityMode: '\u53ef\u89c1\u6027', visibilityPrivate: '\u79c1\u6709', visibilityShared: '\u5171\u4eab', governanceTitle: '\u7528\u6237\u6cbb\u7406', governanceDesc: '\u63a7\u5236\u624b\u52a8\u7ed1\u5b9a\u3001\u9ed1\u540d\u5355\u89c4\u5219\u548c\u9080\u8bf7\u53d1\u653e\u3002', systemTitle: '\u7cfb\u7edf\u8bbe\u7f6e', systemDesc: '\u7ba1\u7406 SMTP \u53d1\u9001\u3001\u6d4b\u8bd5\u90ae\u4ef6\u548c\u66f4\u65b0\u7ba1\u7406\u5458\u5bc6\u7801\u3002', manualBindEmail: '\u624b\u52a8\u7ed1\u5b9a\u90ae\u7bb1', generateBinding: '\u751f\u6210 SN \u7ed1\u5b9a', boundUsersTitle: '\u5df2\u7ed1\u5b9a\u7528\u6237', boundUsersDesc: '\u5df2\u5728\u6b64 Hub \u4e0a\u62e5\u6709 SN \u7ed1\u5b9a\u7684\u7528\u6237\u3002', emptyBoundUsers: '\u6682\u65e0\u5df2\u7ed1\u5b9a\u7528\u6237\u3002', blockedEmail: '\u5c4f\u853d\u90ae\u7bb1', reason: '\u539f\u56e0', addBlock: '\u6dfb\u52a0\u5c4f\u853d', inviteEmail: '\u9080\u8bf7\u90ae\u7bb1', role: '\u89d2\u8272', roleViewer: '\u67e5\u770b', roleMember: '\u6210\u5458', roleAdmin: '\u7ba1\u7406\u5458', createInvite: '\u521b\u5efa\u9080\u8bf7', blockedEmailsTitle: '\u5df2\u5c4f\u853d\u90ae\u7bb1\u5217\u8868', blockedEmailsDesc: 'Hub \u7ea7\u522b\u751f\u6548\u7684\u8eab\u4efd\u62d2\u7edd\u5217\u8868\u3002', invitesTitle: '\u9080\u8bf7\u7ba1\u7406', invitesDesc: '\u5f53\u524d\u9080\u8bf7\u8bb0\u5f55\u548c\u8bbf\u95ee\u72b6\u6001\u3002', reload: '\u91cd\u65b0\u52a0\u8f7d', emptyBlocked: '\u6682\u65e0\u5df2\u5c4f\u853d\u90ae\u7bb1\u3002', emptyInvites: '\u6682\u65e0\u5df2\u52a0\u8f7d\u9080\u8bf7\u3002', mailConfigTitle: '\u90ae\u4ef6\u914d\u7f6e', mailConfigDesc: '\u914d\u7f6e SMTP \u53d1\u9001\u5e76\u6d4b\u8bd5\u5e38\u89c1 QQ\u3001163\u3001126\u3001Gmail\u3001Outlook \u7b49\u63d0\u4f9b\u5546\u3002', mailProvider: '\u9884\u8bbe\u63d0\u4f9b\u5546', mailPresetCustom: '\u81ea\u5b9a\u4e49 SMTP', mailPresetQQ: 'QQ \u90ae\u7bb1', mailPreset163: '163 \u90ae\u7bb1', mailPreset126: '126 \u90ae\u7bb1', mailPresetGmail: 'Gmail', mailPresetOutlook: 'Outlook / Office 365', mailHost: 'SMTP \u4e3b\u673a', mailPort: 'SMTP \u7aef\u53e3', mailEncryption: '\u52a0\u5bc6\u65b9\u5f0f', mailEncryptionAuto: '\u81ea\u52a8', mailEncryptionSSL: 'SSL / TLS', mailEncryptionStartTLS: 'STARTTLS', mailEncryptionPlain: '\u65e0', mailUsername: 'SMTP \u7528\u6237\u540d', mailPassword: 'SMTP \u5bc6\u7801 / \u6388\u6743\u7801', mailFromName: '\u53d1\u4ef6\u4eba\u540d\u79f0', mailFromEmail: '\u53d1\u4ef6\u4eba\u90ae\u7bb1', mailTestRecipient: '\u6d4b\u8bd5\u6536\u4ef6\u4eba', saveMailConfig: '\u4fdd\u5b58\u90ae\u4ef6\u8bbe\u7f6e', sendTestMail: '\u53d1\u9001\u6d4b\u8bd5\u90ae\u4ef6', mailConfigSaved: '\u90ae\u4ef6\u8bbe\u7f6e\u5df2\u4fdd\u5b58\u3002', mailConfigSaveFailed: '\u4fdd\u5b58\u90ae\u4ef6\u8bbe\u7f6e\u5931\u8d25\uff1a{error}', mailConfigLoadFailed: '\u52a0\u8f7d\u90ae\u4ef6\u8bbe\u7f6e\u5931\u8d25\uff1a{error}', machinesTitle: '\u673a\u5668\u7ba1\u7406', machinesDesc: '\u67e5\u770b\u6307\u5b9a\u7528\u6237\u8303\u56f4\u7684 Desktop \u6ce8\u518c\u4fe1\u606f\u548c\u5f53\u524d\u5fc3\u8df3 / \u8fd0\u884c\u72b6\u6001\u3002', refreshMachines: '\u5237\u65b0\u673a\u5668', machinesHint: '\u5728\u624b\u52a8\u7ed1\u5b9a\u90ae\u7bb1\u4e2d\u8f93\u5165\u7528\u6237\u90ae\u7bb1\uff0c\u63a7\u5236\u53f0\u5c06\u89e3\u6790\u5339\u914d\u7684 Hub \u8eab\u4efd\u540e\u52a0\u8f7d\u8be5\u7528\u6237\u7684\u6ce8\u518c\u673a\u5668\u3002', consoleTitle: '\u64cd\u4f5c\u5458\u63a7\u5236\u53f0', consoleDesc: '\u7ba1\u7406\u8bf7\u6c42\u8ffd\u8e2a\u3001\u6ce8\u518c\u8f93\u51fa\u548c\u8bca\u65ad\u54cd\u5e94\u3002', clear: '\u6e05\u7a7a', checking: '\u6b63\u5728\u68c0\u67e5\u662f\u5426\u9996\u6b21\u8bbe\u7f6e\u3002', canLogin: '\u5df2\u68c0\u6d4b\u5230\u7ba1\u7406\u5458\u8d26\u6237\u3002\u8bf7\u4f7f\u7528\u7528\u6237\u540d\u548c\u5bc6\u7801\u767b\u5f55\u3002', needsSetup: '\u5c1a\u65e0\u7ba1\u7406\u5458\u8d26\u6237\u3002\u8bf7\u5148\u5b8c\u6210\u9996\u6b21\u8bbe\u7f6e\u3002', loginReady: 'Hub \u7ba1\u7406\u63a7\u5236\u53f0\u5df2\u5c31\u7eea\u3002\u8bf7\u5b8c\u6210\u8bbe\u7f6e\u6216\u767b\u5f55\u3002', outputReady: 'MaClaw Hub \u7ba1\u7406\u63a7\u5236\u53f0\u5df2\u5c31\u7eea\u3002', administrator: '\u7ba1\u7406\u5458', signedIn: '\u5df2\u767b\u5f55', authenticated: '\u5df2\u8ba4\u8bc1', loggedOut: '\u5df2\u9000\u51fa', sessionExpired: '\u7ba1\u7406\u5458\u4f1a\u8bdd\u5df2\u8fc7\u671f\u3002\u8bf7\u91cd\u65b0\u767b\u5f55\u3002', networkUnavailable: '\u6682\u65f6\u65e0\u6cd5\u8fde\u63a5 Hub \u670d\u52a1\u3002\u53ef\u80fd\u6b63\u5728\u91cd\u542f\uff0c\u8bf7\u5237\u65b0\u540e\u91cd\u8bd5\u3002', overviewTabTitle: '\u6982\u89c8', overviewTabSubtitle: 'Hub \u7684\u9ad8\u7ea7\u8fd0\u8425\u72b6\u6001\u3002', centerTabTitle: 'Hub Center', centerTabSubtitle: '\u6ce8\u518c\u3001\u516c\u544a\u4e3b\u673a\u548c\u4e0a\u6e38\u534f\u8c03\u3002', governanceTabTitle: '\u7528\u6237\u6cbb\u7406', governanceTabSubtitle: '\u624b\u52a8\u7ed1\u5b9a\u3001\u9ed1\u540d\u5355\u548c\u9080\u8bf7\u3002', systemTabTitle: '\u7cfb\u7edf\u8bbe\u7f6e', systemTabSubtitle: '\u90ae\u4ef6\u53d1\u9001\u548c\u7ba1\u7406\u5458\u5b89\u5168\u8bbe\u7f6e\u3002', machinesTabTitle: '\u673a\u5668\u7ba1\u7406', machinesTabSubtitle: 'Desktop \u6ce8\u518c\u4fe1\u606f\u548c\u5f53\u524d\u8fd0\u884c\u53ef\u89c1\u6027\u3002', consoleTabTitle: '\u63a7\u5236\u53f0', consoleTabSubtitle: '\u7ba1\u7406\u64cd\u4f5c\u8ffd\u8e2a\u548c\u8bca\u65ad\u4fe1\u606f\u3002', invitationCodesTabTitle: '\u9080\u8bf7\u7801\u7ba1\u7406', invitationCodesTabSubtitle: '\u751f\u6210\u3001\u641c\u7d22\u548c\u7ba1\u7406\u7528\u6237\u6ce8\u518c\u9080\u8bf7\u7801\u3002', pwaRequestsTabTitle: 'PWA \u8bf7\u6c42\u7ba1\u7406', pwaRequestsTabSubtitle: '\u5ba1\u6838\u548c\u786e\u8ba4\u5f85\u5904\u7406\u7684 PWA \u6ce8\u518c\u8bf7\u6c42\u3002', registered: '\u5df2\u6ce8\u518c', notRegistered: '\u672a\u6ce8\u518c', noStatusLoaded: '\u6ce8\u518c\u72b6\u6001\u5c1a\u672a\u52a0\u8f7d\u3002', noMachinesLoaded: '\u5c1a\u672a\u52a0\u8f7d\u673a\u5668\u5217\u8868\u3002', syncConfigured: '\u5df2\u914d\u7f6e Hub Center \u540c\u6b65\u5e76\u5177\u6709\u6ce8\u518c\u5143\u6570\u636e\u3002', syncMissing: '\u6b64 Hub \u5c1a\u672a\u5728\u4e0a\u6e38\u6ce8\u518c\u3002', advertisedAs: '\u516c\u544a\u5730\u5740\u4e3a\uff1a{url}', noAdvertisedUrl: '\u5c1a\u65e0\u53ef\u7528\u7684\u516c\u544a\u5730\u5740\u3002', notConfigured: '\u672a\u914d\u7f6e', noReason: '\u672a\u8bb0\u5f55\u539f\u56e0\u3002', active: '\u6d3b\u8dc3\u4e2d', online: '\u5728\u7ebf', offline: '\u79bb\u7ebf', requestFailed: '\u8bf7\u6c42\u5931\u8d25', machine: '\u673a\u5668', platform: '\u5e73\u53f0', status: '\u72b6\u6001', lastSeen: '\u6700\u540e\u5728\u7ebf', unknown: '\u672a\u77e5', na: '\u65e0', loadAdminFailed: '\u52a0\u8f7d\u7ba1\u7406\u5458\u72b6\u6001\u5931\u8d25\uff1a{error}', setupFailed: '\u7ba1\u7406\u5458\u8bbe\u7f6e\u5931\u8d25\uff1a{error}', setupDone: '{message} \u73b0\u5728\u8bf7\u4f7f\u7528\u65b0\u8d26\u6237\u767b\u5f55\u3002', loginFailed: '\u767b\u5f55\u5931\u8d25\uff1a{error}', bindDone: '\u5df2\u4e3a {email} \u5b8c\u6210\u624b\u52a8\u7ed1\u5b9a\u3002SN\uff1a{sn}', bindFailed: '\u624b\u52a8\u7ed1\u5b9a\u5931\u8d25\uff1a{error}', blockedAdded: '\u5df2\u6dfb\u52a0\u5c4f\u853d\u90ae\u7bb1\u3002', blockedLoadFailed: '\u52a0\u8f7d\u5c4f\u853d\u90ae\u7bb1\u5931\u8d25\uff1a{error}', blockedAddFailed: '\u6dfb\u52a0\u5c4f\u853d\u90ae\u7bb1\u5931\u8d25\uff1a{error}', inviteCreated: '\u9080\u8bf7\u5df2\u521b\u5efa\u3002', inviteLoadFailed: '\u52a0\u8f7d\u9080\u8bf7\u5217\u8868\u5931\u8d25\uff1a{error}', inviteAddFailed: '\u521b\u5efa\u9080\u8bf7\u5931\u8d25\uff1a{error}', centerSaved: 'Hub Center \u8bbe\u7f6e\u5df2\u4fdd\u5b58\u3002', centerSaveFailed: '\u4fdd\u5b58 Hub Center \u8bbe\u7f6e\u5931\u8d25\uff1a{error}', centerRegisteredMsg: 'Hub \u5df2\u6ce8\u518c\u5230 Hub Center\u3002', centerRegisterFailed: 'Hub Center \u6ce8\u518c\u5931\u8d25\uff1a{error}', centerLoadFailed: '\u52a0\u8f7d Hub Center \u72b6\u6001\u5931\u8d25\uff1a{error}', machinesLoadFailed: '\u52a0\u8f7d\u673a\u5668\u5217\u8868\u5931\u8d25\uff1a{error}', noHubUser: '\u672a\u627e\u5230 {email} \u5bf9\u5e94\u7684 Hub \u7528\u6237\u3002', mailSent: '\u6d4b\u8bd5\u90ae\u4ef6\u5df2\u53d1\u9001\u3002', mailFailed: '\u53d1\u9001\u6d4b\u8bd5\u90ae\u4ef6\u5931\u8d25\uff1a{error}', imTabTitle: 'IM \u63d2\u4ef6\u7ba1\u7406', imTabSubtitle: '\u914d\u7f6e\u548c\u7ba1\u7406\u98de\u4e66\u7b49 IM \u5e73\u53f0\u96c6\u6210\u3002', navIM: 'IM \u63d2\u4ef6', navIMDesc: '\u914d\u7f6e IM \u5e73\u53f0\u96c6\u6210' }
 };
-const tabMeta = { overview:['overviewTabTitle','overviewTabSubtitle'], center:['centerTabTitle','centerTabSubtitle'], governance:['governanceTabTitle','governanceTabSubtitle'], system:['systemTabTitle','systemTabSubtitle'], im:['imTabTitle','imTabSubtitle'], machines:['machinesTabTitle','machinesTabSubtitle'], invitationcodes:['invitationCodesTabTitle','invitationCodesTabSubtitle'], pwarequests:['pwaRequestsTabTitle','pwaRequestsTabSubtitle'], console:['consoleTabTitle','consoleTabSubtitle'] };
+const tabMeta = { overview:['overviewTabTitle','overviewTabSubtitle'], center:['centerTabTitle','centerTabSubtitle'], governance:['governanceTabTitle','governanceTabSubtitle'], system:['systemTabTitle','systemTabSubtitle'], im:['imTabTitle','imTabSubtitle'], machines:['machinesTabTitle','machinesTabSubtitle'], invitationcodes:['invitationCodesTabTitle','invitationCodesTabSubtitle'], pwarequests:['pwaRequestsTabTitle','pwaRequestsTabSubtitle'], security:['securityTabTitle','securityTabSubtitle'], console:['consoleTabTitle','consoleTabSubtitle'] };
+I18N.en.securityTabTitle = 'Security Management'; I18N.en.securityTabSubtitle = 'User groups, security policies, and centralized control settings.';
+I18N.zh.securityTabTitle = '\u5b89\u5168\u7ba1\u7406'; I18N.zh.securityTabSubtitle = '\u7ba1\u7406\u7528\u6237\u7ec4\u3001\u5b89\u5168\u7b56\u7565\u548c\u96c6\u4e2d\u7ba1\u63a7\u8bbe\u7f6e\u3002';
 const PASSWORD_I18N = {
   en: { title: 'Change Password', desc: 'Update the administrator password without leaving the console.', current: 'Current password', next: 'New password', confirm: 'Confirm new password', action: 'Update Password', mismatch: 'The new password confirmation does not match.', changed: 'Administrator password updated.' },
   zh: { title: '\u4fee\u6539\u5bc6\u7801', desc: '\u65e0\u9700\u79bb\u5f00\u63a7\u5236\u53f0\u5373\u53ef\u66f4\u65b0\u7ba1\u7406\u5458\u5bc6\u7801\u3002', current: '\u5f53\u524d\u5bc6\u7801', next: '\u65b0\u5bc6\u7801', confirm: '\u786e\u8ba4\u65b0\u5bc6\u7801', action: '\u66f4\u65b0\u5bc6\u7801', mismatch: '\u65b0\u5bc6\u7801\u786e\u8ba4\u4e0d\u5339\u914d\u3002', changed: '\u7ba1\u7406\u5458\u5bc6\u7801\u5df2\u66f4\u65b0\u3002' }
@@ -348,7 +441,7 @@ function setSetupAvailability(enabled) { document.getElementById('stageToggle').
 async function refreshAuthStage() { try { const data = await loadAdminStatus(); const initialized = !!data.initialized; adminInitialized = initialized; setSetupAvailability(!initialized); document.getElementById('authStageHint').textContent = initialized ? tr('canLogin') : tr('needsSetup'); showAuthStage(initialized ? 'login' : 'setup'); return initialized; } catch (err) { adminInitialized = true; setSetupAvailability(false); setOutput(tr('loadAdminFailed', { error: err.message }), 'loginOutput'); showAuthStage('login'); return true; } }
 function refreshAdminHeader() { const profile = adminProfile(); document.getElementById('adminDisplayName').textContent = profile?.username || tr('administrator'); document.getElementById('adminDisplayMeta').textContent = profile?.email || tr('signedIn'); const emailInput = document.getElementById('adminEmailInput'); const userInput = document.getElementById('adminUsernameInput'); if (emailInput) emailInput.value = profile?.email || ''; if (userInput) userInput.value = profile?.username || ''; const on = !!token(); document.getElementById('authBadge').textContent = on ? tr('authenticated') : tr('loggedOut'); document.getElementById('authBadge').className = 'badge ' + (on ? 'ok' : 'warn'); }
 function setAuthState(on) { document.getElementById('loginView').classList.toggle('hidden', on); document.getElementById('appView').classList.toggle('hidden', !on); refreshAdminHeader(); if (!on) refreshAuthStage(); }
-function openTab(name) { localStorage.setItem(activeTabKey, name); document.querySelectorAll('.nav button').forEach(v => v.classList.toggle('active', v.dataset.tab === name)); document.querySelectorAll('.panel').forEach(v => v.classList.remove('active')); const panel = document.getElementById('tab-' + name); if (panel) panel.classList.add('active'); document.getElementById('pageTitle').textContent = tr(tabMeta[name][0]); document.getElementById('pageSubtitle').textContent = tr(tabMeta[name][1]); if (name === 'invitationcodes') { loadInvitationCodeStatus(); loadInvitationCodes(); } if (name === 'pwarequests') { loadPwaEnrollments(); } if (name === 'im') { loadFeishuConfig(); } }
+function openTab(name) { localStorage.setItem(activeTabKey, name); document.querySelectorAll('.nav button').forEach(v => v.classList.toggle('active', v.dataset.tab === name)); document.querySelectorAll('.panel').forEach(v => v.classList.remove('active')); const panel = document.getElementById('tab-' + name); if (panel) panel.classList.add('active'); document.getElementById('pageTitle').textContent = tr(tabMeta[name][0]); document.getElementById('pageSubtitle').textContent = tr(tabMeta[name][1]); if (name === 'invitationcodes') { loadInvitationCodeStatus(); loadInvitationCodes(); } if (name === 'pwarequests') { loadPwaEnrollments(); } if (name === 'im') { loadFeishuConfig(); } if (name === 'security') { loadSecurityTab(); } }
 function restoreTab() { openTab(localStorage.getItem(activeTabKey) || 'overview'); }
 function dismissSetupGate() { document.getElementById('setupGate').classList.add('hidden'); }
 function openSetupGateTarget() { dismissSetupGate(); }
@@ -425,17 +518,17 @@ async function updateAdminProfile() { const email = document.getElementById('adm
 async function loadInvitationCodeStatus() { try { const data = await api('/api/admin/invitation-codes/status'); invitationCodeRequired = !!data.invitation_code_required; renderInvitationCodeToggle(); } catch (err) { const msg = inv('statusLoadFailed', { error: err.message }); setOutput(msg); } }
 async function toggleInvitationCodeRequired() { try { const newVal = !invitationCodeRequired; const data = await api('/api/admin/invitation-codes/toggle', { method: 'POST', body: JSON.stringify({ required: newVal }) }); invitationCodeRequired = !!data.invitation_code_required; renderInvitationCodeToggle(); const msg = inv('toggleSuccess'); setOutput(msg); showToast(msg, 'success'); } catch (err) { const msg = inv('toggleFailed', { error: err.message }); setOutput(msg); showToast(msg, 'error'); } }
 function renderInvitationCodeToggle() { const badge = document.getElementById('invCodeToggleBadge'); const btn = document.getElementById('invCodeToggleBtn'); if (badge) { badge.textContent = invitationCodeRequired ? inv('toggleEnabled') : inv('toggleDisabled'); badge.className = 'badge ' + (invitationCodeRequired ? 'ok' : 'warn'); } if (btn) { btn.textContent = invitationCodeRequired ? inv('toggleDisabled') : inv('toggleEnabled'); btn.className = invitationCodeRequired ? 'btn-danger' : 'btn-primary'; } }
-async function generateInvitationCodes() { try { const countInput = document.getElementById('invCodeCount'); const count = parseInt(countInput.value, 10) || 5; let validity_days = 0; const permanent = document.getElementById('invCodePermanent'); if (!permanent || !permanent.checked) { const valInput = document.getElementById('invCodeValidityValue'); const unitSelect = document.getElementById('invCodeValidityUnit'); const valNum = parseInt(valInput?.value, 10) || 0; const unitMul = parseInt(unitSelect?.value, 10) || 1; validity_days = valNum > 0 ? valNum * unitMul : 0; } const data = await api('/api/admin/invitation-codes/generate', { method: 'POST', body: JSON.stringify({ count, validity_days }) }); const msg = inv('generateSuccess', { count: String((data.codes || []).length) }); setOutput(msg); showToast(msg, 'success'); await loadInvitationCodes(); } catch (err) { const msg = inv('generateFailed', { error: err.message }); setOutput(msg); showToast(msg, 'error'); } }
+async function generateInvitationCodes() { try { const countInput = document.getElementById('invCodeCount'); const count = parseInt(countInput.value, 10) || 5; let validity_days = 0; const permanent = document.getElementById('invCodePermanent'); if (!permanent || !permanent.checked) { const valInput = document.getElementById('invCodeValidityValue'); const unitSelect = document.getElementById('invCodeValidityUnit'); const valNum = parseInt(valInput?.value, 10) || 0; const unitMul = parseInt(unitSelect?.value, 10) || 1; validity_days = valNum > 0 ? valNum * unitMul : 0; } const vip = !!document.getElementById('invCodeVIP')?.checked; const data = await api('/api/admin/invitation-codes/generate', { method: 'POST', body: JSON.stringify({ count, validity_days, vip }) }); const msg = inv('generateSuccess', { count: String((data.codes || []).length) }); setOutput(msg); showToast(msg, 'success'); await loadInvitationCodes(); } catch (err) { const msg = inv('generateFailed', { error: err.message }); setOutput(msg); showToast(msg, 'error'); } }
 function toggleValidityInputs() { const cb = document.getElementById('invCodePermanent'); const row = document.getElementById('invCodeValidityRow'); if (row) row.style.display = (cb && cb.checked) ? 'none' : 'block'; }
 async function loadInvitationCodes() { try { let path = '/api/admin/invitation-codes'; const params = []; if (invitationStatusFilter) params.push('status=' + encodeURIComponent(invitationStatusFilter)); if (invitationSearchTerm) params.push('search=' + encodeURIComponent(invitationSearchTerm)); params.push('page=' + invitationPage); params.push('page_size=' + invitationPageSize); if (params.length) path += '?' + params.join('&'); const data = await api(path); invitationCodesCache = data.codes || []; invitationCodesTotal = data.total || 0; renderInvitationCodeList(); } catch (err) { const msg = inv('loadFailed', { error: err.message }); setOutput(msg); showToast(msg, 'error'); } }
 let invitationSearchTimer = null;
 function onInvitationSearch() { clearTimeout(invitationSearchTimer); invitationSearchTimer = setTimeout(() => { invitationSearchTerm = (document.getElementById('invCodeSearch')?.value || '').trim(); invitationPage = 1; loadInvitationCodes(); }, 300); }
 function onInvitationFilterChange() { invitationStatusFilter = document.getElementById('invCodeFilter')?.value || ''; invitationPage = 1; loadInvitationCodes(); }
 function getValidityDisplay(c) { const vd = c.validity_days || 0; if (vd === 0) return { text: inv('validityPermanentLabel'), style: '' }; if (c.status === 'used' && c.bound_at) { const boundDate = new Date(c.bound_at); const now = new Date(); const elapsed = Math.floor((now - boundDate) / (1000 * 60 * 60 * 24)); const remaining = vd - elapsed; if (remaining <= 0) return { text: inv('validityExpired'), style: 'color:#e53935;font-weight:600' }; return { text: inv('validityRemaining', { days: String(remaining) }), style: 'color:#43a047' }; } return { text: inv('validityDaysLabel', { days: String(vd) }), style: '' }; }
-function renderInvitationCodeList() { const root = document.getElementById('invitationCodeList'); const pager = document.getElementById('invitationCodesPager'); const pagerMeta = document.getElementById('invitationCodesPagerMeta'); const prevBtn = document.getElementById('invitationCodesPrevButton'); const nextBtn = document.getElementById('invitationCodesNextButton'); if (!root) return; if (!invitationCodesCache.length) { root.innerHTML = '<div class="hint">' + inv('emptyList') + '</div>'; if (pager) pager.classList.add('hidden'); return; } root.innerHTML = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">' + invitationCodesCache.map(c => { const isUsed = c.status === 'used'; const validity = getValidityDisplay(c); const isExpired = validity.text === inv('validityExpired'); const statusColor = isExpired ? '#e53935' : (isUsed ? '#8e99a4' : '#43a047'); const statusText = isExpired ? inv('validityExpired') : (isUsed ? inv('statusUsed') : inv('statusUnused')); const usedInfo = isUsed ? `<div class="item-meta" style="font-size:11px">${inv('usedBy')}: ${c.used_by_email || '-'}</div>` : ''; const validityInfo = `<div class="item-meta" style="font-size:11px;${validity.style}">${inv('validityInfo')}: ${validity.text}</div>`; const cardBorder = isExpired ? 'border-color:#e53935' : ''; const exportedBadge = (!isUsed && c.exported) ? `<span style="font-size:10px;color:#2c6fca;margin-left:6px;border:1px solid #2c6fca;border-radius:3px;padding:1px 5px;white-space:nowrap">${inv('exportedLabel')}</span>` : ''; const unbindBtn = isUsed ? `<a href="javascript:void(0)" onclick="unbindInvitationCode('${c.id}','${escapeHtml(c.used_by_email || '')}')" style="font-size:10px;color:#e53935;margin-left:6px;border:1px solid #e53935;border-radius:3px;padding:1px 5px;text-decoration:none;cursor:pointer;white-space:nowrap" onmouseover="this.style.background='#e53935';this.style.color='#fff'" onmouseout="this.style.background='transparent';this.style.color='#e53935'">${inv('unbind')}</a>` : ''; return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px;${isUsed && !isExpired ? 'opacity:.6' : ''}${cardBorder ? ';' + cardBorder : ''}"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-family:Consolas,monospace;font-size:13px;letter-spacing:.05em;font-weight:600">${c.code}</span><span style="display:flex;align-items:center"><span style="font-size:11px;color:${statusColor};font-weight:500">${statusText}</span>${exportedBadge}${unbindBtn}</span></div>${usedInfo}${validityInfo}<div class="item-meta" style="font-size:11px">${inv('createdAt')}: ${c.created_at || '-'}</div></div>`; }).join('') + '</div>'; if (pager) { const totalPages = Math.max(1, Math.ceil(invitationCodesTotal / invitationPageSize)); const start = (invitationPage - 1) * invitationPageSize + 1; const end = start + invitationCodesCache.length - 1; if (pagerMeta) pagerMeta.textContent = invitationCodesTotal > invitationPageSize ? inv('pageSummary', { start: String(start), end: String(end), total: String(invitationCodesTotal) }) : inv('pageSingle', { total: String(invitationCodesTotal) }); if (prevBtn) prevBtn.disabled = invitationPage <= 1; if (nextBtn) nextBtn.disabled = invitationPage >= totalPages; pager.classList.toggle('hidden', invitationCodesTotal <= invitationPageSize); } }
+function renderInvitationCodeList() { const root = document.getElementById('invitationCodeList'); const pager = document.getElementById('invitationCodesPager'); const pagerMeta = document.getElementById('invitationCodesPagerMeta'); const prevBtn = document.getElementById('invitationCodesPrevButton'); const nextBtn = document.getElementById('invitationCodesNextButton'); if (!root) return; if (!invitationCodesCache.length) { root.innerHTML = '<div class="hint">' + inv('emptyList') + '</div>'; if (pager) pager.classList.add('hidden'); return; } root.innerHTML = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">' + invitationCodesCache.map(c => { const isUsed = c.status === 'used'; const validity = getValidityDisplay(c); const isExpired = validity.text === inv('validityExpired'); const statusColor = isExpired ? '#e53935' : (isUsed ? '#8e99a4' : '#43a047'); const statusText = isExpired ? inv('validityExpired') : (isUsed ? inv('statusUsed') : inv('statusUnused')); const usedInfo = isUsed ? `<div class="item-meta" style="font-size:11px">${inv('usedBy')}: ${c.used_by_email || '-'}</div>` : ''; const validityInfo = `<div class="item-meta" style="font-size:11px;${validity.style}">${inv('validityInfo')}: ${validity.text}</div>`; const cardBorder = isExpired ? 'border-color:#e53935' : ''; const exportedBadge = (!isUsed && c.exported) ? `<span style="font-size:10px;color:#2c6fca;margin-left:6px;border:1px solid #2c6fca;border-radius:3px;padding:1px 5px;white-space:nowrap">${inv('exportedLabel')}</span>` : ''; const vipBadge = c.vip ? '<span title="VIP" style="margin-right:4px;font-size:14px">👑</span>' : ''; const unbindBtn = isUsed ? `<a href="javascript:void(0)" onclick="unbindInvitationCode('${c.id}','${escapeHtml(c.used_by_email || '')}')" style="font-size:10px;color:#e53935;margin-left:6px;border:1px solid #e53935;border-radius:3px;padding:1px 5px;text-decoration:none;cursor:pointer;white-space:nowrap" onmouseover="this.style.background='#e53935';this.style.color='#fff'" onmouseout="this.style.background='transparent';this.style.color='#e53935'">${inv('unbind')}</a>` : ''; return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px;${isUsed && !isExpired ? 'opacity:.6' : ''}${cardBorder ? ';' + cardBorder : ''}${c.vip ? ';border-color:#f5a623;background:linear-gradient(135deg,#fffbe6 0%,#fff8e1 100%)' : ''}"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-family:Consolas,monospace;font-size:13px;letter-spacing:.05em;font-weight:600">${vipBadge}${c.code}</span><span style="display:flex;align-items:center"><span style="font-size:11px;color:${statusColor};font-weight:500">${statusText}</span>${exportedBadge}${unbindBtn}</span></div>${usedInfo}${validityInfo}<div class="item-meta" style="font-size:11px">${inv('createdAt')}: ${c.created_at || '-'}</div></div>`; }).join('') + '</div>'; if (pager) { const totalPages = Math.max(1, Math.ceil(invitationCodesTotal / invitationPageSize)); const start = (invitationPage - 1) * invitationPageSize + 1; const end = start + invitationCodesCache.length - 1; if (pagerMeta) pagerMeta.textContent = invitationCodesTotal > invitationPageSize ? inv('pageSummary', { start: String(start), end: String(end), total: String(invitationCodesTotal) }) : inv('pageSingle', { total: String(invitationCodesTotal) }); if (prevBtn) prevBtn.disabled = invitationPage <= 1; if (nextBtn) nextBtn.disabled = invitationPage >= totalPages; pager.classList.toggle('hidden', invitationCodesTotal <= invitationPageSize); } }
 async function unbindInvitationCode(id, email) { if (!confirm(inv('unbindConfirm', { email: email }))) return; try { await api('/api/admin/invitation-codes/unbind', { method: 'POST', body: JSON.stringify({ id: id }) }); const msg = inv('unbindSuccess'); setOutput(msg); showToast(msg, 'success'); await loadInvitationCodes(); } catch (err) { const msg = inv('unbindFailed', { error: err.message }); setOutput(msg); showToast(msg, 'error'); } }
 function changeInvitationPage(step) { const totalPages = Math.max(1, Math.ceil(invitationCodesTotal / invitationPageSize)); invitationPage = Math.min(totalPages, Math.max(1, invitationPage + step)); loadInvitationCodes(); }
-function exportInvitationCodes() { const exportedFilter = document.getElementById('invCodeExportFilter')?.value || 'unexported'; let url = '/api/admin/invitation-codes/export?exported=' + encodeURIComponent(exportedFilter); const headers = {}; if (token()) headers['Authorization'] = 'Bearer ' + token(); fetch(url, { headers }).then(r => { const count = r.headers.get('X-Export-Count') || '?'; return r.blob().then(blob => ({ blob, count })); }).then(({ blob, count }) => { if (blob.size <= 1) { const msg = inv('exportEmpty'); setOutput(msg); showToast(msg, 'info'); return; } const blobUrl = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = blobUrl; a.download = 'invitation-codes.txt'; a.click(); URL.revokeObjectURL(blobUrl); const msg = inv('exportSuccess', { count }); setOutput(msg); showToast(msg, 'success'); loadInvitationCodes(); }).catch(err => { const msg = inv('loadFailed', { error: err.message || 'export failed' }); setOutput(msg); showToast(msg, 'error'); }); }
+function exportInvitationCodes() { const exportedFilter = document.getElementById('invCodeExportFilter')?.value || 'unexported'; const vipOnly = document.getElementById('invCodeExportVIP')?.checked ? 'true' : ''; let url = '/api/admin/invitation-codes/export?exported=' + encodeURIComponent(exportedFilter); if (vipOnly) url += '&vip=true'; const headers = {}; if (token()) headers['Authorization'] = 'Bearer ' + token(); fetch(url, { headers }).then(r => { const count = r.headers.get('X-Export-Count') || '?'; return r.blob().then(blob => ({ blob, count })); }).then(({ blob, count }) => { if (blob.size <= 1) { const msg = inv('exportEmpty'); setOutput(msg); showToast(msg, 'info'); return; } const blobUrl = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = blobUrl; a.download = 'invitation-codes.txt'; a.click(); URL.revokeObjectURL(blobUrl); const msg = inv('exportSuccess', { count }); setOutput(msg); showToast(msg, 'success'); loadInvitationCodes(); }).catch(err => { const msg = inv('loadFailed', { error: err.message || 'export failed' }); setOutput(msg); showToast(msg, 'error'); }); }
 
 // === pwa.js (inlined) ===
 // pwa.js - PWA enrollment request management
@@ -468,6 +561,464 @@ async function unbindQQBot(openId) { if (!confirm(qqb('unbindConfirm', { email: 
 async function refreshAll() { await Promise.all([loadCenterStatus(), loadBlockedEmails(), loadBoundUsers(), loadMailConfig(), loadFeishuConfig(), loadMachines(), loadPwaEnrollments()]); }
 try { applyI18n(); } catch (e) { console.error('applyI18n failed:', e); }
 if (token()) { setAuthState(true); restoreTab(); refreshAll(); } else { setAuthState(false); refreshAuthStage(); }
+
+// === Security Management Tab ===
+var _secGroupTree = null;
+var _secSelectedGroupId = null;
+var _secSettings = null;
+var _secCtxGroupId = null;
+var _secExpandedGroups = {};
+
+const POLICY_ITEMS = [
+  { key: 'file_outbound_enabled', label: '文件外发', type: 'bool', desc: '允许通过 IM 通道发送文件' },
+  { key: 'image_outbound_enabled', label: '图片外发', type: 'bool', desc: '允许通过 IM 通道发送图片' },
+  { key: 'gossip_enabled', label: 'Gossip 模块', type: 'bool', desc: '启用 Gossip 社区功能' },
+  { key: 'guardrail_mode', label: '安全护栏', type: 'select', options: ['standard','strict','relaxed'], desc: '安全护栏模式' },
+  { key: 'sandbox_mode', label: '沙箱模式', type: 'select', options: ['none','os','docker'], desc: '沙箱隔离模式' },
+  { key: 'network_level', label: '网络访问', type: 'select', options: ['none','intranet','allowlist','audit','full'], desc: '网络访问级别' },
+  { key: 'yolo_mode_allowed', label: 'YOLO 模式', type: 'bool', desc: '允许用户开启自动执行模式' },
+  { key: 'smart_route_enabled', label: '智能路由', type: 'bool', desc: '允许使用 Hub LLM 智能路由' }
+];
+
+async function loadSecurityTab() {
+  try {
+    const [settingsData, treeData] = await Promise.all([
+      api('/api/admin/security/settings'),
+      api('/api/admin/security/groups')
+    ]);
+    _secSettings = settingsData;
+    _secGroupTree = treeData.tree;
+    renderSecSettings();
+    renderSecGroupTree();
+    if (_secSelectedGroupId) { loadSecGroupPolicy(_secSelectedGroupId); }
+  } catch (err) { showToast('加载安全管理数据失败: ' + err.message, 'error'); }
+}
+
+function renderSecSettings() {
+  if (!_secSettings) return;
+  document.getElementById('secCentralizedToggle').checked = !!_secSettings.centralized_security_enabled;
+  document.getElementById('secCentralizedHint').textContent = _secSettings.centralized_security_enabled ? '已开启' : '已关闭';
+  document.getElementById('secOrgToggle').checked = !!_secSettings.org_structure_enabled;
+  document.getElementById('secOrgHint').textContent = _secSettings.org_structure_enabled ? '已开启' : '已关闭';
+  document.getElementById('secDefaultGroupHint').textContent = _secSettings.default_group_id ? _findGroupName(_secGroupTree, _secSettings.default_group_id) : '未设置';
+}
+
+async function toggleSecCentralized(checked) {
+  const action = checked ? '开启' : '关闭';
+  if (!confirm('确定要' + action + '集中管控？\n\n' + (checked ? '开启后，所有客户端的安全设置将由 Hub 统一下发，本地不可修改。' : '关闭后，客户端将恢复本地安全设置的可编辑状态。'))) {
+    document.getElementById('secCentralizedToggle').checked = !checked;
+    return;
+  }
+  try {
+    const settings = { ..._secSettings, centralized_security_enabled: checked };
+    await api('/api/admin/security/settings', { method: 'PUT', body: JSON.stringify(settings) });
+    _secSettings = settings;
+    renderSecSettings();
+    showToast('集中管控已' + action, 'success');
+  } catch (err) {
+    document.getElementById('secCentralizedToggle').checked = !checked;
+    showToast('切换集中管控失败: ' + err.message, 'error');
+  }
+}
+
+async function toggleSecOrg(checked) {
+  try {
+    const settings = { ..._secSettings, org_structure_enabled: checked };
+    await api('/api/admin/security/settings', { method: 'PUT', body: JSON.stringify(settings) });
+    _secSettings = settings;
+    renderSecSettings();
+    showToast('组织机构开关已' + (checked ? '开启' : '关闭'), 'success');
+  } catch (err) {
+    document.getElementById('secOrgToggle').checked = !checked;
+    showToast('切换组织机构失败: ' + err.message, 'error');
+  }
+}
+
+var _dgPickerSelectedId = null;
+var _dgPickerExpanded = {};
+
+function showSetDefaultGroup() {
+  _dgPickerSelectedId = _secSettings?.default_group_id || null;
+  _dgPickerExpanded = {};
+  // expand all by default for easy browsing
+  if (_secGroupTree) _dgExpandAll(_secGroupTree);
+  _renderDgPicker();
+  document.getElementById('defaultGroupModalOverlay').classList.add('show');
+}
+
+function closeDefaultGroupModal() {
+  document.getElementById('defaultGroupModalOverlay').classList.remove('show');
+}
+
+function _dgExpandAll(node) {
+  if (!node) return;
+  _dgPickerExpanded[node.id] = true;
+  if (node.children) node.children.forEach(function(c) { _dgExpandAll(c); });
+}
+
+function _renderDgPicker() {
+  var root = document.getElementById('defaultGroupTreePicker');
+  if (!_secGroupTree) { root.innerHTML = '<div class="hint">暂无组织机构数据</div>'; return; }
+  root.innerHTML = _renderDgNode(_secGroupTree, 0);
+}
+
+function _renderDgNode(node, depth) {
+  if (!node) return '';
+  var expanded = _dgPickerExpanded[node.id] !== false;
+  var hasChildren = node.children && node.children.length > 0;
+  var selected = node.id === _dgPickerSelectedId;
+  var indent = depth * 18;
+  var arrow = hasChildren ? (expanded ? '▼' : '▶') : '&nbsp;&nbsp;';
+  var arrowClick = hasChildren ? ' onclick="event.stopPropagation();dgToggleExpand(\'' + node.id + '\')" style="cursor:pointer;user-select:none"' : '';
+  var html = '<div style="padding:4px 8px 4px ' + (indent + 8) + 'px;border-radius:8px;display:flex;align-items:center;gap:6px;cursor:pointer;' + (selected ? 'background:rgba(47,128,237,.15);font-weight:700;' : '') + '" onclick="dgSelectGroup(\'' + node.id + '\')">';
+  html += '<span' + arrowClick + ' style="font-size:10px;width:14px;flex-shrink:0;text-align:center">' + arrow + '</span>';
+  html += '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(node.name) + '</span>';
+  html += '<span style="font-size:11px;color:var(--muted);flex-shrink:0">' + (node.member_count || 0) + '</span>';
+  if (selected) html += '<span style="font-size:12px;color:var(--primary);flex-shrink:0">✓</span>';
+  html += '</div>';
+  if (hasChildren && expanded) {
+    for (var i = 0; i < node.children.length; i++) {
+      html += _renderDgNode(node.children[i], depth + 1);
+    }
+  }
+  return html;
+}
+
+function dgToggleExpand(id) {
+  _dgPickerExpanded[id] = !_dgPickerExpanded[id];
+  _renderDgPicker();
+}
+
+function dgSelectGroup(id) {
+  _dgPickerSelectedId = id;
+  _renderDgPicker();
+}
+
+function confirmDefaultGroup() {
+  if (!_dgPickerSelectedId) { showToast('请先选择一个组', 'error'); return; }
+  var gid = _dgPickerSelectedId;
+  api('/api/admin/security/settings/default-group', { method: 'PUT', body: JSON.stringify({ group_id: gid }) })
+    .then(function() { _secSettings.default_group_id = gid; renderSecSettings(); closeDefaultGroupModal(); showToast('默认组已设置', 'success'); })
+    .catch(function(err) { showToast('设置默认组失败: ' + err.message, 'error'); });
+}
+
+// === Assign Users Modal (tree + lazy load + multi-select) ===
+var _assignTargetGroupId = null;
+var _assignSelectedEmails = {};
+var _assignLoadedGroups = {};  // groupId -> { members: [], children: [], expanded: bool }
+var _assignSearchTerm = '';
+
+function showAssignUsersModal(targetGroupId) {
+  _assignTargetGroupId = targetGroupId;
+  _assignSelectedEmails = {};
+  _assignLoadedGroups = {};
+  _assignSearchTerm = '';
+  var searchInput = document.getElementById('assignUsersSearch');
+  if (searchInput) searchInput.value = '';
+  var targetName = _findGroupName(_secGroupTree, targetGroupId);
+  document.getElementById('assignUsersModalTitle').textContent = '分配用户到: ' + targetName;
+  document.getElementById('assignUsersTree').innerHTML = '<div class="hint">加载中...</div>';
+  document.getElementById('assignUsersCount').textContent = '已选 0 人';
+  document.getElementById('assignUsersModalOverlay').classList.add('show');
+  // Load root group
+  if (_secGroupTree) {
+    _assignLoadGroup(_secGroupTree.id, true);
+  }
+}
+
+function closeAssignUsersModal() {
+  document.getElementById('assignUsersModalOverlay').classList.remove('show');
+}
+
+async function _assignLoadGroup(groupId, expanded) {
+  if (_assignLoadedGroups[groupId]) {
+    if (typeof expanded === 'boolean') _assignLoadedGroups[groupId].expanded = expanded;
+    _renderAssignTree();
+    return;
+  }
+  try {
+    var data = await api('/api/admin/security/groups/' + encodeURIComponent(groupId) + '/members');
+    _assignLoadedGroups[groupId] = {
+      members: data.members || [],
+      children: data.children || [],
+      expanded: expanded !== false
+    };
+    _renderAssignTree();
+  } catch (err) {
+    showToast('加载组成员失败: ' + err.message, 'error');
+  }
+}
+
+function _renderAssignTree() {
+  var root = document.getElementById('assignUsersTree');
+  if (!_secGroupTree) { root.innerHTML = '<div class="hint">暂无数据</div>'; return; }
+  root.innerHTML = _renderAssignNode(_secGroupTree.id, _secGroupTree.name, 0);
+  var count = Object.keys(_assignSelectedEmails).filter(function(k) { return _assignSelectedEmails[k]; }).length;
+  document.getElementById('assignUsersCount').textContent = '已选 ' + count + ' 人';
+}
+
+function _renderAssignNode(groupId, groupName, depth) {
+  var info = _assignLoadedGroups[groupId];
+  var indent = depth * 18;
+  var loaded = !!info;
+  var expanded = loaded && info.expanded;
+  // For loaded groups, check actual data; for unloaded, always show arrow (will lazy load)
+  var hasChildren = loaded ? (info.children.length > 0 || info.members.length > 0) : true;
+
+  // Group row
+  var arrow = hasChildren ? (expanded ? '▼' : '▶') : '&nbsp;&nbsp;';
+  var safeGroupId = groupId.replace(/'/g, "\\'");
+  var safeGroupName = escapeHtml(groupName).replace(/'/g, "\\'");
+  var html = '<div style="padding:3px 8px 3px ' + (indent + 8) + 'px;display:flex;align-items:center;gap:6px;cursor:pointer;border-radius:6px;font-weight:600;color:var(--fg)" onclick="assignToggleGroup(\'' + safeGroupId + '\',\'' + safeGroupName + '\')">';
+  html += '<span style="font-size:10px;width:14px;flex-shrink:0;text-align:center">' + arrow + '</span>';
+  html += '<span style="font-size:13px">📁 ' + escapeHtml(groupName) + '</span>';
+  if (loaded) html += '<span style="font-size:11px;color:var(--muted)">' + info.members.length + '人</span>';
+  if (!loaded) html += '<span style="font-size:11px;color:var(--muted)">…</span>';
+  html += '</div>';
+
+  if (loaded && expanded) {
+    // Render child groups
+    for (var i = 0; i < info.children.length; i++) {
+      var child = info.children[i];
+      html += _renderAssignNode(child.id, child.name, depth + 1);
+    }
+    // Render members
+    var term = _assignSearchTerm.toLowerCase();
+    for (var j = 0; j < info.members.length; j++) {
+      var email = info.members[j];
+      if (term && email.toLowerCase().indexOf(term) === -1) continue;
+      var checked = _assignSelectedEmails[email] ? ' checked' : '';
+      var safeEmail = escapeHtml(email).replace(/'/g, "\\'");
+      html += '<div style="padding:2px 8px 2px ' + ((depth + 1) * 18 + 8) + 'px;display:flex;align-items:center;gap:8px;border-radius:6px">';
+      html += '<input type="checkbox" onchange="assignToggleEmail(\'' + safeEmail + '\',this.checked)"' + checked + ' style="margin:0;cursor:pointer">';
+      html += '<span style="font-size:13px;color:var(--fg)">' + escapeHtml(email) + '</span>';
+      html += '</div>';
+    }
+  }
+  return html;
+}
+
+function assignToggleGroup(groupId) {
+  var info = _assignLoadedGroups[groupId];
+  if (!info) {
+    _assignLoadGroup(groupId, true);
+    return;
+  }
+  info.expanded = !info.expanded;
+  _renderAssignTree();
+}
+
+function assignToggleEmail(email, checked) {
+  _assignSelectedEmails[email] = checked;
+  var count = Object.keys(_assignSelectedEmails).filter(function(k) { return _assignSelectedEmails[k]; }).length;
+  document.getElementById('assignUsersCount').textContent = '已选 ' + count + ' 人';
+}
+
+function filterAssignUsers() {
+  _assignSearchTerm = (document.getElementById('assignUsersSearch').value || '').trim();
+  _renderAssignTree();
+}
+
+async function confirmAssignUsers() {
+  var emails = Object.keys(_assignSelectedEmails).filter(function(k) { return _assignSelectedEmails[k]; });
+  if (emails.length === 0) { showToast('请至少选择一个用户', 'error'); return; }
+  var gid = _assignTargetGroupId;
+  var success = 0;
+  var failed = 0;
+  for (var i = 0; i < emails.length; i++) {
+    try {
+      await api('/api/admin/security/groups/' + encodeURIComponent(gid) + '/members', { method: 'POST', body: JSON.stringify({ email: emails[i] }) });
+      success++;
+    } catch (err) { failed++; }
+  }
+  closeAssignUsersModal();
+  loadSecurityTab();
+  if (failed === 0) {
+    showToast('已成功分配 ' + success + ' 名用户', 'success');
+  } else {
+    showToast('分配完成: ' + success + ' 成功, ' + failed + ' 失败', 'warn');
+  }
+}
+
+function renderSecGroupTree() {
+  var root = document.getElementById('secGroupTree');
+  if (!_secGroupTree) { root.innerHTML = '<div class="hint">暂无用户组数据</div>'; return; }
+  root.innerHTML = _renderTreeNode(_secGroupTree, 0);
+}
+
+function _renderTreeNode(node, depth) {
+  if (!node) return '';
+  var expanded = _secExpandedGroups[node.id] !== false;
+  var hasChildren = node.children && node.children.length > 0;
+  var selected = node.id === _secSelectedGroupId;
+  var indent = depth * 18;
+  var arrow = hasChildren ? (expanded ? '▼' : '▶') : '&nbsp;&nbsp;';
+  var arrowClick = hasChildren ? ' onclick="secToggleExpand(\'' + node.id + '\')" style="cursor:pointer;user-select:none"' : '';
+  var html = '<div style="padding:4px 8px 4px ' + (indent + 8) + 'px;border-radius:8px;display:flex;align-items:center;gap:6px;cursor:pointer;' + (selected ? 'background:rgba(47,128,237,.12);font-weight:700;' : '') + '" onclick="secSelectGroup(\'' + node.id + '\')" oncontextmenu="secShowCtxMenu(event,\'' + node.id + '\')">';
+  html += '<span' + arrowClick + ' style="font-size:10px;width:14px;flex-shrink:0;text-align:center">' + arrow + '</span>';
+  html += '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(node.name) + '</span>';
+  html += '<span style="font-size:11px;color:var(--muted);flex-shrink:0">' + (node.member_count || 0) + '</span>';
+  html += '</div>';
+  if (hasChildren && expanded) {
+    for (var i = 0; i < node.children.length; i++) {
+      html += _renderTreeNode(node.children[i], depth + 1);
+    }
+  }
+  return html;
+}
+
+function secToggleExpand(id) {
+  _secExpandedGroups[id] = _secExpandedGroups[id] === false ? true : false;
+  renderSecGroupTree();
+}
+
+function secSelectGroup(id) {
+  _secSelectedGroupId = id;
+  renderSecGroupTree();
+  loadSecGroupPolicy(id);
+  loadSecGroupMembers();
+}
+
+function secShowCtxMenu(e, id) {
+  e.preventDefault();
+  e.stopPropagation();
+  _secCtxGroupId = id;
+  var menu = document.getElementById('secContextMenu');
+  menu.classList.remove('hidden');
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  setTimeout(function() {
+    document.addEventListener('mousedown', _secHideCtxMenu, { once: true });
+  }, 0);
+}
+
+function _secHideCtxMenu() {
+  document.getElementById('secContextMenu').classList.add('hidden');
+}
+
+function secCtxAction(action) {
+  _secHideCtxMenu();
+  var gid = _secCtxGroupId;
+  if (!gid) return;
+  if (action === 'create') {
+    var name = prompt('请输入子组名称：');
+    if (!name || !name.trim()) return;
+    api('/api/admin/security/groups', { method: 'POST', body: JSON.stringify({ name: name.trim(), parent_id: gid }) })
+      .then(function() { _secExpandedGroups[gid] = true; loadSecurityTab(); showToast('子组已创建', 'success'); })
+      .catch(function(err) { showToast('创建子组失败: ' + err.message, 'error'); });
+  } else if (action === 'rename') {
+    var newName = prompt('请输入新名称：');
+    if (!newName || !newName.trim()) return;
+    api('/api/admin/security/groups/' + encodeURIComponent(gid), { method: 'PUT', body: JSON.stringify({ name: newName.trim() }) })
+      .then(function() { loadSecurityTab(); showToast('已重命名', 'success'); })
+      .catch(function(err) { showToast('重命名失败: ' + err.message, 'error'); });
+  } else if (action === 'delete') {
+    if (!confirm('确定要删除此用户组？\n该组及其所有子组中的用户将被移回全局组。')) return;
+    api('/api/admin/security/groups/' + encodeURIComponent(gid), { method: 'DELETE' })
+      .then(function() { if (_secSelectedGroupId === gid) { _secSelectedGroupId = null; document.getElementById('secPolicyPanel').innerHTML = ''; document.getElementById('secPolicyActions').classList.add('hidden'); document.getElementById('secGroupMembers').classList.add('hidden'); } loadSecurityTab(); showToast('用户组已删除', 'success'); })
+      .catch(function(err) { showToast('删除失败: ' + err.message, 'error'); });
+  } else if (action === 'assign') {
+    showAssignUsersModal(gid);
+  }
+}
+
+async function loadSecGroupPolicy(groupId) {
+  try {
+    var data = await api('/api/admin/security/groups/' + encodeURIComponent(groupId) + '/policy');
+    renderSecPolicyPanel(data, groupId);
+    document.getElementById('secPolicyActions').classList.remove('hidden');
+    document.getElementById('secPolicyActions').style.display = 'flex';
+    document.getElementById('secGroupMembers').classList.remove('hidden');
+  } catch (err) { showToast('加载策略失败: ' + err.message, 'error'); }
+}
+
+function _findGroupName(tree, id) {
+  if (!tree) return id;
+  if (tree.id === id) return tree.name;
+  if (tree.children) { for (var i = 0; i < tree.children.length; i++) { var r = _findGroupName(tree.children[i], id); if (r !== id) return r; } }
+  return id;
+}
+
+function renderSecPolicyPanel(policyView, groupId) {
+  var groupName = _findGroupName(_secGroupTree, groupId);
+  document.getElementById('secPolicyTitle').textContent = '策略配置 — ' + groupName;
+  document.getElementById('secPolicySubtitle').textContent = '组 ID: ' + groupId;
+  var items = policyView.items || {};
+  var html = '';
+  POLICY_ITEMS.forEach(function(pi) {
+    var item = items[pi.key] || {};
+    var val = item.value;
+    var source = item.source || 'inherited';
+    var sourceName = item.source_name || '';
+    var sourceLabel = source === 'self' ? '<span style="color:var(--primary);font-weight:600">本组设置</span>' : '<span style="color:var(--muted)">继承自 ' + escapeHtml(sourceName) + '</span>';
+    var inputHtml = '';
+    if (pi.type === 'bool') {
+      inputHtml = '<select id="sec_pol_' + pi.key + '" style="max-width:120px;height:36px"><option value=""' + (source !== 'self' ? ' selected' : '') + '>继承</option><option value="true"' + (source === 'self' && val === true ? ' selected' : '') + '>允许</option><option value="false"' + (source === 'self' && val === false ? ' selected' : '') + '>禁止</option></select>';
+    } else if (pi.type === 'select') {
+      inputHtml = '<select id="sec_pol_' + pi.key + '" style="max-width:160px;height:36px"><option value=""' + (source !== 'self' ? ' selected' : '') + '>继承</option>';
+      pi.options.forEach(function(opt) {
+        inputHtml += '<option value="' + opt + '"' + (source === 'self' && val === opt ? ' selected' : '') + '>' + opt + '</option>';
+      });
+      inputHtml += '</select>';
+    }
+    html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(16,31,56,.06)">';
+    html += '<div style="min-width:100px;font-weight:600;font-size:13px">' + pi.label + '</div>';
+    html += '<div style="flex:1;font-size:12px;color:var(--muted)">' + pi.desc + '</div>';
+    html += '<div style="min-width:100px;font-size:12px;text-align:center">' + sourceLabel + '</div>';
+    html += '<div style="display:flex;align-items:center;gap:6px">' + inputHtml;
+    if (source === 'self') {
+      html += '<button class="btn-ghost" style="height:28px;font-size:11px;padding:0 8px;color:var(--danger)" onclick="secClearPolicyItem(\'' + pi.key + '\')">清除</button>';
+    }
+    html += '</div></div>';
+  });
+  document.getElementById('secPolicyPanel').innerHTML = html;
+}
+
+function secClearPolicyItem(key) {
+  var el = document.getElementById('sec_pol_' + key);
+  if (el) el.value = '';
+  saveSecPolicy();
+}
+
+async function saveSecPolicy() {
+  if (!_secSelectedGroupId) return;
+  var policy = {};
+  POLICY_ITEMS.forEach(function(pi) {
+    var el = document.getElementById('sec_pol_' + pi.key);
+    if (!el || el.value === '') return;
+    if (pi.type === 'bool') {
+      policy[pi.key] = el.value === 'true';
+    } else {
+      policy[pi.key] = el.value;
+    }
+  });
+  try {
+    await api('/api/admin/security/groups/' + encodeURIComponent(_secSelectedGroupId) + '/policy', { method: 'PUT', body: JSON.stringify({ policy: policy }) });
+    showToast('策略已保存', 'success');
+    loadSecGroupPolicy(_secSelectedGroupId);
+  } catch (err) { showToast('保存策略失败: ' + err.message, 'error'); }
+}
+
+async function loadSecGroupMembers() {
+  if (!_secSelectedGroupId) return;
+  var root = document.getElementById('secMembersList');
+  try {
+    var treeData = await api('/api/admin/security/groups');
+    var members = _findGroupMembers(treeData.tree, _secSelectedGroupId);
+    if (members === null) {
+      root.innerHTML = '<div class="hint">无法获取成员列表</div>';
+      return;
+    }
+    root.innerHTML = '<div class="item-meta" style="margin-bottom:8px">共 ' + members + ' 名成员</div>';
+  } catch (err) { root.innerHTML = '<div class="hint" style="color:var(--danger)">加载成员失败: ' + escapeHtml(err.message) + '</div>'; }
+}
+
+function _findGroupMembers(tree, id) {
+  if (!tree) return null;
+  if (tree.id === id) return tree.member_count || 0;
+  if (tree.children) { for (var i = 0; i < tree.children.length; i++) { var r = _findGroupMembers(tree.children[i], id); if (r !== null) return r; } }
+  return null;
+}
 
 </script>
 </body>

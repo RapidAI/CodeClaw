@@ -179,7 +179,7 @@ func TestBuildRunCommand(t *testing.T) {
 
 func TestCraftedToolsDir(t *testing.T) {
 	dir := craftedToolsDir()
-	if !strings.Contains(dir, ".cceasy") || !strings.Contains(dir, "crafted_tools") {
+	if !strings.Contains(dir, ".maclaw") || !strings.Contains(dir, "crafted_tools") {
 		t.Errorf("unexpected crafted tools dir: %s", dir)
 	}
 }

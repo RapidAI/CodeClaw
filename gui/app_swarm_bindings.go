@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"sync"
+
+	"github.com/RapidAI/CodeClaw/corelib/swarm"
 )
 
 var errSwarmNotInit = fmt.Errorf("swarm orchestrator not initialised")
@@ -73,16 +75,22 @@ func (a *App) ensureSwarmOrchestrator() {
 	swarmInitOnce.Do(func() {
 		a.ensureRemoteInfra()
 		llmCfg := a.GetMaclawLLMConfig()
-		notifier := NewDefaultSwarmNotifier(a)
-		a.swarmOrchestrator = NewSwarmOrchestrator(
-			a,
-			a.remoteSessions,
-			a.sharedContext,
-			a.projectScanner,
+
+		sessionAdapter := &guiSessionAdapter{manager: a.remoteSessions}
+		appCtx := &guiAppContext{app: a}
+		llmCaller := &guiLLMCaller{cfg: llmCfg}
+		notifier := swarm.NewDefaultNotifier(func(name string, data ...interface{}) {
+			a.emitEvent(name, data...)
+		})
+
+		a.swarmOrchestrator = swarm.NewSwarmOrchestrator(
+			sessionAdapter,
 			notifier,
-			llmCfg,
+			swarm.WithAppContext(appCtx),
+			swarm.WithLLMCaller(llmCaller),
 		)
-		// 自动接入 IM 文件投递：如果 Hub 已连接，Swarm 文档可通过 IM 发送
+
+		// 自动接入 IM 文件投递
 		a.wireSwarmIMDelivery()
 	})
 }

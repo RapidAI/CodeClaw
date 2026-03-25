@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/RapidAI/CodeClaw/hub/internal/auth"
+	"github.com/RapidAI/CodeClaw/hub/internal/security"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
 	"github.com/gorilla/websocket"
 )
@@ -267,6 +268,10 @@ type Gateway struct {
 	// DeviceNotifyFunc is called on machine connect/disconnect for IM notifications.
 	// Set via SetDeviceNotifyFunc after construction.
 	DeviceNotifyFunc DeviceNotifyHook
+
+	// SecurityProvider provides security policy data for heartbeat ack injection.
+	// Set via SetSecurityProvider after construction.
+	SecurityProvider security.SecurityPolicyProvider
 
 	mu                sync.RWMutex
 	viewersByMachine  map[string]map[*ConnContext]struct{}

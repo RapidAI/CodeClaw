@@ -157,15 +157,17 @@ type SDKControlCancelRequest struct {
 
 // SDKUserInput is sent TO Claude Code via stdin to provide user messages.
 // Matches the format used by the official Claude Code SDK:
-//   - Text:  {"type":"user","message":{"role":"user","content":"hello"}}
-//   - Image: {"type":"user","message":{"role":"user","content":[{"type":"text","text":"..."},{"type":"image","source":{...}}]}}
+//   - Text:  {"type":"user","message":{"role":"user","content":"hello"},"session_id":"default","parent_tool_use_id":null}
+//   - Image: {"type":"user","message":{"role":"user","content":[...]},"session_id":"default","parent_tool_use_id":null}
 //
-// Note: session_id and parent_tool_use_id are NOT included — the official
-// SDK (hapi) does not send them, and Claude Code handles session routing
-// internally when using --input-format stream-json.
+// The session_id and parent_tool_use_id fields are required by Claude Code
+// when using --input-format stream-json. Omitting them causes parse errors
+// in some versions.
 type SDKUserInput struct {
-	Type    string         `json:"type"` // "user"
-	Message SDKUserMessage `json:"message"`
+	Type              string         `json:"type"`                 // "user"
+	Message           SDKUserMessage `json:"message"`
+	SessionID         string         `json:"session_id"`           // "default" for main conversation
+	ParentToolUseID   *string        `json:"parent_tool_use_id"`   // null for normal user messages
 }
 
 type SDKUserMessage struct {

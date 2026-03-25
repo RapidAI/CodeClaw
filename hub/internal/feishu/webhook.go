@@ -3,6 +3,7 @@ package feishu
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RapidAI/CodeClaw/hub/internal/im"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
 	"github.com/go-lark/lark/v2"
 )
@@ -99,6 +101,7 @@ func handleBotMessage(n *Notifier, raw json.RawMessage) {
 			} `json:"sender_id"`
 		} `json:"sender"`
 		Message struct {
+			MessageID   string `json:"message_id"`
 			MessageType string `json:"message_type"`
 			Content     string `json:"content"`
 		} `json:"message"`
@@ -114,28 +117,42 @@ func handleBotMessage(n *Notifier, raw json.RawMessage) {
 	}
 
 	text := extractText(event.Message.Content)
+	msgType := event.Message.MessageType
+	if msgType == "" {
+		msgType = "text"
+	}
+
+	// --- Download file/image attachments for non-text messages ---
+	var attachments []im.MessageAttachment
+	switch msgType {
+	case "image":
+		att := downloadFeishuImage(n, event.Message.MessageID, event.Message.Content)
+		if att != nil {
+			attachments = append(attachments, *att)
+		}
+	case "file":
+		att := downloadFeishuFile(n, event.Message.MessageID, event.Message.Content)
+		if att != nil {
+			attachments = append(attachments, *att)
+		}
+	case "audio":
+		att := downloadFeishuFile(n, event.Message.MessageID, event.Message.Content)
+		if att != nil {
+			att.Type = "audio"
+			attachments = append(attachments, *att)
+		}
+	}
 
 	// --- IM Adapter routing ---
-	// If a FeishuPlugin is wired and the IM Adapter is active, convert the
-	// message to IncomingMessage and route through the adapter pipeline.
-	// Legacy flows (email binding, verification codes, slash commands when
-	// no adapter) are preserved as fallback.
 	if n.plugin != nil {
 		// Email binding and verification code flows are always handled by
 		// the legacy path — they are Feishu-specific onboarding flows that
 		// the generic IM Adapter does not handle.
-		// Agent conversation commands (/new, /reset, /clear) are routed to
-		// the adapter so the agent can handle them directly.
-		if text != "" && !looksLikeEmail(text) && !isVerifyCode(text) {
-			// Legacy slash commands stay in the legacy path, except for
-			// agent conversation reset commands which the adapter handles.
+		hasContent := text != "" || len(attachments) > 0
+		if hasContent && !looksLikeEmail(text) && !isVerifyCode(text) {
 			isAgentCmd := text == "/new" || text == "/reset" || text == "/clear" || strings.HasPrefix(text, "/call ") || strings.HasPrefix(text, "/discuss ") || text == "/discuss" || text == "/stop"
 			if isAgentCmd || !strings.HasPrefix(text, "/") {
-				msgType := event.Message.MessageType
-				if msgType == "" {
-					msgType = "text"
-				}
-				if n.plugin.DispatchBotMessage(openID, msgType, text, raw) {
+				if n.plugin.DispatchBotMessage(openID, msgType, text, attachments, raw) {
 					return
 				}
 			}
@@ -262,8 +279,8 @@ func (n *Notifier) resolveUserID(openID string) string {
 	// Find email for this open_id.
 	n.oidMu.RLock()
 	var email string
-	for e, oid := range n.oidCache {
-		if oid == openID {
+	for e, info := range n.oidCache {
+		if info.OpenID == openID {
 			email = e
 			break
 		}
@@ -733,8 +750,8 @@ func handleExitSession(n *Notifier, openID string) {
 func handleUnbind(n *Notifier, openID string) {
 	n.oidMu.RLock()
 	var email string
-	for e, oid := range n.oidCache {
-		if oid == openID {
+	for e, info := range n.oidCache {
+		if info.OpenID == openID {
 			email = e
 			break
 		}
@@ -915,8 +932,186 @@ func handleVerifyCode(n *Notifier, openID, code string) {
 		return
 	}
 
-	n.BindOpenID(pb.Email, openID)
+	n.BindOpenID(pb.Email, openID, "")
 	replyText(n, openID, "✅ 绑定成功！您将通过飞书接收 Hub 会话通知。\n✅ Binding succeeded! You will receive Hub session notifications via Feishu.")
+}
+
+// ---------------------------------------------------------------------------
+// Feishu file/image download helpers
+// ---------------------------------------------------------------------------
+
+// downloadFeishuImage downloads an image from a Feishu message and returns
+// it as a MessageAttachment. Returns nil on failure (logged, not fatal).
+func downloadFeishuImage(n *Notifier, messageID, content string) *im.MessageAttachment {
+	if n == nil || n.bot == nil || messageID == "" {
+		return nil
+	}
+	var parsed struct {
+		ImageKey string `json:"image_key"`
+	}
+	if json.Unmarshal([]byte(content), &parsed) != nil || parsed.ImageKey == "" {
+		log.Printf("[feishu/webhook] image message missing image_key")
+		return nil
+	}
+
+	data, contentType, err := downloadFeishuResource(n, messageID, parsed.ImageKey, "image")
+	if err != nil {
+		log.Printf("[feishu/webhook] download image failed (msg=%s key=%s): %v", messageID, parsed.ImageKey, err)
+		return nil
+	}
+
+	if int64(len(data)) > im.MaxAttachmentSize {
+		log.Printf("[feishu/webhook] image too large: %d bytes (max %d)", len(data), im.MaxAttachmentSize)
+		return nil
+	}
+
+	// Use HTTP Content-Type header for MIME detection; feishu image_keys
+	// (e.g. img_v2_xxx) have no file extension.
+	mimeType := "image/png"
+	if ct := contentType; ct != "" {
+		// Strip parameters like "; charset=utf-8"
+		if idx := strings.IndexByte(ct, ';'); idx >= 0 {
+			ct = strings.TrimSpace(ct[:idx])
+		}
+		if strings.HasPrefix(ct, "image/") {
+			mimeType = ct
+		}
+	}
+
+	return &im.MessageAttachment{
+		Type:     "image",
+		FileName: parsed.ImageKey,
+		MimeType: mimeType,
+		Data:     base64.StdEncoding.EncodeToString(data),
+		Size:     int64(len(data)),
+	}
+}
+
+// downloadFeishuFile downloads a file from a Feishu message and returns
+// it as a MessageAttachment. Returns nil on failure.
+func downloadFeishuFile(n *Notifier, messageID, content string) *im.MessageAttachment {
+	if n == nil || n.bot == nil || messageID == "" {
+		return nil
+	}
+	var parsed struct {
+		FileKey  string `json:"file_key"`
+		FileName string `json:"file_name"`
+	}
+	if json.Unmarshal([]byte(content), &parsed) != nil || parsed.FileKey == "" {
+		log.Printf("[feishu/webhook] file message missing file_key")
+		return nil
+	}
+
+	data, _, err := downloadFeishuResource(n, messageID, parsed.FileKey, "file")
+	if err != nil {
+		log.Printf("[feishu/webhook] download file failed (msg=%s key=%s): %v", messageID, parsed.FileKey, err)
+		return nil
+	}
+
+	if int64(len(data)) > im.MaxAttachmentSize {
+		log.Printf("[feishu/webhook] file too large: %d bytes (max %d)", len(data), im.MaxAttachmentSize)
+		return nil
+	}
+
+	fileName := parsed.FileName
+	if fileName == "" {
+		fileName = parsed.FileKey
+	}
+
+	return &im.MessageAttachment{
+		Type:     "file",
+		FileName: fileName,
+		MimeType: guessMimeType(fileName),
+		Data:     base64.StdEncoding.EncodeToString(data),
+		Size:     int64(len(data)),
+	}
+}
+
+// downloadFeishuResource downloads a message resource (image or file) using
+// the Feishu Open API: GET /open-apis/im/v1/messages/:message_id/resources/:file_key
+func downloadFeishuResource(n *Notifier, messageID, fileKey, resourceType string) ([]byte, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Use the bot's tenant access token to call the resource download API.
+	token := n.bot.TenantAccessToken()
+	if token == "" {
+		return nil, "", fmt.Errorf("tenant access token is empty (bot not authenticated)")
+	}
+
+	url := fmt.Sprintf("https://open.feishu.cn/open-apis/im/v1/messages/%s/resources/%s?type=%s",
+		messageID, fileKey, resourceType)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+
+	// Limit to MaxAttachmentSize + some margin for safety.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, im.MaxAttachmentSize+1024))
+	if err != nil {
+		return nil, "", err
+	}
+	return data, contentType, nil
+}
+
+// guessMimeType returns a MIME type based on file extension.
+func guessMimeType(fileName string) string {
+	lower := strings.ToLower(fileName)
+	switch {
+	case strings.HasSuffix(lower, ".pdf"):
+		return "application/pdf"
+	case strings.HasSuffix(lower, ".doc"):
+		return "application/msword"
+	case strings.HasSuffix(lower, ".docx"):
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case strings.HasSuffix(lower, ".xls"):
+		return "application/vnd.ms-excel"
+	case strings.HasSuffix(lower, ".xlsx"):
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case strings.HasSuffix(lower, ".ppt"):
+		return "application/vnd.ms-powerpoint"
+	case strings.HasSuffix(lower, ".pptx"):
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case strings.HasSuffix(lower, ".png"):
+		return "image/png"
+	case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(lower, ".gif"):
+		return "image/gif"
+	case strings.HasSuffix(lower, ".webp"):
+		return "image/webp"
+	case strings.HasSuffix(lower, ".mp3"):
+		return "audio/mpeg"
+	case strings.HasSuffix(lower, ".wav"):
+		return "audio/wav"
+	case strings.HasSuffix(lower, ".mp4"):
+		return "video/mp4"
+	case strings.HasSuffix(lower, ".zip"):
+		return "application/zip"
+	case strings.HasSuffix(lower, ".txt"):
+		return "text/plain"
+	case strings.HasSuffix(lower, ".csv"):
+		return "text/csv"
+	case strings.HasSuffix(lower, ".json"):
+		return "application/json"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 // ---------------------------------------------------------------------------

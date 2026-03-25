@@ -16,6 +16,18 @@ import (
 // gossipHTTPClient is a shared http.Client for all gossip TUI commands.
 var gossipHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// GossipGuardFn is set by the main package to check Hub security policy.
+// When set and returns a non-nil error, gossip write commands are blocked.
+var GossipGuardFn func() error
+
+// checkGossipPermission checks whether gossip write operations are allowed.
+func checkGossipPermission() error {
+	if GossipGuardFn != nil {
+		return GossipGuardFn()
+	}
+	return nil
+}
+
 // resolveMachineID 从本地配置读取 machine_id。
 func resolveMachineID() string {
 	store := NewFileConfigStore(ResolveDataDir())
@@ -112,6 +124,9 @@ func gossipBrowse(args []string) error {
 
 // gossipPublish 发布八卦帖子。gossip publish --content "..." --category owner|project|news
 func gossipPublish(args []string) error {
+	if err := checkGossipPermission(); err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("gossip publish", flag.ExitOnError)
 	content := fs.String("content", "", "帖子内容")
 	category := fs.String("category", "", "分类: owner|project|news")
@@ -184,6 +199,9 @@ func gossipPublish(args []string) error {
 
 // gossipComment 提交评论。gossip comment --post-id ID --content "..." [--rating 0-5]
 func gossipComment(args []string) error {
+	if err := checkGossipPermission(); err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("gossip comment", flag.ExitOnError)
 	postID := fs.String("post-id", "", "帖子 ID")
 	content := fs.String("content", "", "评论内容")
@@ -258,6 +276,9 @@ func gossipComment(args []string) error {
 
 // gossipRate 评分帖子。gossip rate --post-id ID --rating 1-5
 func gossipRate(args []string) error {
+	if err := checkGossipPermission(); err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("gossip rate", flag.ExitOnError)
 	postID := fs.String("post-id", "", "帖子 ID")
 	rating := fs.Int("rating", 0, "评分 1-5")

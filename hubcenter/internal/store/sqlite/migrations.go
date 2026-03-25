@@ -111,6 +111,9 @@ func RunMigrations(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_gossip_comments_unique_rating ON gossip_comments(post_id, machine_id) WHERE rating > 0`); err != nil {
 		return fmt.Errorf("create gossip rating unique index: %w", err)
 	}
+	if err := ensureGossipFlaggedColumn(db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -176,6 +179,39 @@ func ensureInvitationCodeRequiredColumn(db *sql.DB) error {
 
 	if _, err := db.Exec(`ALTER TABLE hub_instances ADD COLUMN invitation_code_required BOOLEAN NOT NULL DEFAULT 0`); err != nil {
 		return fmt.Errorf("add hub invitation_code_required column: %w", err)
+	}
+	return nil
+}
+
+func ensureGossipFlaggedColumn(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(gossip_posts)`)
+	if err != nil {
+		return fmt.Errorf("inspect gossip_posts columns: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal sql.NullString
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
+			return fmt.Errorf("scan gossip_posts column: %w", err)
+		}
+		if name == "flagged" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate gossip_posts columns: %w", err)
+	}
+
+	if _, err := db.Exec(`ALTER TABLE gossip_posts ADD COLUMN flagged INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add gossip flagged column: %w", err)
 	}
 	return nil
 }

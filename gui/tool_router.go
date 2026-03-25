@@ -142,3 +142,12 @@ func matchRecommendationsLocal(hubClient *SkillHubClient, msgTokens []string) ma
 	}
 	return nil
 }
+
+// codingSessionToolNames mirrors corelib/tool.CodingSessionToolNames.
+var codingSessionToolNames = tool.CodingSessionToolNames
+
+// filterCodingTools removes coding session tools from the tool list.
+// Used in lite/simple mode where coding LLM providers are not configured.
+func filterCodingTools(tools []map[string]interface{}) []map[string]interface{} {
+	return tool.FilterCodingTools(tools)
+}

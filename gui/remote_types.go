@@ -217,8 +217,54 @@ type RemoteSession struct {
 	// session behavior. Used to detect parameter changes across launches.
 	LaunchFP string
 
+	// ResumeContext stores context from a previous session that exited
+	// mid-task, enabling the Agent to create a new session and continue
+	// where the previous one left off.
+	ResumeContext *SessionResumeContext
+
+	// PendingUserQuestion tracks a pending AskUserQuestion tool_use block.
+	// When Claude Code uses AskUserQuestion, it waits for a tool_result
+	// with the user's answer. The next WriteInput call will be wrapped
+	// as a tool_result instead of a new user message.
+	PendingUserQuestion *PendingToolUse
+
 	workspaceRelease func()
 	configCleanup    func() // restores tool config files modified by onboarding
+}
+
+// PendingToolUse tracks a tool_use block that requires user interaction.
+type PendingToolUse struct {
+	ToolUseID string
+	ToolName  string
+}
+
+// SessionResumeContext captures the state of a session that exited mid-task,
+// so the Agent can create a new session and continue the work.
+type SessionResumeContext struct {
+	OriginalTask    string   `json:"original_task"`     // the user's original request
+	CompletedFiles  []string `json:"completed_files"`   // files that were created/modified
+	LastProgress    string   `json:"last_progress"`     // last progress summary
+	LastOutput      string   `json:"last_output"`       // tail of output before exit
+	ResumeCount     int      `json:"resume_count"`      // how many times we've resumed
+	ProjectPath     string   `json:"project_path"`      // project path for new session
+	Tool            string   `json:"tool"`              // tool name (claude, gemini, etc.)
+	ExitReason      string   `json:"exit_reason"`       // "token_limit", "api_error", "unknown"
+}
+
+// isStructuredSession returns true for sessions that use a structured
+// protocol (SDK JSON, ACP JSON-RPC, etc.) rather than a raw PTY.
+// These tools (Claude Code, Gemini CLI, Codex, iFlow) are known to exit
+// with code 1 as their normal termination — this should NOT be treated
+// as a failure.
+func (s *RemoteSession) isStructuredSession() bool {
+	if s.Exec == nil {
+		return false
+	}
+	switch s.Exec.(type) {
+	case *SDKExecutionHandle, *GeminiACPExecutionHandle, *CodexSDKExecutionHandle, *IFlowSDKExecutionHandle:
+		return true
+	}
+	return false
 }
 
 type OutputResult struct {

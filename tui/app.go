@@ -209,7 +209,7 @@ func (a *TUIApp) initKernel() tea.Msg {
 	// 启动 SessionMonitor 状态通知转发
 	go func() {
 		for evt := range statusCh {
-			logger.Info("session monitor event: %s session=%s", evt.Type, evt.SessionID)
+			logger.Info("session monitor event: %d session=%s", evt.Type, evt.SessionID)
 		}
 	}()
 
@@ -473,7 +473,7 @@ func runTUI() {
 		if app.statusCh != nil {
 			for evt := range app.statusCh {
 				p.Send(sessionMonitorMsg{
-					eventType: string(evt.Type),
+					eventType: fmt.Sprintf("%d", evt.Type),
 					sessionID: evt.SessionID,
 					message:   evt.Message,
 				})

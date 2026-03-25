@@ -165,7 +165,7 @@ func (s *IdentityService) SetLoginNotifier(n LoginNotifier) {
 	s.loginNotifier = n
 }
 
-func (s *IdentityService) StartEnrollment(ctx context.Context, email, machineName, platform, clientID, invitationCode, mobile string) (*EnrollmentResult, error) {
+func (s *IdentityService) StartEnrollment(ctx context.Context, email, machineName, platform, clientID, invitationCode string) (*EnrollmentResult, error) {
 	email = normalizeEmail(email)
 	if email == "" {
 		return nil, ErrInvalidEmail
@@ -233,7 +233,7 @@ func (s *IdentityService) StartEnrollment(ctx context.Context, email, machineNam
 				Email:   email,
 			}, nil
 		case "approval":
-			return s.ensurePendingApproval(ctx, email, mobile, "Awaiting administrator approval before machine enrollment")
+			return s.ensurePendingApproval(ctx, email, "Awaiting administrator approval before machine enrollment")
 		default:
 			if !s.allowSelfEnroll {
 				return &EnrollmentResult{
@@ -277,7 +277,7 @@ func (s *IdentityService) RequestEmailLogin(ctx context.Context, email string) (
 				Message: "This hub requires manual binding before email sign-in can be used",
 			}, nil
 		case "approval":
-			result, err := s.ensurePendingApproval(ctx, email, "", "Awaiting administrator approval before email sign-in")
+			result, err := s.ensurePendingApproval(ctx, email, "Awaiting administrator approval before email sign-in")
 			if err != nil {
 				return nil, err
 			}
@@ -855,7 +855,7 @@ func (s *IdentityService) consumePendingLoginToken(ctx context.Context, email st
 	_ = s.loginTok.Consume(ctx, pending.ID, time.Now())
 }
 
-func (s *IdentityService) ensurePendingApproval(ctx context.Context, email, mobile, message string) (*EnrollmentResult, error) {
+func (s *IdentityService) ensurePendingApproval(ctx context.Context, email, message string) (*EnrollmentResult, error) {
 	pending, err := s.enrollments.GetPendingByEmail(ctx, email)
 	if err != nil {
 		return nil, err
@@ -865,7 +865,6 @@ func (s *IdentityService) ensurePendingApproval(ctx context.Context, email, mobi
 		if err := s.enrollments.Create(ctx, &store.UserEnrollment{
 			ID:        newID("enr"),
 			Email:     email,
-			Mobile:    mobile,
 			Status:    "pending",
 			Note:      message,
 			CreatedAt: now,
@@ -873,9 +872,6 @@ func (s *IdentityService) ensurePendingApproval(ctx context.Context, email, mobi
 		}); err != nil {
 			return nil, err
 		}
-	} else if mobile != "" && pending.Mobile != mobile {
-		// Update mobile if the user re-submits with a (different) phone number.
-		_ = s.enrollments.UpdateMobile(ctx, pending.ID, mobile)
 	}
 	return &EnrollmentResult{
 		Status:  "pending_approval",

@@ -137,6 +137,7 @@ type GossipPost struct {
 	Score     int    // aggregate rating score
 	Votes     int    // total vote count
 	Locked    bool   // admin locked — no new comments/ratings
+	Flagged   bool   // LLM moderation flagged — hidden from public view
 	CreatedAt time.Time
 }
 
@@ -154,9 +155,12 @@ type GossipComment struct {
 type GossipRepository interface {
 	CreatePost(ctx context.Context, post *GossipPost) error
 	ListPosts(ctx context.Context, offset, limit int) ([]*GossipPost, int, error)
+	ListAllPosts(ctx context.Context, offset, limit int) ([]*GossipPost, int, error)
+	ListFlaggedPosts(ctx context.Context, offset, limit int) ([]*GossipPost, int, error)
 	GetPost(ctx context.Context, id string) (*GossipPost, error)
 	DeletePost(ctx context.Context, id string) error
 	LockPost(ctx context.Context, id string, locked bool) error
+	FlagPost(ctx context.Context, id string, flagged bool) error
 	CreateComment(ctx context.Context, comment *GossipComment) error
 	ListComments(ctx context.Context, postID string, offset, limit int) ([]*GossipComment, int, error)
 	DeleteComment(ctx context.Context, id string) error

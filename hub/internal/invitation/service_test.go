@@ -145,10 +145,14 @@ func (m *memInvitationCodeRepo) GetByEmail(_ context.Context, email string) (*st
 	return latest, nil
 }
 
-func (m *memInvitationCodeRepo) ListUnused(_ context.Context, exportedFilter string) ([]*store.InvitationCode, error) {
+func (m *memInvitationCodeRepo) ListUnused(_ context.Context, exportedFilter string, vipOnly ...bool) ([]*store.InvitationCode, error) {
+	filterVIP := len(vipOnly) > 0 && vipOnly[0]
 	var result []*store.InvitationCode
 	for _, c := range m.codes {
 		if c.Status != "unused" {
+			continue
+		}
+		if filterVIP && !c.VIP {
 			continue
 		}
 		switch exportedFilter {
@@ -209,7 +213,7 @@ func TestGenerateCodes_ValidCount(t *testing.T) {
 	svc := NewService(&memInvitationCodeRepo{}, newMemSettingsRepo())
 	ctx := context.Background()
 
-	codes, err := svc.GenerateCodes(ctx, 5, 0)
+	codes, err := svc.GenerateCodes(ctx, 5, 0, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,7 +241,7 @@ func TestGenerateCodes_InvalidCount(t *testing.T) {
 	ctx := context.Background()
 
 	for _, count := range []int{0, -1, 51, 100} {
-		_, err := svc.GenerateCodes(ctx, count, 0)
+		_, err := svc.GenerateCodes(ctx, count, 0, false)
 		if !errors.Is(err, ErrInvalidCount) {
 			t.Errorf("count=%d: expected ErrInvalidCount, got %v", count, err)
 		}
@@ -249,7 +253,7 @@ func TestValidateAndConsume_Success(t *testing.T) {
 	svc := NewService(repo, newMemSettingsRepo())
 	ctx := context.Background()
 
-	codes, err := svc.GenerateCodes(ctx, 1, 0)
+	codes, err := svc.GenerateCodes(ctx, 1, 0, false)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -277,7 +281,7 @@ func TestValidateAndConsume_AlreadyUsed(t *testing.T) {
 	svc := NewService(repo, newMemSettingsRepo())
 	ctx := context.Background()
 
-	codes, _ := svc.GenerateCodes(ctx, 1, 0)
+	codes, _ := svc.GenerateCodes(ctx, 1, 0, false)
 	_ = svc.ValidateAndConsume(ctx, codes[0].Code, "first@example.com")
 
 	err := svc.ValidateAndConsume(ctx, codes[0].Code, "second@example.com")
@@ -345,7 +349,7 @@ func TestDeleteCodeByEmail(t *testing.T) {
 	svc := NewService(repo, newMemSettingsRepo())
 	ctx := context.Background()
 
-	codes, _ := svc.GenerateCodes(ctx, 3, 0)
+	codes, _ := svc.GenerateCodes(ctx, 3, 0, false)
 	_ = svc.ValidateAndConsume(ctx, codes[0].Code, "alice@example.com")
 	_ = svc.ValidateAndConsume(ctx, codes[1].Code, "alice@example.com")
 	// codes[2] stays unused
@@ -385,7 +389,7 @@ func TestListCodes(t *testing.T) {
 	svc := NewService(repo, newMemSettingsRepo())
 	ctx := context.Background()
 
-	codes, _ := svc.GenerateCodes(ctx, 3, 0)
+	codes, _ := svc.GenerateCodes(ctx, 3, 0, false)
 	_ = svc.ValidateAndConsume(ctx, codes[0].Code, "user@example.com")
 
 	all, err := svc.ListCodes(ctx, "", "")

@@ -79,23 +79,24 @@ func UpdateFeishuConfigHandler(system store.SystemSettingsRepository, notifier *
 }
 
 // GetFeishuBindingsHandler returns the current email→open_id bindings with
-// server-side pagination and optional email search.
+// server-side pagination and optional search (email or mobile substring).
 //
 // Query params:
 //   - page      (int, default 1)
 //   - page_size (int, default 50, max 100)
-//   - search    (string, optional email substring filter)
+//   - search    (string, optional email/mobile substring filter)
 func GetFeishuBindingsHandler(notifier *feishu.Notifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if notifier == nil {
 			writeJSON(w, http.StatusOK, map[string]any{"bindings": []any{}, "total": 0, "page": 1, "page_size": 50})
 			return
 		}
-		m := notifier.GetOpenIDMap()
+		m := notifier.GetBindingsMap()
 
 		type binding struct {
 			Email  string `json:"email"`
 			OpenID string `json:"open_id"`
+			Mobile string `json:"mobile"`
 		}
 
 		// Collect and optionally filter by search.
@@ -105,11 +106,13 @@ func GetFeishuBindingsHandler(notifier *feishu.Notifier) http.HandlerFunc {
 			initCap = 0 // avoid over-allocation when filtering
 		}
 		all := make([]binding, 0, initCap)
-		for email, oid := range m {
-			if search != "" && !strings.Contains(strings.ToLower(email), search) {
+		for email, info := range m {
+			if search != "" &&
+				!strings.Contains(strings.ToLower(email), search) &&
+				!strings.Contains(strings.ToLower(info.Mobile), search) {
 				continue
 			}
-			all = append(all, binding{Email: email, OpenID: oid})
+			all = append(all, binding{Email: email, OpenID: info.OpenID, Mobile: info.Mobile})
 		}
 
 		// Sort by email for stable pagination.
@@ -122,8 +125,8 @@ func GetFeishuBindingsHandler(notifier *feishu.Notifier) http.HandlerFunc {
 		if ps, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && ps > 0 {
 			pageSize = ps
 		}
-		if pageSize > 100 {
-			pageSize = 100
+		if pageSize > 10000 {
+			pageSize = 10000
 		}
 		page := 1
 		if p, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && p > 0 {

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 
+	"github.com/RapidAI/CodeClaw/corelib/brand"
 	"github.com/energye/systray"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -18,8 +19,8 @@ func setupTray(app *App, appOptions *options.App) {
 		go func() {
 			systray.Run(func() {
 				systray.SetIcon(icon)
-				systray.SetTitle("MaClaw")
-				systray.SetTooltip("MaClaw Dashboard")
+				systray.SetTitle(brand.Current().DisplayName)
+				systray.SetTooltip(brand.Current().TrayTooltip)
 
 				mShow := systray.AddMenuItem("Show", "Show Main Window")
 				systray.AddSeparator()
@@ -27,9 +28,10 @@ func setupTray(app *App, appOptions *options.App) {
 
 				// Register update function
 				UpdateTrayMenu = func(lang string) {
-					t, ok := trayTranslations[lang]
+					tr := trayTranslations()
+					t, ok := tr[lang]
 					if !ok {
-						t = trayTranslations["en"]
+						t = tr["en"]
 					}
 					systray.SetTitle(t["title"])
 					systray.SetTooltip(t["title"])

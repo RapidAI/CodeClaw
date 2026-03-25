@@ -20,7 +20,7 @@ func TestPreservation_DesktopRemoteEnabledFalse_ReturnsDisabledError(t *testing.
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -144,7 +144,7 @@ func TestPreservation_RemoteEnabledTrue_NoDisabledError(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}

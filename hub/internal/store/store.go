@@ -60,7 +60,17 @@ type InvitationCode struct {
 	UsedAt       *time.Time
 	ValidityDays int // 0 = 长期有效，>0 = 有效天数
 	Exported     bool
+	VIP          bool
 	CreatedAt    time.Time
+}
+
+type EmailInvite struct {
+	ID        string
+	Email     string
+	Role      string
+	Status    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Machine struct {
@@ -184,8 +194,15 @@ type InvitationCodeRepository interface {
 	Unbind(ctx context.Context, id string) error
 	DeleteByID(ctx context.Context, id string) error
 	DeleteByEmail(ctx context.Context, email string) (int64, error)
-	ListUnused(ctx context.Context, exportedFilter string) ([]*InvitationCode, error)
+	ListUnused(ctx context.Context, exportedFilter string, vipOnly ...bool) ([]*InvitationCode, error)
 	MarkExported(ctx context.Context, ids []string) error
+}
+
+type EmailInviteRepository interface {
+	Create(ctx context.Context, item *EmailInvite) error
+	List(ctx context.Context) ([]*EmailInvite, error)
+	GetByID(ctx context.Context, id string) (*EmailInvite, error)
+	DeleteByID(ctx context.Context, id string) error
 }
 
 type MachineRepository interface {
@@ -255,6 +272,7 @@ type Store struct {
 	Enrollments     EnrollmentRepository
 	EmailBlocks     EmailBlocklistRepository
 	InvitationCodes InvitationCodeRepository
+	EmailInvites    EmailInviteRepository
 	Machines        MachineRepository
 	ViewerTokens    ViewerTokenRepository
 	LoginTokens     LoginTokenRepository

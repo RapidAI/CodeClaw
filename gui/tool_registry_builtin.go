@@ -60,10 +60,15 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 		}, []string{"tool"},
 		func(args map[string]interface{}) string { return h.toolCreateSession(args) })
 
-	reg("list_projects", "列出已配置的项目列表，包含项目 ID、名称和路径",
-		ToolCategoryBuiltin, []string{"project", "list"},
-		nil, nil,
-		func(args map[string]interface{}) string { return h.toolListProjects() })
+	reg("project_manage", "项目管理（创建/列出/删除/切换项目）",
+		ToolCategoryBuiltin, []string{"project", "list", "create", "delete", "switch"},
+		map[string]interface{}{
+			"action": map[string]string{"type": "string", "description": "操作: create/list/delete/switch"},
+			"name":   map[string]string{"type": "string", "description": "项目名称（create 必填）"},
+			"path":   map[string]string{"type": "string", "description": "项目路径（create 必填）"},
+			"target": map[string]string{"type": "string", "description": "项目名称或 ID（delete/switch 必填）"},
+		}, []string{"action"},
+		func(args map[string]interface{}) string { return h.toolProjectManage(args) })
 
 	reg("list_providers", "列出指定编程工具的所有可用服务商（已过滤未配置的空服务商）",
 		ToolCategoryBuiltin, []string{"provider", "list", "model"},
@@ -380,10 +385,10 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 		func(args map[string]interface{}) string { return h.toolSetNickname(args) })
 
 	// --- Agent self-management ---
-	reg("set_max_iterations", fmt.Sprintf("调整最大推理轮数。设置后会持久化保存，后续对话也会生效。当你判断任务复杂需要更多轮次时调用此工具扩展上限，任务简单时可缩减。上限不超过 %d。", maxAgentIterationsCap),
+	reg("set_max_iterations", fmt.Sprintf("调整最大推理轮数。设置后会持久化保存，后续对话也会生效。当你判断任务复杂需要更多轮次时调用此工具扩展上限，任务简单时可缩减。范围 %d-%d。", minAgentIterations, maxAgentIterationsCap),
 		ToolCategoryBuiltin, []string{"agent", "iterations", "limit"},
 		map[string]interface{}{
-			"max_iterations": map[string]string{"type": "integer", "description": fmt.Sprintf("新的最大轮数（1-%d）", maxAgentIterationsCap)},
+			"max_iterations": map[string]string{"type": "integer", "description": fmt.Sprintf("新的最大轮数（%d-%d）", minAgentIterations, maxAgentIterationsCap)},
 			"reason":         map[string]string{"type": "string", "description": "调整原因（用于日志记录）"},
 		}, []string{"max_iterations"},
 		func(args map[string]interface{}) string { return h.toolSetMaxIterations(args) })
@@ -442,4 +447,23 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 			"limit":      map[string]string{"type": "integer", "description": "最多返回条数（默认 20）"},
 		}, nil,
 		func(args map[string]interface{}) string { return h.toolQueryAuditLog(args) })
+
+	// --- Web search & fetch tools ---
+	reg("web_search", "搜索互联网内容。返回搜索结果列表（标题、URL、摘要）。适用于查找资料、技术文档、最新信息等。",
+		ToolCategoryBuiltin, []string{"web", "search", "internet", "google", "query", "network"},
+		map[string]interface{}{
+			"query":       map[string]string{"type": "string", "description": "搜索关键词"},
+			"max_results": map[string]string{"type": "integer", "description": "最大结果数（默认 8，最大 20）"},
+		}, []string{"query"},
+		func(args map[string]interface{}) string { return h.toolWebSearch(args) })
+
+	reg("web_fetch", "抓取指定 URL 的网页内容并提取正文文本。支持自动编码检测（GBK/UTF-8 等）、HTML 正文提取。可选 JS 渲染（需本机安装 Chrome）。也可用 save_path 下载文件到本地。",
+		ToolCategoryBuiltin, []string{"web", "fetch", "download", "url", "browse", "network"},
+		map[string]interface{}{
+			"url":       map[string]string{"type": "string", "description": "要抓取的 URL"},
+			"render_js": map[string]string{"type": "boolean", "description": "是否使用 Chrome 渲染 JS（可选，默认 false）"},
+			"save_path": map[string]string{"type": "string", "description": "保存文件路径（可选，指定后下载文件而非返回文本）"},
+			"timeout":   map[string]string{"type": "integer", "description": "超时秒数（可选，默认 30，最大 120）"},
+		}, []string{"url"},
+		func(args map[string]interface{}) string { return h.toolWebFetch(args) })
 }

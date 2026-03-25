@@ -19,6 +19,7 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/qqbot"
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
+	"github.com/RapidAI/CodeClaw/hub/internal/security"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
 	"github.com/RapidAI/CodeClaw/hub/internal/store"
 	"github.com/RapidAI/CodeClaw/hub/internal/store/sqlite"
@@ -302,6 +303,45 @@ func Bootstrap(cfg *config.Config, configPath string) (*App, error) {
 
 	voiceprintSvc := voiceprint.NewService(st.Voiceprints, st.System)
 
+	// ── Security Management ─────────────────────────────────
+	securityStore := security.NewSecurityStore(provider.Write)
+	if err := securityStore.InitSchema(context.Background()); err != nil {
+		return nil, fmt.Errorf("security schema: %w", err)
+	}
+	if err := securityStore.InitRootGroup(context.Background()); err != nil {
+		return nil, fmt.Errorf("security root group: %w", err)
+	}
+	securitySvc := security.NewSecurityService(securityStore, st.System, st.AdminAudit, st.Users)
+
+	// Inject SecurityProvider into ws.Gateway for heartbeat policy delivery.
+	gateway.SecurityProvider = securitySvc
+
+	// Wire OutboundInterceptor into im.Adapter for file/image outbound checks.
+	outboundInterceptor := im.NewOutboundInterceptor(securitySvc, nil)
+	imAdapter.SetOutboundInterceptor(outboundInterceptor)
+
+	// Wire ContentAuditor into im.Adapter for outbound content compliance checks.
+	contentAuditLogStore := im.NewSQLiteAuditLogStore(provider.Write)
+	contentAuditConfigProvider := func() *im.ContentAuditDynamicConfig {
+		raw, err := st.System.Get(context.Background(), "content_audit_config")
+		if err != nil || raw == "" {
+			return nil
+		}
+		var dynCfg im.ContentAuditDynamicConfig
+		if err := json.Unmarshal([]byte(raw), &dynCfg); err != nil {
+			return nil
+		}
+		return &dynCfg
+	}
+	contentAuditor := im.NewContentAuditor(
+		cfg.ContentAudit.ProgramPath,
+		cfg.ContentAudit.TimeoutSeconds,
+		cfg.ContentAudit.TimeoutPolicy,
+		contentAuditLogStore,
+		contentAuditConfigProvider,
+	)
+	imAdapter.SetContentAuditor(contentAuditor)
+
 	router := httpapi.NewRouter(
 		adminService,
 		identityService,
@@ -311,6 +351,7 @@ func Bootstrap(cfg *config.Config, configPath string) (*App, error) {
 		deviceService,
 		sessionService,
 		invitationService,
+		st.EmailInvites,
 		st.System,
 		feishuNotifier,
 		feishuPlugin,
@@ -327,6 +368,7 @@ func Bootstrap(cfg *config.Config, configPath string) (*App, error) {
 		chatVoiceSignaling,
 		chatNotifier,
 		voiceprintSvc,
+		securitySvc,
 		cfg,
 		configPath,
 		EnsureSelfSignedCert,

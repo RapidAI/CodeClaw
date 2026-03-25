@@ -186,8 +186,8 @@ func OpenclawIMWebhookHandler(system store.SystemSettingsRepository, plugin *im.
 			return
 		}
 
-		// Read body with size limit (64 KB).
-		body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
+		// Read body with size limit (15 MB — must accommodate base64-encoded attachments up to 10 MB).
+		body, err := io.ReadAll(io.LimitReader(r.Body, 15*1024*1024))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "READ_BODY_FAILED", "Failed to read request body")
 			return
@@ -212,8 +212,8 @@ func OpenclawIMWebhookHandler(system store.SystemSettingsRepository, plugin *im.
 			writeError(w, http.StatusBadRequest, "MISSING_PLATFORM_UID", "platform_uid is required")
 			return
 		}
-		if msg.Text == "" && msg.MessageType != "image" {
-			writeError(w, http.StatusBadRequest, "MISSING_TEXT", "text is required for non-image messages")
+		if msg.Text == "" && msg.MessageType != "image" && len(msg.Attachments) == 0 {
+			writeError(w, http.StatusBadRequest, "MISSING_TEXT", "text is required for non-image messages without attachments")
 			return
 		}
 

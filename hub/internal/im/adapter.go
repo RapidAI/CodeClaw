@@ -56,15 +56,28 @@ type CapabilityDeclaration struct {
 	MaxTextLength       int  // Maximum text length per message (0 = unlimited)
 }
 
+// MessageAttachment represents a file/image/audio attachment in an inbound message.
+type MessageAttachment struct {
+	Type     string `json:"type"`      // "image", "file", "audio", "video"
+	FileName string `json:"file_name"` // Display name (e.g. "report.docx")
+	MimeType string `json:"mime_type"` // MIME type (e.g. "image/png", "application/pdf")
+	Data     string `json:"data"`      // Base64-encoded file content
+	Size     int64  `json:"size"`      // Original file size in bytes (before base64)
+}
+
+// MaxAttachmentSize is the maximum allowed size for a single attachment (10 MB).
+const MaxAttachmentSize = 10 * 1024 * 1024
+
 // IncomingMessage represents a standardized inbound message from any IM platform.
 type IncomingMessage struct {
-	PlatformName  string          `json:"platform_name"`   // IM platform name (e.g. "feishu", "qbot")
-	PlatformUID   string          `json:"platform_uid"`    // Platform-specific user ID (e.g. Feishu open_id)
-	UnifiedUserID string          `json:"unified_user_id"` // Unified internal user ID (populated by IM Adapter)
-	MessageType   string          `json:"message_type"`    // "text", "image", "interactive"
-	Text          string          `json:"text"`            // Text content
-	RawPayload    json.RawMessage `json:"raw_payload"`     // Raw platform message for plugin-specific handling
-	Timestamp     time.Time       `json:"timestamp"`
+	PlatformName  string              `json:"platform_name"`       // IM platform name (e.g. "feishu", "qbot")
+	PlatformUID   string              `json:"platform_uid"`        // Platform-specific user ID (e.g. Feishu open_id)
+	UnifiedUserID string              `json:"unified_user_id"`     // Unified internal user ID (populated by IM Adapter)
+	MessageType   string              `json:"message_type"`        // "text", "image", "file", "audio", "interactive"
+	Text          string              `json:"text"`                // Text content
+	Attachments   []MessageAttachment `json:"attachments,omitempty"` // File/image attachments
+	RawPayload    json.RawMessage     `json:"raw_payload"`         // Raw platform message for plugin-specific handling
+	Timestamp     time.Time           `json:"timestamp"`
 }
 
 // OutgoingMessage represents a standardized outbound message, converted from GenericResponse.

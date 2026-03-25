@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/RapidAI/CodeClaw/corelib"
+	"github.com/RapidAI/CodeClaw/corelib/brand"
 	"github.com/RapidAI/CodeClaw/corelib/configfile"
 	"github.com/RapidAI/CodeClaw/corelib/remote"
 )
@@ -46,7 +47,12 @@ func buildToolEnv(toolName string, cfg corelib.AppConfig, projectDir string) (ma
 	case "cursor":
 		env = buildCursorEnv(selected)
 	default:
-		return nil, nil, fmt.Errorf("不支持的工具: %s", tool)
+		// Check OEM extra tools
+		if extraEnv, ok := buildExtraToolEnv(tool, selected, projectDir); ok {
+			env = extraEnv
+		} else {
+			return nil, nil, fmt.Errorf("不支持的工具: %s", tool)
+		}
 	}
 
 	// 注入代理
@@ -82,6 +88,17 @@ func toolConfigFromApp(cfg corelib.AppConfig, tool string) (corelib.ToolConfig, 
 	case "codebuddy":
 		return cfg.CodeBuddy, nil
 	default:
+		// Check OEM extra tools by ConfigKey
+		for _, et := range brand.Current().ExtraTools {
+			if et.ConfigKey == tool {
+				if cfg.ExtraToolConfigs != nil {
+					if tc, ok := cfg.ExtraToolConfigs[et.ConfigKey]; ok {
+						return tc, nil
+					}
+				}
+				return corelib.ToolConfig{}, nil
+			}
+		}
 		return corelib.ToolConfig{}, fmt.Errorf("未知工具: %s", tool)
 	}
 }
@@ -242,6 +259,13 @@ func buildOpencodeEnv(m *corelib.ModelConfig) map[string]string {
 	if m.ModelId != "" {
 		env["OPENCODE_MODEL"] = m.ModelId
 	}
+	// Write ~/.config/opencode/opencode.json for persistence across subprocess restarts.
+	// Preserves user's MCP servers, plugins, and other provider configs.
+	if !m.IsBuiltin && m.ApiKey != "" {
+		if err := configfile.WriteOpencodeConfig(m.ApiKey, m.ModelUrl, m.ModelId, m.ModelName); err != nil {
+			fmt.Fprintf(os.Stderr, "[opencode-config] failed to write config: %v\n", err)
+		}
+	}
 	return env
 }
 
@@ -284,6 +308,38 @@ func buildCursorEnv(m *corelib.ModelConfig) map[string]string {
 	}
 	if m.ModelUrl != "" {
 		env["CURSOR_BASE_URL"] = m.ModelUrl
+	}
+	return env
+}
+
+// buildExtraToolEnv checks brand.Current().ExtraTools for a matching tool name.
+// If found and EnvBuilderFunc is set, calls it. Otherwise uses a generic OpenAI-compatible builder.
+// Returns the env map and true if the tool was found, or nil and false otherwise.
+func buildExtraToolEnv(toolName string, m *corelib.ModelConfig, projectDir string) (map[string]string, bool) {
+	for _, et := range brand.Current().ExtraTools {
+		if et.Name == toolName {
+			if et.EnvBuilderFunc != nil {
+				env := et.EnvBuilderFunc(nil, m, projectDir)
+				return env, true
+			}
+			// Generic OpenAI-compatible environment variable builder
+			return buildGenericOpenAIEnv(m), true
+		}
+	}
+	return nil, false
+}
+
+// buildGenericOpenAIEnv builds a generic OpenAI-compatible environment variable set.
+func buildGenericOpenAIEnv(m *corelib.ModelConfig) map[string]string {
+	env := map[string]string{}
+	if m.ApiKey != "" {
+		env["OPENAI_API_KEY"] = m.ApiKey
+	}
+	if m.ModelUrl != "" {
+		env["OPENAI_BASE_URL"] = m.ModelUrl
+	}
+	if m.ModelId != "" {
+		env["OPENAI_MODEL"] = m.ModelId
 	}
 	return env
 }

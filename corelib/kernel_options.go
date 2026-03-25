@@ -28,7 +28,7 @@ type KernelOptions struct {
 	// ConfigPath 配置文件路径。为空则使用 DataDir 下的默认路径。
 	ConfigPath string
 
-	// AgentMaxIterations Agent 最大迭代次数（0=默认12，-1=无限）。
+	// AgentMaxIterations Agent 最大迭代次数（0=默认300，30-300=固定上限）。
 	AgentMaxIterations int
 
 	// ToolLauncher 工具启动器，由上层（GUI/TUI）注入。

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/RapidAI/CodeClaw/hubcenter/internal/skill"
 )
@@ -164,6 +165,59 @@ func (h *SkillHandlers) AdminDeleteSkill(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *SkillHandlers) AdminImportFromURL(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+		skillError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.URL == "" {
+		skillError(w, http.StatusBadRequest, "url is required")
+		return
+	}
+
+	importer := skill.NewRemoteImporter()
+	result, err := importer.ImportFromURL(req.URL)
+	if err != nil {
+		skillError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// 发布每个 skill，重复的按 source_url+name 覆盖
+	var published []string
+	for _, sk := range result.Skills {
+		// 检查是否已存在同 source_url + name 的 skill
+		existing := h.store.FindBySourceURL(sk.SourceURL, sk.Name)
+		if existing != nil {
+			// 覆盖更新：复用旧 ID，保留统计数据
+			sk.ID = existing.ID
+			sk.CreatedAt = existing.CreatedAt
+			sk.UpdatedAt = time.Now().Format(time.RFC3339)
+			sk.Downloads = existing.Downloads
+			sk.DownloadCount = existing.DownloadCount
+			sk.RatingSum = existing.RatingSum
+			sk.RatingCount = existing.RatingCount
+			sk.AvgRating = existing.AvgRating
+		}
+		sk.Price = 0
+		sk.Visible = true
+		sk.TrustLevel = "community"
+		if err := h.store.Publish(sk); err != nil {
+			result.Errors = append(result.Errors, "publish "+sk.Name+": "+err.Error())
+			continue
+		}
+		published = append(published, sk.Name)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"published": published,
+		"errors":    result.Errors,
+		"total":     len(result.Skills),
+	})
 }
 
 func (h *SkillHandlers) AdminListSkills(w http.ResponseWriter, r *http.Request) {

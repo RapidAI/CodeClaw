@@ -1,0 +1,685 @@
+package security
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/RapidAI/CodeClaw/hub/internal/store"
+)
+
+// --- Mock repositories ---
+
+type mockSystemSettings struct {
+	mu   sync.Mutex
+	data map[string]string
+}
+
+func newMockSystemSettings() *mockSystemSettings {
+	return &mockSystemSettings{data: make(map[string]string)}
+}
+
+func (m *mockSystemSettings) Set(_ context.Context, key, valueJSON string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data[key] = valueJSON
+	return nil
+}
+
+func (m *mockSystemSettings) Get(_ context.Context, key string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.data[key]
+	if !ok {
+		return "", fmt.Errorf("not found")
+	}
+	return v, nil
+}
+
+type mockAuditRepo struct {
+	mu   sync.Mutex
+	logs []*store.AdminAuditLog
+}
+
+func (m *mockAuditRepo) Create(_ context.Context, log *store.AdminAuditLog) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logs = append(m.logs, log)
+	return nil
+}
+
+func (m *mockAuditRepo) getLogs() []*store.AdminAuditLog {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]*store.AdminAuditLog, len(m.logs))
+	copy(cp, m.logs)
+	return cp
+}
+
+// --- Test helpers ---
+
+func newTestService(t *testing.T) (*SecurityService, *mockAuditRepo) {
+	t.Helper()
+	st := newTestStore(t)
+	ctx := context.Background()
+	if err := st.InitRootGroup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sys := newMockSystemSettings()
+	audit := &mockAuditRepo{}
+	svc := NewSecurityService(st, sys, audit)
+	return svc, audit
+}
+
+// --- CreateGroup tests ---
+
+func TestServiceCreateGroup(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+
+	group, err := svc.CreateGroup(ctx, "研发部", root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.Name != "研发部" {
+		t.Fatalf("expected name '研发部', got %q", group.Name)
+	}
+	if group.ParentID != root.ID {
+		t.Fatalf("expected parent %q, got %q", root.ID, group.ParentID)
+	}
+}
+
+func TestServiceCreateGroup_ParentNotFound(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	_, err := svc.CreateGroup(ctx, "Orphan", "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent parent")
+	}
+}
+
+func TestServiceCreateGroup_DepthLimit(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	parentID := root.ID
+
+	// Create 9 levels (root=0, so children at depth 1..9)
+	for i := 1; i <= 9; i++ {
+		g, err := svc.CreateGroup(ctx, fmt.Sprintf("Level%d", i), parentID)
+		if err != nil {
+			t.Fatalf("failed to create level %d: %v", i, err)
+		}
+		parentID = g.ID
+	}
+
+	// Level 10 should fail (parent at depth 9, child would be depth 10)
+	_, err := svc.CreateGroup(ctx, "TooDeep", parentID)
+	if err == nil {
+		t.Fatal("expected error for depth exceeding 10")
+	}
+}
+
+// --- RenameGroup tests ---
+
+func TestServiceRenameGroup(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	g, _ := svc.CreateGroup(ctx, "Old", root.ID)
+
+	if err := svc.RenameGroup(ctx, g.ID, "New"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := svc.store.GetGroupByID(ctx, g.ID)
+	if got.Name != "New" {
+		t.Fatalf("expected 'New', got %q", got.Name)
+	}
+}
+
+// --- DeleteGroup tests ---
+
+func TestServiceDeleteGroup(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	g, _ := svc.CreateGroup(ctx, "ToDelete", root.ID)
+
+	if err := svc.DeleteGroup(ctx, g.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := svc.store.GetGroupByID(ctx, g.ID)
+	if got != nil {
+		t.Fatal("expected nil after delete")
+	}
+}
+
+func TestServiceDeleteGroup_CascadeUsersToRoot(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	parent, _ := svc.CreateGroup(ctx, "Parent", root.ID)
+	child, _ := svc.CreateGroup(ctx, "Child", parent.ID)
+
+	// Assign users to parent and child
+	svc.AssignUser(ctx, "alice@test.com", parent.ID)
+	svc.AssignUser(ctx, "bob@test.com", child.ID)
+
+	// Delete parent (should cascade to child)
+	if err := svc.DeleteGroup(ctx, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both users should be in root
+	for _, email := range []string{"alice@test.com", "bob@test.com"} {
+		gid, _ := svc.store.GetUserGroup(ctx, email)
+		if gid != root.ID {
+			t.Fatalf("expected user %s in root, got %q", email, gid)
+		}
+	}
+
+	// Child should also be deleted
+	got, _ := svc.store.GetGroupByID(ctx, child.ID)
+	if got != nil {
+		t.Fatal("expected child to be deleted")
+	}
+}
+
+func TestServiceDeleteGroup_RefuseRoot(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	err := svc.DeleteGroup(ctx, root.ID)
+	if err == nil {
+		t.Fatal("expected error when deleting root")
+	}
+}
+
+// --- GetGroupTree tests ---
+
+func TestServiceGetGroupTree(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	a, _ := svc.CreateGroup(ctx, "A", root.ID)
+	svc.CreateGroup(ctx, "B", root.ID)
+	svc.CreateGroup(ctx, "A1", a.ID)
+
+	svc.AssignUser(ctx, "user@test.com", a.ID)
+
+	tree, err := svc.GetGroupTree(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree == nil {
+		t.Fatal("expected tree, got nil")
+	}
+	if tree.Name != "全局" {
+		t.Fatalf("expected root name '全局', got %q", tree.Name)
+	}
+	if len(tree.Children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(tree.Children))
+	}
+
+	// Find group A and check member count
+	var nodeA *GroupTreeNode
+	for _, c := range tree.Children {
+		if c.Name == "A" {
+			nodeA = c
+			break
+		}
+	}
+	if nodeA == nil {
+		t.Fatal("expected to find group A")
+	}
+	if nodeA.MemberCount != 1 {
+		t.Fatalf("expected 1 member in A, got %d", nodeA.MemberCount)
+	}
+	if len(nodeA.Children) != 1 {
+		t.Fatalf("expected 1 child of A, got %d", len(nodeA.Children))
+	}
+}
+
+// --- AssignUser / RemoveUser tests ---
+
+func TestServiceAssignUser_SingleGroupInvariant(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	a, _ := svc.CreateGroup(ctx, "A", root.ID)
+	b, _ := svc.CreateGroup(ctx, "B", root.ID)
+
+	svc.AssignUser(ctx, "user@test.com", a.ID)
+	svc.AssignUser(ctx, "user@test.com", b.ID) // should move from A to B
+
+	gid, _ := svc.store.GetUserGroup(ctx, "user@test.com")
+	if gid != b.ID {
+		t.Fatalf("expected user in B, got %q", gid)
+	}
+
+	// A should have 0 members
+	count, _ := svc.store.CountGroupMembers(ctx, a.ID)
+	if count != 0 {
+		t.Fatalf("expected 0 members in A, got %d", count)
+	}
+}
+
+func TestServiceRemoveUser(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	svc.AssignUser(ctx, "user@test.com", root.ID)
+	svc.RemoveUser(ctx, root.ID, "user@test.com")
+
+	gid, _ := svc.store.GetUserGroup(ctx, "user@test.com")
+	if gid != "" {
+		t.Fatalf("expected empty after remove, got %q", gid)
+	}
+}
+
+// --- Policy tests ---
+
+func TestServiceGetEffectivePolicy_Default(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	// Unassigned user should get default policy
+	policy, err := svc.GetEffectivePolicy(ctx, "nobody@test.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.FileOutboundEnabled {
+		t.Fatal("expected file_outbound_enabled=true")
+	}
+	if policy.GuardrailMode != "standard" {
+		t.Fatalf("expected guardrail_mode='standard', got %q", policy.GuardrailMode)
+	}
+}
+
+func TestServiceGetEffectivePolicy_Inheritance(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+
+	// Set root policy: disable gossip
+	svc.UpdateGroupPolicy(ctx, root.ID, map[string]interface{}{
+		"gossip_enabled": false,
+	})
+
+	// Create child with its own override
+	child, _ := svc.CreateGroup(ctx, "Child", root.ID)
+	svc.UpdateGroupPolicy(ctx, child.ID, map[string]interface{}{
+		"guardrail_mode": "strict",
+	})
+
+	// Assign user to child
+	svc.AssignUser(ctx, "user@test.com", child.ID)
+
+	policy, err := svc.GetEffectivePolicy(ctx, "user@test.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// gossip_enabled should be inherited from root (false)
+	if policy.GossipEnabled {
+		t.Fatal("expected gossip_enabled=false (inherited from root)")
+	}
+	// guardrail_mode should be overridden by child
+	if policy.GuardrailMode != "strict" {
+		t.Fatalf("expected guardrail_mode='strict', got %q", policy.GuardrailMode)
+	}
+	// Other defaults should remain
+	if !policy.FileOutboundEnabled {
+		t.Fatal("expected file_outbound_enabled=true (default)")
+	}
+}
+
+func TestServiceGetEffectivePolicy_ThreeLevels(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+
+	// Root: disable file outbound
+	svc.UpdateGroupPolicy(ctx, root.ID, map[string]interface{}{
+		"file_outbound_enabled": false,
+	})
+
+	// Level 1: set sandbox_mode
+	l1, _ := svc.CreateGroup(ctx, "L1", root.ID)
+	svc.UpdateGroupPolicy(ctx, l1.ID, map[string]interface{}{
+		"sandbox_mode": "docker",
+	})
+
+	// Level 2: re-enable file outbound
+	l2, _ := svc.CreateGroup(ctx, "L2", l1.ID)
+	svc.UpdateGroupPolicy(ctx, l2.ID, map[string]interface{}{
+		"file_outbound_enabled": true,
+	})
+
+	svc.AssignUser(ctx, "deep@test.com", l2.ID)
+
+	policy, err := svc.GetEffectivePolicy(ctx, "deep@test.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !policy.FileOutboundEnabled {
+		t.Fatal("expected file_outbound_enabled=true (overridden at L2)")
+	}
+	if policy.SandboxMode != "docker" {
+		t.Fatalf("expected sandbox_mode='docker' (from L1), got %q", policy.SandboxMode)
+	}
+}
+
+func TestServiceGetGroupEffectivePolicy(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	svc.UpdateGroupPolicy(ctx, root.ID, map[string]interface{}{
+		"gossip_enabled": false,
+	})
+
+	child, _ := svc.CreateGroup(ctx, "Child", root.ID)
+	svc.UpdateGroupPolicy(ctx, child.ID, map[string]interface{}{
+		"network_level": "intranet",
+	})
+
+	policy, err := svc.GetGroupEffectivePolicy(ctx, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.GossipEnabled {
+		t.Fatal("expected gossip_enabled=false")
+	}
+	if policy.NetworkLevel != "intranet" {
+		t.Fatalf("expected network_level='intranet', got %q", policy.NetworkLevel)
+	}
+}
+
+func TestServiceGetGroupPolicy_View(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	svc.UpdateGroupPolicy(ctx, root.ID, map[string]interface{}{
+		"gossip_enabled": false,
+	})
+
+	child, _ := svc.CreateGroup(ctx, "Child", root.ID)
+	svc.UpdateGroupPolicy(ctx, child.ID, map[string]interface{}{
+		"guardrail_mode": "strict",
+	})
+
+	view, err := svc.GetGroupPolicy(ctx, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// guardrail_mode should be "self"
+	gm := view.Items["guardrail_mode"]
+	if gm.Source != "self" {
+		t.Fatalf("expected guardrail_mode source 'self', got %q", gm.Source)
+	}
+
+	// gossip_enabled should be "inherited"
+	ge := view.Items["gossip_enabled"]
+	if ge.Source != "inherited" {
+		t.Fatalf("expected gossip_enabled source 'inherited', got %q", ge.Source)
+	}
+	if ge.SourceGroup != root.ID {
+		t.Fatalf("expected gossip_enabled source group %q, got %q", root.ID, ge.SourceGroup)
+	}
+}
+
+// --- Settings tests ---
+
+func TestServiceGetSettings_Default(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	settings, err := svc.GetSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.CentralizedSecurityEnabled {
+		t.Fatal("expected centralized_security_enabled=false by default")
+	}
+	if settings.OrgStructureEnabled {
+		t.Fatal("expected org_structure_enabled=false by default")
+	}
+}
+
+func TestServiceUpdateSettings_AuditLog(t *testing.T) {
+	svc, audit := newTestService(t)
+	ctx := context.Background()
+
+	// Enable centralized security
+	err := svc.UpdateSettings(ctx, &SecuritySettings{
+		CentralizedSecurityEnabled: true,
+	}, "admin-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logs := audit.getLogs()
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(logs))
+	}
+	if logs[0].Action != "centralized_security_enabled" {
+		t.Fatalf("expected action 'centralized_security_enabled', got %q", logs[0].Action)
+	}
+
+	// Now also enable org_structure
+	err = svc.UpdateSettings(ctx, &SecuritySettings{
+		CentralizedSecurityEnabled: true,
+		OrgStructureEnabled:        true,
+	}, "admin-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logs = audit.getLogs()
+	if len(logs) != 2 {
+		t.Fatalf("expected 2 audit logs, got %d", len(logs))
+	}
+	if logs[1].Action != "org_structure_enabled" {
+		t.Fatalf("expected action 'org_structure_enabled', got %q", logs[1].Action)
+	}
+}
+
+func TestServiceUpdateSettings_NoAuditWhenUnchanged(t *testing.T) {
+	svc, audit := newTestService(t)
+	ctx := context.Background()
+
+	// Set initial
+	svc.UpdateSettings(ctx, &SecuritySettings{CentralizedSecurityEnabled: true}, "admin-1")
+
+	// Update with same value
+	svc.UpdateSettings(ctx, &SecuritySettings{CentralizedSecurityEnabled: true}, "admin-1")
+
+	logs := audit.getLogs()
+	// Only 1 log from the first change
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 audit log (no change), got %d", len(logs))
+	}
+}
+
+// --- SetDefaultGroup tests ---
+
+func TestServiceSetDefaultGroup(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	child, _ := svc.CreateGroup(ctx, "Default", root.ID)
+
+	if err := svc.SetDefaultGroup(ctx, child.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, _ := svc.GetSettings(ctx)
+	if settings.DefaultGroupID != child.ID {
+		t.Fatalf("expected default_group_id=%q, got %q", child.ID, settings.DefaultGroupID)
+	}
+}
+
+func TestServiceSetDefaultGroup_NotFound(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	err := svc.SetDefaultGroup(ctx, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent group")
+	}
+}
+
+// --- Cache tests ---
+
+func TestServiceCacheInvalidation(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	svc.AssignUser(ctx, "user@test.com", root.ID)
+
+	// First call populates cache
+	p1, _ := svc.GetEffectivePolicy(ctx, "user@test.com")
+
+	// Update policy
+	svc.store.SetGroupPolicy(ctx, root.ID, map[string]interface{}{
+		"gossip_enabled": false,
+	})
+
+	// Cached value should still be old
+	p2, _ := svc.GetEffectivePolicy(ctx, "user@test.com")
+	if p1.GossipEnabled != p2.GossipEnabled {
+		t.Fatal("expected cached value to be same")
+	}
+
+	// Invalidate and re-fetch
+	svc.InvalidateCache("user@test.com")
+	p3, _ := svc.GetEffectivePolicy(ctx, "user@test.com")
+	if p3.GossipEnabled {
+		t.Fatal("expected gossip_enabled=false after cache invalidation")
+	}
+}
+
+// --- HeartbeatPolicy tests ---
+
+func TestServiceGetHeartbeatPolicy_Disabled(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	payload, err := svc.GetHeartbeatPolicy(ctx, "user@test.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.CentralizedSecurity {
+		t.Fatal("expected centralized_security=false")
+	}
+	if payload.Policy != nil {
+		t.Fatal("expected no policy when disabled")
+	}
+}
+
+func TestServiceGetHeartbeatPolicy_Enabled(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	svc.UpdateSettings(ctx, &SecuritySettings{
+		CentralizedSecurityEnabled: true,
+	}, "admin")
+
+	root, _ := svc.store.GetRootGroup(ctx)
+	svc.AssignUser(ctx, "user@test.com", root.ID)
+
+	payload, err := svc.GetHeartbeatPolicy(ctx, "user@test.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !payload.CentralizedSecurity {
+		t.Fatal("expected centralized_security=true")
+	}
+	if payload.Policy == nil {
+		t.Fatal("expected policy when enabled")
+	}
+}
+
+// --- IsCentralizedEnabled tests ---
+
+func TestServiceIsCentralizedEnabled(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	enabled, _ := svc.IsCentralizedEnabled(ctx)
+	if enabled {
+		t.Fatal("expected false by default")
+	}
+
+	svc.UpdateSettings(ctx, &SecuritySettings{CentralizedSecurityEnabled: true}, "admin")
+
+	enabled, _ = svc.IsCentralizedEnabled(ctx)
+	if !enabled {
+		t.Fatal("expected true after enabling")
+	}
+}
+
+// --- GetEffectivePolicyByUserID tests ---
+
+func TestServiceGetEffectivePolicyByUserID(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	// Should work same as GetEffectivePolicy
+	policy, err := svc.GetEffectivePolicyByUserID(ctx, "user@test.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy == nil {
+		t.Fatal("expected non-nil policy")
+	}
+}
+
+// --- Verify SecurityPolicyProvider interface ---
+
+func TestServiceImplementsSecurityPolicyProvider(t *testing.T) {
+	svc, _ := newTestService(t)
+	// Compile-time check
+	var _ SecurityPolicyProvider = svc
+}
+
+// --- policyToMap / applyPolicyOverrides helpers ---
+
+func TestPolicyToMapRoundTrip(t *testing.T) {
+	m := policyToMap(DefaultPolicy)
+	var p EffectivePolicy
+	p = DefaultPolicy // start from default
+	applyPolicyOverrides(&p, m)
+
+	if p != DefaultPolicy {
+		t.Fatal("round-trip through policyToMap/applyPolicyOverrides should preserve DefaultPolicy")
+	}
+}
+
+// --- Unused import guard for time ---
+var _ = time.Now
+var _ = json.Marshal

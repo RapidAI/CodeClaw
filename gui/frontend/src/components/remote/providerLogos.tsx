@@ -24,4 +24,11 @@ export const PROVIDER_LOGOS: Record<string, React.ReactNode> = {
             <path d="M2 20V4l5 8 5-8 5 8 5-8v16" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
         </svg>
     ),
+    Kimi: (
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none"/>
+            <circle cx="12" cy="10" r="4" fill="currentColor"/>
+            <path d="M6 20c0-3.314 2.686-6 6-6s6 2.686 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/>
+        </svg>
+    ),
 };

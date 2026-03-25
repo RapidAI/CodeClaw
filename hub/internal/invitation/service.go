@@ -40,7 +40,7 @@ func NewService(repo store.InvitationCodeRepository, settings store.SystemSettin
 
 // GenerateCodes generates count invitation codes (1-50) and stores them.
 // validityDays specifies the validity period in days; values < 0 are treated as 0 (永久有效).
-func (s *Service) GenerateCodes(ctx context.Context, count int, validityDays int) ([]*store.InvitationCode, error) {
+func (s *Service) GenerateCodes(ctx context.Context, count int, validityDays int, vip bool) ([]*store.InvitationCode, error) {
 	if count < 1 || count > maxCount {
 		return nil, ErrInvalidCount
 	}
@@ -70,6 +70,7 @@ func (s *Service) GenerateCodes(ctx context.Context, count int, validityDays int
 				Code:         code,
 				Status:       "unused",
 				ValidityDays: validityDays,
+				VIP:          vip,
 				CreatedAt:    now,
 			}
 			if createErr := s.repo.Create(ctx, item); createErr != nil {
@@ -153,6 +154,11 @@ func (s *Service) DeleteCodeByEmail(ctx context.Context, email string) (int64, e
 	return s.repo.DeleteByEmail(ctx, email)
 }
 
+// GetCodeByEmail returns the invitation code bound to the given email.
+func (s *Service) GetCodeByEmail(ctx context.Context, email string) (*store.InvitationCode, error) {
+	return s.repo.GetByEmail(ctx, email)
+}
+
 // CheckExpiry checks whether the invitation code associated with the given email has expired.
 // Returns (expired, expiresAt, error).
 // If no code is found or validity_days == 0, returns (false, nil, nil).
@@ -215,14 +221,14 @@ func (s *Service) ListCodes(ctx context.Context, status string, search string) (
 // ExportUnusedCodes returns unused invitation codes filtered by exported status,
 // and marks the returned codes as exported.
 // exportedFilter: "unexported" (default), "exported", or "all".
-func (s *Service) ExportUnusedCodes(ctx context.Context, exportedFilter string) ([]*store.InvitationCode, error) {
+func (s *Service) ExportUnusedCodes(ctx context.Context, exportedFilter string, vipOnly bool) ([]*store.InvitationCode, error) {
 	switch exportedFilter {
 	case "exported", "all":
 		// valid
 	default:
 		exportedFilter = "unexported"
 	}
-	codes, err := s.repo.ListUnused(ctx, exportedFilter)
+	codes, err := s.repo.ListUnused(ctx, exportedFilter, vipOnly)
 	if err != nil {
 		return nil, fmt.Errorf("listing unused codes: %w", err)
 	}

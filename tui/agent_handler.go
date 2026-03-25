@@ -26,7 +26,7 @@ import (
 )
 
 // agentMaxIterations 是 Agent 循环的默认最大轮数。
-const agentMaxIterations = 20
+const agentMaxIterations = 300
 
 // llmToolCall 表示 LLM 返回的工具调用。
 type llmToolCall struct {
@@ -115,6 +115,12 @@ func WithAuditLog(al *security.AuditLog) AgentHandlerOption {
 func WithMaxIterations(n int) AgentHandlerOption {
 	return func(h *TUIAgentHandler) {
 		if n > 0 {
+			if n < 30 {
+				n = 30
+			}
+			if n > 300 {
+				n = 300
+			}
 			h.maxIterations = n
 		}
 	}
@@ -178,9 +184,13 @@ func (h *TUIAgentHandler) RunAgentLoop(userText string, history []map[string]str
 		// 执行工具调用
 		for _, tc := range choice.Message.ToolCalls {
 			result := h.executeTool(tc.Function.Name, tc.Function.Arguments)
-			// 截断过长结果
-			if len(result) > 4000 {
-				result = result[:4000] + "\n...(已截断)"
+			// 截断过长结果（web_fetch 允许更长内容）
+			maxLen := 4000
+			if tc.Function.Name == "web_fetch" {
+				maxLen = 20000
+			}
+			if len(result) > maxLen {
+				result = result[:maxLen] + "\n...(已截断)"
 			}
 			conversation = append(conversation, map[string]interface{}{
 				"role":         "tool",
@@ -358,6 +368,13 @@ func (h *TUIAgentHandler) buildBuiltinToolDefinitions() []map[string]interface{}
 			"start_date": map[string]interface{}{"type": "string", "description": "开始日期 (2006-01-02)"},
 			"end_date":   map[string]interface{}{"type": "string", "description": "结束日期 (2006-01-02)"},
 		}, nil),
+		// --- 项目管理 ---
+		toolDef("project_manage", "项目管理（创建/列出/删除/切换项目）", map[string]interface{}{
+			"action": map[string]interface{}{"type": "string", "description": "操作: create/list/delete/switch"},
+			"name":   map[string]interface{}{"type": "string", "description": "项目名称（create 必填）"},
+			"path":   map[string]interface{}{"type": "string", "description": "项目路径（create 必填）"},
+			"target": map[string]interface{}{"type": "string", "description": "项目名称或 ID（delete/switch 必填）"},
+		}, []string{"action"}),
 		// --- 实用工具 ---
 		toolDef("send_file", "发送文件内容到会话", map[string]interface{}{
 			"session_id": map[string]interface{}{"type": "string", "description": "会话 ID"},
@@ -369,13 +386,24 @@ func (h *TUIAgentHandler) buildBuiltinToolDefinitions() []map[string]interface{}
 		toolDef("switch_llm_provider", "切换 LLM 提供商", map[string]interface{}{
 			"provider": map[string]interface{}{"type": "string", "description": "提供商名称"},
 		}, []string{"provider"}),
-		toolDef("set_max_iterations", "设置 Agent 最大推理轮次", map[string]interface{}{
-			"value": map[string]interface{}{"type": "integer", "description": "最大轮次"},
+		toolDef("set_max_iterations", "设置 Agent 最大推理轮次（30-300）", map[string]interface{}{
+			"value": map[string]interface{}{"type": "integer", "description": "最大轮次（30-300）"},
 		}, []string{"value"}),
 		toolDef("recommend_tool", "推荐最佳编程工具", map[string]interface{}{
 			"task_description": map[string]interface{}{"type": "string", "description": "任务描述"},
 		}, []string{"task_description"}),
 		toolDef("screenshot", "截取屏幕截图", map[string]interface{}{}, nil),
+		// --- Web search & fetch ---
+		toolDef("web_search", "搜索互联网内容，返回搜索结果列表（标题、URL、摘要）", map[string]interface{}{
+			"query":       map[string]interface{}{"type": "string", "description": "搜索关键词"},
+			"max_results": map[string]interface{}{"type": "integer", "description": "最大结果数（默认 8，最大 20）"},
+		}, []string{"query"}),
+		toolDef("web_fetch", "抓取指定 URL 的内容并提取正文。支持 HTTP/HTTPS/FTP 协议，编码检测、JS 渲染、文件下载", map[string]interface{}{
+			"url":       map[string]interface{}{"type": "string", "description": "要抓取的 URL（支持 http/https/ftp 协议）"},
+			"render_js": map[string]interface{}{"type": "boolean", "description": "是否用 Chrome 渲染 JS（可选）"},
+			"save_path": map[string]interface{}{"type": "string", "description": "保存文件路径（可选，下载文件用）"},
+			"timeout":   map[string]interface{}{"type": "integer", "description": "超时秒数（可选，默认 30）"},
+		}, []string{"url"}),
 	}
 	return defs
 }
@@ -511,6 +539,9 @@ func (h *TUIAgentHandler) dispatchTool(name string, args map[string]interface{})
 	// --- 审计 ---
 	case "query_audit_log":
 		return h.toolQueryAuditLog(args)
+	// --- 项目管理 ---
+	case "project_manage":
+		return h.toolProjectManage(args)
 	// --- 实用工具 ---
 	case "send_file":
 		return h.toolSendFile(args)
@@ -524,6 +555,11 @@ func (h *TUIAgentHandler) dispatchTool(name string, args map[string]interface{})
 		return h.toolRecommendTool(args)
 	case "screenshot":
 		return h.toolScreenshot()
+	// --- Web search & fetch ---
+	case "web_search":
+		return h.toolWebSearch(args)
+	case "web_fetch":
+		return h.toolWebFetch(args)
 	default:
 		return fmt.Sprintf("未知工具: %s", name)
 	}

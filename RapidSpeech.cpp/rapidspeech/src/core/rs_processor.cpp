@@ -1,5 +1,6 @@
 #include "core/rs_processor.h"
 #include "arch/openvoice2.h"
+#include "arch/moonshine.h"
 #include "utils/rs_log.h"
 #include "ggml-backend.h"
 #include <iostream>
@@ -17,9 +18,25 @@ RSProcessor::RSProcessor(std::shared_ptr<ISpeechModel> model, ggml_backend_sched
     // Architecture-specific frontend config
     const std::string& arch = meta.arch_name;
     if (arch == "ecapa-tdnn") {
-      // ECAPA-TDNN: standard 80-mel fbank, no LFR, no CMVN
+      // ECAPA-TDNN: SpeechBrain-compatible fbank, no LFR, no CMVN
+      config.fbank_mode = FBANK_SPEECHBRAIN;
+      config.n_fft = 400;  // SpeechBrain uses n_fft=400 (no power-of-2 rounding)
+      config.f_min = 0.0f;
+      config.f_max = config.sample_rate / 2.0f;
+      config.use_sentence_norm = true;
+      config.sb_top_db = 80.0f;
       config.use_lfr = false;
       config.use_cmvn = false;
+    } else if (arch == "moonshine" || arch == "silero-vad") {
+      // Moonshine and Silero VAD work on raw PCM, no mel features
+      config.use_lfr = false;
+      config.use_cmvn = false;
+      config.n_mels = 0;
+    } else if (arch == "gemma-embedding") {
+      // Text-only model, no audio frontend needed
+      config.use_lfr = false;
+      config.use_cmvn = false;
+      config.n_mels = 0;
     } else {
       // SenseVoice and other ASR models: LFR + CMVN
       config.use_lfr = true;
@@ -56,12 +73,22 @@ int RSProcessor::Process() {
   }
 
   std::vector<float> pcm_chunk = audio_buffer_.Pop(audio_buffer_.Size());
-  float pcm_duration = pcm_chunk.size() / model_->GetMeta().audio_sample_rate;
+  int sr = model_->GetMeta().audio_sample_rate;
+  float pcm_duration = (sr > 0) ? (float)pcm_chunk.size() / sr : 0.0f;
   std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
   std::chrono::steady_clock::time_point fist_start = std::chrono::steady_clock::now();
   std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+
+  // Models that work on raw PCM (no mel features needed)
+  const std::string& arch = model_->GetMeta().arch_name;
+  bool raw_pcm_model = (arch == "moonshine" || arch == "silero-vad");
+
   std::vector<float> features;
-  audio_proc_->Compute(pcm_chunk, features);
+  if (raw_pcm_model) {
+    features = std::move(pcm_chunk);
+  } else {
+    audio_proc_->Compute(pcm_chunk, features);
+  }
   end = std::chrono::steady_clock::now();
   RS_LOG_INFO("compute features takes: %f", std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1e6 );
   if (features.empty()) return 0;
@@ -94,7 +121,9 @@ int RSProcessor::Process() {
   end = std::chrono::steady_clock::now();
   RS_LOG_INFO("decoder takes: %f", std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1e6 );
 
-  RS_LOG_INFO("RTF is: %f", std::chrono::duration_cast<std::chrono::microseconds>(end - fist_start).count() / 1e6 / pcm_duration);
+  if (pcm_duration > 0.0f) {
+    RS_LOG_INFO("RTF is: %f", std::chrono::duration_cast<std::chrono::microseconds>(end - fist_start).count() / 1e6 / pcm_duration);
+  }
   return 1;
 }
 

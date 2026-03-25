@@ -74,14 +74,24 @@ type Gateway struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	running bool
+
+	// Per-user message processing locks — ensures messages from the same
+	// user are handled sequentially while different users run concurrently.
+	userLocks   map[string]*sync.Mutex
+	userLocksMu sync.Mutex
+
+	// handlerWg tracks in-flight handler goroutines so Stop() can wait
+	// for them to finish before returning.
+	handlerWg sync.WaitGroup
 }
 
 // NewGateway creates a new Telegram Bot gateway.
 func NewGateway(config Config, handler MessageHandler) *Gateway {
 	return &Gateway{
-		config:  config,
-		handler: handler,
-		client:  &http.Client{Timeout: time.Duration(pollTimeout+10) * time.Second},
+		config:    config,
+		handler:   handler,
+		client:    &http.Client{Timeout: time.Duration(pollTimeout+10) * time.Second},
+		userLocks: make(map[string]*sync.Mutex),
 	}
 }
 
@@ -113,16 +123,19 @@ func (g *Gateway) Start(ctx context.Context) error {
 // Stop shuts down the gateway.
 func (g *Gateway) Stop() error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if !g.running {
+		g.mu.Unlock()
 		return nil
 	}
 	if g.cancel != nil {
 		g.cancel()
 	}
-	g.wg.Wait()
 	g.running = false
 	g.cancel = nil
+	g.mu.Unlock()
+
+	g.wg.Wait()        // wait for pollLoop to exit
+	g.handlerWg.Wait() // wait for in-flight handler goroutines
 	log.Printf("[telegram/gw] stopped")
 	g.emitStatus("disconnected")
 	return nil
@@ -139,6 +152,18 @@ func (g *Gateway) emitStatus(status string) {
 	if g.onStatus != nil {
 		g.onStatus(status)
 	}
+}
+
+// userLock returns a per-user mutex, creating one if it doesn't exist yet.
+func (g *Gateway) userLock(userKey string) *sync.Mutex {
+	g.userLocksMu.Lock()
+	defer g.userLocksMu.Unlock()
+	ul, ok := g.userLocks[userKey]
+	if !ok {
+		ul = &sync.Mutex{}
+		g.userLocks[userKey] = ul
+	}
+	return ul
 }
 
 // ---------------------------------------------------------------------------
@@ -186,12 +211,21 @@ func (g *Gateway) pollLoop(ctx context.Context) {
 				offset = u.UpdateID + 1
 			}
 			if u.Message != nil && u.Message.Text != "" {
-				g.handler(IncomingMessage{
+				incoming := IncomingMessage{
 					ChatID:    u.Message.Chat.ID,
 					Text:      u.Message.Text,
 					Username:  u.Message.From.Username,
 					Timestamp: time.Unix(int64(u.Message.Date), 0),
-				})
+				}
+				userKey := strconv.FormatInt(u.Message.Chat.ID, 10)
+				ul := g.userLock(userKey)
+				g.handlerWg.Add(1)
+				go func() {
+					defer g.handlerWg.Done()
+					ul.Lock()
+					defer ul.Unlock()
+					g.handler(incoming)
+				}()
 			}
 		}
 	}

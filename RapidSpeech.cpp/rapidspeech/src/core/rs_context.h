@@ -10,6 +10,10 @@
 #include <string>
 #include <functional>
 
+// Forward declarations for new components
+class OnlineClusterer;
+class IntentRecognizer;
+
 /**
  * Internal context implementation.
  */
@@ -24,6 +28,18 @@ struct rs_context_t {
   // GGUF related resources (required for Model::Load)
   gguf_context* ctx_gguf = nullptr;
   ggml_context* gguf_data = nullptr;
+
+  // Speaker diarization
+  std::unique_ptr<OnlineClusterer> clusterer;
+
+  // Intent recognition
+  std::unique_ptr<IntentRecognizer> intent_recognizer;
+
+  // VAD state (kept across calls for rs_vad_detect)
+  std::shared_ptr<RSState> vad_state;
+
+  // Streaming ASR state (kept across calls for rs_push_streaming_audio)
+  std::shared_ptr<RSState> streaming_state;
 
   rs_context_t();
   ~rs_context_t();

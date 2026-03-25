@@ -15,7 +15,7 @@ import (
 // CraftedToolsDir returns the directory for storing crafted tool scripts.
 func CraftedToolsDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cceasy", "crafted_tools")
+	return filepath.Join(home, ".maclaw", "data", "crafted_tools")
 }
 
 // StripScriptCodeFences removes ```lang ... ``` wrappers from LLM output.

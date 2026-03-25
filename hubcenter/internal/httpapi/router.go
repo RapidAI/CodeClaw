@@ -130,7 +130,7 @@ func EntryResolveHandler(service *entry.Service) http.HandlerFunc {
 	}
 }
 
-func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryService *entry.Service, mailer *mail.Service, skillStore *skill.SkillStore, gossipRepo store.GossipRepository, gossipCache *GossipCache, smHandlers *SkillMarketHandlers) http.Handler {
+func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryService *entry.Service, mailer *mail.Service, skillStore *skill.SkillStore, gossipRepo store.GossipRepository, gossipCache *GossipCache, smHandlers *SkillMarketHandlers, systemSettings store.SystemSettingsRepository) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", HealthHandler("MaClaw-hubcenter"))
 	mux.HandleFunc("GET /api/admin/status", AdminStatusHandler(adminService))
@@ -171,9 +171,10 @@ func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryS
 	mux.HandleFunc("GET /api/admin/skillhub/list", RequireAdmin(adminService, skillHandlers.AdminListSkills))
 	mux.HandleFunc("POST /api/admin/skillhub/visibility", RequireAdmin(adminService, skillHandlers.AdminSetVisibility))
 	mux.HandleFunc("DELETE /api/admin/skillhub/{id}", RequireAdmin(adminService, skillHandlers.AdminDeleteSkill))
+	mux.HandleFunc("POST /api/admin/skillhub/import-url", RequireAdmin(adminService, skillHandlers.AdminImportFromURL))
 	// Gossip — anonymous gossip board
 	gossipWriteRL := newGossipRateLimiter(10, 10*time.Minute) // 10 writes per 10 min per key
-	mux.HandleFunc("POST /api/gossip/publish", gossipRateLimitMiddleware(gossipWriteRL, GossipPublishHandler(gossipRepo, gossipCache)))
+	mux.HandleFunc("POST /api/gossip/publish", gossipRateLimitMiddleware(gossipWriteRL, GossipPublishHandler(gossipRepo, gossipCache, systemSettings)))
 	mux.HandleFunc("GET /api/gossip/browse", GossipBrowseHandler(gossipRepo))
 	mux.HandleFunc("POST /api/gossip/comment", gossipRateLimitMiddleware(gossipWriteRL, GossipCommentHandler(gossipRepo, gossipCache)))
 	mux.HandleFunc("POST /api/gossip/rate", gossipRateLimitMiddleware(gossipWriteRL, GossipRateHandler(gossipRepo, gossipCache)))
@@ -186,6 +187,11 @@ func NewRouter(adminService *auth.AdminService, hubService *hubs.Service, entryS
 	mux.HandleFunc("POST /api/admin/gossip/lock", RequireAdmin(adminService, AdminLockGossipHandler(gossipRepo, gossipCache)))
 	mux.HandleFunc("GET /api/admin/gossip/comments", RequireAdmin(adminService, AdminListGossipCommentsHandler(gossipRepo)))
 	mux.HandleFunc("DELETE /api/admin/gossip/comments", RequireAdmin(adminService, AdminDeleteGossipCommentHandler(gossipRepo, gossipCache)))
+	// Gossip moderation (LLM)
+	mux.HandleFunc("POST /api/admin/gossip/flag", RequireAdmin(adminService, AdminFlagGossipHandler(gossipRepo, gossipCache)))
+	mux.HandleFunc("GET /api/admin/moderation/config", RequireAdmin(adminService, GetModerationConfigHandler(systemSettings)))
+	mux.HandleFunc("POST /api/admin/moderation/config", RequireAdmin(adminService, UpdateModerationConfigHandler(systemSettings)))
+	mux.HandleFunc("POST /api/admin/moderation/test", RequireAdmin(adminService, TestModerationHandler(systemSettings)))
 	registerAdminStaticRoutes(mux, "./web/admin", "/admin")
 	registerStaticRoutes(mux, "./web/skillhub", "/skillhub")
 	registerStaticRoutes(mux, "./web/skillmarket", "/skillmarket")

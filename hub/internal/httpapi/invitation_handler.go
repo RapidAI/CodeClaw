@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +19,9 @@ import (
 )
 
 type generateCodesRequest struct {
-	Count        int `json:"count"`
-	ValidityDays int `json:"validity_days"`
+	Count        int  `json:"count"`
+	ValidityDays int  `json:"validity_days"`
+	VIP          bool `json:"vip"`
 }
 
 type toggleInvitationCodeRequest struct {
@@ -35,6 +37,7 @@ type invitationCodeResponse struct {
 	ValidityDays int     `json:"validity_days"`
 	BoundAt      *string `json:"bound_at"`
 	Exported     bool    `json:"exported"`
+	VIP          bool    `json:"vip"`
 	CreatedAt    string  `json:"created_at"`
 }
 
@@ -46,7 +49,7 @@ func GenerateInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
 			return
 		}
 
-		codes, err := svc.GenerateCodes(r.Context(), req.Count, req.ValidityDays)
+		codes, err := svc.GenerateCodes(r.Context(), req.Count, req.ValidityDays, req.VIP)
 		if err != nil {
 			if errors.Is(err, invitation.ErrInvalidCount) {
 				writeError(w, http.StatusBadRequest, "INVALID_INPUT", err.Error())
@@ -141,7 +144,9 @@ func ExportInvitationCodesHandler(svc *invitation.Service) http.HandlerFunc {
 			exportedFilter = "unexported"
 		}
 
-		codes, err := svc.ExportUnusedCodes(r.Context(), exportedFilter)
+		vipOnly := r.URL.Query().Get("vip") == "true"
+
+		codes, err := svc.ExportUnusedCodes(r.Context(), exportedFilter, vipOnly)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "EXPORT_FAILED", err.Error())
 			return
@@ -252,6 +257,7 @@ func toInvitationCodeResponse(c *store.InvitationCode) invitationCodeResponse {
 		UsedByEmail:  c.UsedByEmail,
 		ValidityDays: c.ValidityDays,
 		Exported:     c.Exported,
+		VIP:          c.VIP,
 		CreatedAt:    c.CreatedAt.Format(time.RFC3339),
 	}
 	if c.UsedAt != nil {
@@ -267,5 +273,114 @@ func toInvitationCodeResponse(c *store.InvitationCode) invitationCodeResponse {
 func DeprecatedEmailInviteHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGone, "FEATURE_REMOVED", "Email invite feature has been removed. Use invitation codes instead.")
+	}
+}
+
+// --- Email Invite (restored) ---
+
+type emailInviteResponse struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	Role      string `json:"role"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func toEmailInviteResponse(item *store.EmailInvite) emailInviteResponse {
+	return emailInviteResponse{
+		ID:        item.ID,
+		Email:     item.Email,
+		Role:      item.Role,
+		Status:    item.Status,
+		CreatedAt: item.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: item.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+func emailInviteID() string {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return fmt.Sprintf("ei_%x", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("ei_%x", buf)
+}
+
+func CreateEmailInviteHandler(repo store.EmailInviteRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Email string `json:"email"`
+			Role  string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request body")
+			return
+		}
+		if req.Email == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "email is required")
+			return
+		}
+		switch req.Role {
+		case "viewer", "member", "admin":
+			// valid
+		case "":
+			req.Role = "viewer"
+		default:
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "role must be viewer, member, or admin")
+			return
+		}
+		now := time.Now()
+		item := &store.EmailInvite{
+			ID:        emailInviteID(),
+			Email:     req.Email,
+			Role:      req.Role,
+			Status:    "pending",
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := repo.Create(r.Context(), item); err != nil {
+			writeError(w, http.StatusInternalServerError, "CREATE_FAILED", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, toEmailInviteResponse(item))
+	}
+}
+
+func ListEmailInvitesHandler(repo store.EmailInviteRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := repo.List(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "LIST_FAILED", err.Error())
+			return
+		}
+		resp := make([]emailInviteResponse, len(items))
+		for i, item := range items {
+			resp[i] = toEmailInviteResponse(item)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"invites": resp})
+	}
+}
+
+func DeleteEmailInviteHandler(repo store.EmailInviteRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id == "" {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "id is required")
+			return
+		}
+		existing, err := repo.GetByID(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "LOOKUP_FAILED", err.Error())
+			return
+		}
+		if existing == nil {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "invite not found")
+			return
+		}
+		if err := repo.DeleteByID(r.Context(), id); err != nil {
+			writeError(w, http.StatusInternalServerError, "DELETE_FAILED", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
 }

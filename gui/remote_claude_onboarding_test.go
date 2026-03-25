@@ -116,8 +116,9 @@ func TestEnsureClaudeOnboardingIdempotent(t *testing.T) {
 
 	configPath := filepath.Join(tmpHome, ".claude.json")
 	existing := map[string]any{
-		"hasCompletedOnboarding": true,
-		"theme":                  "solarized",
+		"hasCompletedOnboarding":       true,
+		"bypassPermissionsModeAccepted": true,
+		"theme":                        "solarized",
 		"projects": map[string]any{
 			"D:/workprj/test": map[string]any{
 				"hasTrustDialogAccepted": true,

@@ -16,7 +16,7 @@ import (
 // craftedToolsDir returns the directory for storing crafted tool scripts.
 func craftedToolsDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cceasy", "crafted_tools")
+	return filepath.Join(home, ".maclaw", "data", "crafted_tools")
 }
 
 // toolCraftTool is the implementation of the "craft_tool" tool.

@@ -11,7 +11,7 @@ import (
 func TestAutoEnroller_DisabledByDefault(t *testing.T) {
 	ae := NewAutoEnroller(
 		func() *lark.Bot { return nil },
-		func(email, openID string) {},
+		func(email, openID, mobile string) {},
 	)
 
 	if ae.IsEnabled() {
@@ -30,7 +30,7 @@ func TestAutoEnroller_DisabledByDefault(t *testing.T) {
 func TestAutoEnroller_EnableDisable(t *testing.T) {
 	ae := NewAutoEnroller(
 		func() *lark.Bot { return nil },
-		func(email, openID string) {},
+		func(email, openID, mobile string) {},
 	)
 
 	ae.SetEnabled(true)
@@ -47,7 +47,7 @@ func TestAutoEnroller_EnableDisable(t *testing.T) {
 func TestAutoEnroller_ConfigRoundTrip(t *testing.T) {
 	ae := NewAutoEnroller(
 		func() *lark.Bot { return nil },
-		func(email, openID string) {},
+		func(email, openID, mobile string) {},
 	)
 
 	cfg := AutoEnrollConfig{
@@ -65,7 +65,7 @@ func TestAutoEnroller_ConfigRoundTrip(t *testing.T) {
 func TestAutoEnroller_NilBot(t *testing.T) {
 	ae := NewAutoEnroller(
 		func() *lark.Bot { return nil },
-		func(email, openID string) {},
+		func(email, openID, mobile string) {},
 	)
 	ae.SetConfig(AutoEnrollConfig{Enabled: true})
 
@@ -85,7 +85,7 @@ func TestAutoEnroller_Cooldown(t *testing.T) {
 			callCount++
 			return lark.NewChatBot("test", "test")
 		},
-		func(email, openID string) {},
+		func(email, openID, mobile string) {},
 	)
 	ae.SetConfig(AutoEnrollConfig{Enabled: true})
 
@@ -110,7 +110,7 @@ func TestAutoEnroller_Cooldown(t *testing.T) {
 func TestAutoEnroller_EmptyEmail(t *testing.T) {
 	ae := NewAutoEnroller(
 		func() *lark.Bot { return lark.NewChatBot("test", "test") },
-		func(email, openID string) {},
+		func(email, openID, mobile string) {},
 	)
 	ae.SetConfig(AutoEnrollConfig{Enabled: true})
 
@@ -152,7 +152,7 @@ func TestAutoEnroller_DefaultDisplayName(t *testing.T) {
 	// by checking that AddToFeishuOrg proceeds past the displayName assignment.
 	ae := NewAutoEnroller(
 		func() *lark.Bot { return lark.NewChatBot("test", "test") },
-		func(email, openID string) {},
+		func(email, openID, mobile string) {},
 	)
 	ae.SetConfig(AutoEnrollConfig{Enabled: true})
 
@@ -167,7 +167,7 @@ func TestAutoEnroller_DefaultDisplayName(t *testing.T) {
 func TestAutoEnroller_CooldownEviction(t *testing.T) {
 	ae := NewAutoEnroller(
 		func() *lark.Bot { return nil },
-		func(email, openID string) {},
+		func(email, openID, mobile string) {},
 	)
 	ae.SetConfig(AutoEnrollConfig{Enabled: true})
 

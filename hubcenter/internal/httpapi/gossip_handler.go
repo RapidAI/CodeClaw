@@ -37,7 +37,7 @@ func generateID() string {
 	return fmt.Sprintf("%d-%s", time.Now().UnixMilli(), hex.EncodeToString(b))
 }
 
-func GossipPublishHandler(gossip store.GossipRepository, cache *GossipCache) http.HandlerFunc {
+func GossipPublishHandler(gossip store.GossipRepository, cache *GossipCache, settings store.SystemSettingsRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req gossipPublishRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -62,6 +62,16 @@ func GossipPublishHandler(gossip store.GossipRepository, cache *GossipCache) htt
 			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "Category must be owner, project, news, or gossip")
 			return
 		}
+
+		// LLM content moderation
+		var flagged bool
+		if settings != nil {
+			cfg, _ := LoadModerationConfig(r.Context(), settings)
+			if cfg != nil && cfg.Enabled {
+				flagged = moderateContent(r.Context(), cfg, content)
+			}
+		}
+
 		post := &store.GossipPost{
 			ID:        generateID(),
 			MachineID: machineID,
@@ -69,6 +79,7 @@ func GossipPublishHandler(gossip store.GossipRepository, cache *GossipCache) htt
 			Nickname:  generateNickname(machineID),
 			Content:   content,
 			Category:  category,
+			Flagged:   flagged,
 			CreatedAt: time.Now().UTC(),
 		}
 		if err := gossip.CreatePost(r.Context(), post); err != nil {
@@ -108,6 +119,7 @@ func gossipPostToAdminMap(p *store.GossipPost) map[string]any {
 	m := gossipPostToPublicMap(p)
 	m["machine_id"] = p.MachineID
 	m["user_email"] = p.UserEmail
+	m["flagged"] = p.Flagged
 	return m
 }
 
@@ -340,7 +352,15 @@ func AdminListGossipHandler(gossip store.GossipRepository) http.HandlerFunc {
 		}
 		limit := 100
 		offset := (page - 1) * limit
-		posts, total, err := gossip.ListPosts(r.Context(), offset, limit)
+		filter := r.URL.Query().Get("filter") // "flagged" | "" (all)
+		var posts []*store.GossipPost
+		var total int
+		var err error
+		if filter == "flagged" {
+			posts, total, err = gossip.ListFlaggedPosts(r.Context(), offset, limit)
+		} else {
+			posts, total, err = gossip.ListAllPosts(r.Context(), offset, limit)
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "LIST_FAILED", err.Error())
 			return
@@ -447,6 +467,25 @@ func AdminDeleteGossipCommentHandler(gossip store.GossipRepository, cache *Gossi
 			_ = gossip.UpdatePostScore(r.Context(), req.PostID)
 			go cache.Refresh(context.Background())
 		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+func AdminFlagGossipHandler(gossip store.GossipRepository, cache *GossipCache) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID      string `json:"id"`
+			Flagged bool   `json:"flagged"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "id required")
+			return
+		}
+		if err := gossip.FlagPost(r.Context(), req.ID, req.Flagged); err != nil {
+			writeError(w, http.StatusInternalServerError, "FLAG_FAILED", err.Error())
+			return
+		}
+		go cache.Refresh(context.Background())
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
 }

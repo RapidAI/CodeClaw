@@ -15,7 +15,7 @@ func TestGetRemoteClaudeReadinessDelegatesToDiagnosticCheck(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -71,7 +71,7 @@ func TestListRemoteToolMetadataReturnsKnownTools(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -150,7 +150,7 @@ func TestGetRemoteClaudeLaunchProbeDelegatesToDiagnosticCheck(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -210,7 +210,7 @@ func TestGetRemoteToolReadinessDelegatesToDiagnosticCheck(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -261,7 +261,7 @@ func TestGetRemoteToolLaunchProbeDelegatesToDiagnosticCheck(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -403,7 +403,7 @@ func TestStartRemoteSessionSupportsCodex(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -490,7 +490,7 @@ func TestStartRemoteSessionSupportsOpencode(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -577,7 +577,7 @@ func TestStartRemoteSessionSupportsIFlow(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}
@@ -664,7 +664,7 @@ func TestStartRemoteSessionSupportsKilo(t *testing.T) {
 	t.Setenv("USERPROFILE", tempHome)
 	t.Setenv("AppData", filepath.Join(tempHome, "AppData", "Roaming"))
 
-	toolsDir := filepath.Join(tempHome, ".cceasy", "tools")
+	toolsDir := filepath.Join(tempHome, ".maclaw", "data", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(toolsDir) error = %v", err)
 	}

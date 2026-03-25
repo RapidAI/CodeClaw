@@ -58,6 +58,10 @@ type voiceprintRepo struct {
 	db, readDB *sql.DB
 	batch      *writeBatcher
 }
+type emailInviteRepo struct {
+	db, readDB *sql.DB
+	batch      *writeBatcher
+}
 
 func NewStore(p *Provider) *store.Store {
 	return &store.Store{
@@ -73,6 +77,7 @@ func NewStore(p *Provider) *store.Store {
 		LoginTokens:  &loginTokenRepo{db: p.Write, readDB: p.Read, batch: p.batch},
 		Sessions:     &sessionRepo{db: p.Write, readDB: p.Read, batch: p.batch},
 		Voiceprints:  &voiceprintRepo{db: p.Write, readDB: p.Read, batch: p.batch},
+		EmailInvites: &emailInviteRepo{db: p.Write, readDB: p.Read, batch: p.batch},
 	}
 }
 
@@ -1205,14 +1210,15 @@ func (r *sessionRepo) Close(ctx context.Context, sessionID string, exitCode *int
 func (r *invitationCodeRepo) Create(ctx context.Context, item *store.InvitationCode) error {
 	_, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO invitation_codes (id, code, status, used_by_email, used_at, validity_days, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO invitation_codes (id, code, status, used_by_email, used_at, validity_days, vip, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID,
 		item.Code,
 		item.Status,
 		item.UsedByEmail,
 		nil,
 		item.ValidityDays,
+		boolToInt(item.VIP),
 		item.CreatedAt.Format(time.RFC3339),
 	)
 	return err
@@ -1221,15 +1227,15 @@ func (r *invitationCodeRepo) Create(ctx context.Context, item *store.InvitationC
 func (r *invitationCodeRepo) GetByID(ctx context.Context, id string) (*store.InvitationCode, error) {
 	row := r.readDB.QueryRowContext(
 		ctx,
-		`SELECT id, code, status, used_by_email, used_at, validity_days, exported, created_at
+		`SELECT id, code, status, used_by_email, used_at, validity_days, exported, vip, created_at
 		 FROM invitation_codes WHERE id = ?`,
 		id,
 	)
 	var item store.InvitationCode
 	var usedAt sql.NullString
 	var createdAt string
-	var exported int
-	if err := row.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &createdAt); err != nil {
+	var exported, vip int
+	if err := row.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &vip, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1240,6 +1246,7 @@ func (r *invitationCodeRepo) GetByID(ctx context.Context, id string) (*store.Inv
 		item.UsedAt = &t
 	}
 	item.Exported = exported != 0
+	item.VIP = vip != 0
 	item.CreatedAt = mustParseTime(createdAt)
 	return &item, nil
 }
@@ -1247,15 +1254,15 @@ func (r *invitationCodeRepo) GetByID(ctx context.Context, id string) (*store.Inv
 func (r *invitationCodeRepo) GetByCode(ctx context.Context, code string) (*store.InvitationCode, error) {
 	row := r.readDB.QueryRowContext(
 		ctx,
-		`SELECT id, code, status, used_by_email, used_at, validity_days, exported, created_at
+		`SELECT id, code, status, used_by_email, used_at, validity_days, exported, vip, created_at
 		 FROM invitation_codes WHERE code = ?`,
 		code,
 	)
 	var item store.InvitationCode
 	var usedAt sql.NullString
 	var createdAt string
-	var exported int
-	if err := row.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &createdAt); err != nil {
+	var exported, vip int
+	if err := row.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &vip, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1266,12 +1273,13 @@ func (r *invitationCodeRepo) GetByCode(ctx context.Context, code string) (*store
 		item.UsedAt = &t
 	}
 	item.Exported = exported != 0
+	item.VIP = vip != 0
 	item.CreatedAt = mustParseTime(createdAt)
 	return &item, nil
 }
 
 func (r *invitationCodeRepo) List(ctx context.Context, status string, search string) ([]*store.InvitationCode, error) {
-	query := `SELECT id, code, status, used_by_email, used_at, validity_days, exported, created_at FROM invitation_codes`
+	query := `SELECT id, code, status, used_by_email, used_at, validity_days, exported, vip, created_at FROM invitation_codes`
 	var conditions []string
 	var args []any
 
@@ -1303,8 +1311,8 @@ func (r *invitationCodeRepo) List(ctx context.Context, status string, search str
 		var item store.InvitationCode
 		var usedAt sql.NullString
 		var createdAt string
-		var exported int
-		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &createdAt); err != nil {
+		var exported, vip int
+		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &vip, &createdAt); err != nil {
 			return nil, err
 		}
 		if usedAt.Valid {
@@ -1312,6 +1320,7 @@ func (r *invitationCodeRepo) List(ctx context.Context, status string, search str
 			item.UsedAt = &t
 		}
 		item.Exported = exported != 0
+		item.VIP = vip != 0
 		item.CreatedAt = mustParseTime(createdAt)
 		items = append(items, &item)
 	}
@@ -1346,7 +1355,7 @@ func (r *invitationCodeRepo) ListPaged(ctx context.Context, status string, searc
 	}
 
 	// Fetch page
-	query := `SELECT id, code, status, used_by_email, used_at, validity_days, exported, created_at FROM invitation_codes` + baseWhere + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	query := `SELECT id, code, status, used_by_email, used_at, validity_days, exported, vip, created_at FROM invitation_codes` + baseWhere + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	pageArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := r.readDB.QueryContext(ctx, query, pageArgs...)
 	if err != nil {
@@ -1359,8 +1368,8 @@ func (r *invitationCodeRepo) ListPaged(ctx context.Context, status string, searc
 		var item store.InvitationCode
 		var usedAt sql.NullString
 		var createdAt string
-		var exported int
-		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &createdAt); err != nil {
+		var exported, vip int
+		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &vip, &createdAt); err != nil {
 			return nil, 0, err
 		}
 		if usedAt.Valid {
@@ -1368,6 +1377,7 @@ func (r *invitationCodeRepo) ListPaged(ctx context.Context, status string, searc
 			item.UsedAt = &t
 		}
 		item.Exported = exported != 0
+		item.VIP = vip != 0
 		item.CreatedAt = mustParseTime(createdAt)
 		items = append(items, &item)
 	}
@@ -1411,8 +1421,8 @@ func (r *invitationCodeRepo) DeleteByEmail(ctx context.Context, email string) (i
 	return res.RowsAffected()
 }
 
-func (r *invitationCodeRepo) ListUnused(ctx context.Context, exportedFilter string) ([]*store.InvitationCode, error) {
-	query := `SELECT id, code, status, used_by_email, used_at, validity_days, exported, created_at FROM invitation_codes WHERE status = 'unused'`
+func (r *invitationCodeRepo) ListUnused(ctx context.Context, exportedFilter string, vipOnly ...bool) ([]*store.InvitationCode, error) {
+	query := `SELECT id, code, status, used_by_email, used_at, validity_days, exported, vip, created_at FROM invitation_codes WHERE status = 'unused'`
 	switch exportedFilter {
 	case "exported":
 		query += ` AND exported = 1`
@@ -1421,6 +1431,9 @@ func (r *invitationCodeRepo) ListUnused(ctx context.Context, exportedFilter stri
 	default:
 		// "unexported" or any unknown value defaults to unexported
 		query += ` AND exported = 0`
+	}
+	if len(vipOnly) > 0 && vipOnly[0] {
+		query += ` AND vip = 1`
 	}
 	query += ` ORDER BY created_at DESC`
 
@@ -1435,8 +1448,8 @@ func (r *invitationCodeRepo) ListUnused(ctx context.Context, exportedFilter stri
 		var item store.InvitationCode
 		var usedAt sql.NullString
 		var createdAt string
-		var exported int
-		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &createdAt); err != nil {
+		var exported, vip int
+		if err := rows.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &vip, &createdAt); err != nil {
 			return nil, err
 		}
 		if usedAt.Valid {
@@ -1444,6 +1457,7 @@ func (r *invitationCodeRepo) ListUnused(ctx context.Context, exportedFilter stri
 			item.UsedAt = &t
 		}
 		item.Exported = exported != 0
+		item.VIP = vip != 0
 		item.CreatedAt = mustParseTime(createdAt)
 		items = append(items, &item)
 	}
@@ -1468,7 +1482,7 @@ func (r *invitationCodeRepo) MarkExported(ctx context.Context, ids []string) err
 func (r *invitationCodeRepo) GetByEmail(ctx context.Context, email string) (*store.InvitationCode, error) {
 	row := r.readDB.QueryRowContext(
 		ctx,
-		`SELECT id, code, status, used_by_email, used_at, validity_days, exported, created_at
+		`SELECT id, code, status, used_by_email, used_at, validity_days, exported, vip, created_at
 		 FROM invitation_codes WHERE used_by_email = ? AND status = 'used'
 		 ORDER BY used_at DESC LIMIT 1`,
 		email,
@@ -1476,8 +1490,8 @@ func (r *invitationCodeRepo) GetByEmail(ctx context.Context, email string) (*sto
 	var item store.InvitationCode
 	var usedAt sql.NullString
 	var createdAt string
-	var exported int
-	if err := row.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &createdAt); err != nil {
+	var exported, vip int
+	if err := row.Scan(&item.ID, &item.Code, &item.Status, &item.UsedByEmail, &usedAt, &item.ValidityDays, &exported, &vip, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1488,6 +1502,7 @@ func (r *invitationCodeRepo) GetByEmail(ctx context.Context, email string) (*sto
 		item.UsedAt = &t
 	}
 	item.Exported = exported != 0
+	item.VIP = vip != 0
 	item.CreatedAt = mustParseTime(createdAt)
 	return &item, nil
 }

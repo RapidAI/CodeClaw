@@ -94,6 +94,15 @@ type Gateway struct {
 	// sequence tracking
 	seqMu   sync.Mutex
 	lastSeq *int
+
+	// Per-user message processing locks — ensures messages from the same
+	// user are handled sequentially while different users run concurrently.
+	userLocks   map[string]*sync.Mutex
+	userLocksMu sync.Mutex
+
+	// handlerWg tracks in-flight handler goroutines so Stop() can wait
+	// for them to finish before returning.
+	handlerWg sync.WaitGroup
 }
 
 // wsPayload is the QQ Bot WebSocket payload structure.
@@ -108,9 +117,10 @@ type wsPayload struct {
 // NewGateway creates a new QQ Bot gateway.
 func NewGateway(config Config, handler MessageHandler) *Gateway {
 	return &Gateway{
-		config:  config,
-		handler: handler,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		config:    config,
+		handler:   handler,
+		client:    &http.Client{Timeout: 60 * time.Second},
+		userLocks: make(map[string]*sync.Mutex),
 	}
 }
 
@@ -145,18 +155,19 @@ func (g *Gateway) Start(ctx context.Context) error {
 // Stop shuts down the gateway.
 func (g *Gateway) Stop() error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-
 	if !g.running {
+		g.mu.Unlock()
 		return nil
 	}
-
 	if g.cancel != nil {
 		g.cancel()
 	}
-	g.wg.Wait()
 	g.running = false
 	g.cancel = nil
+	g.mu.Unlock()
+
+	g.wg.Wait()        // wait for runGateway to exit
+	g.handlerWg.Wait() // wait for in-flight handler goroutines
 
 	g.seqMu.Lock()
 	g.lastSeq = nil
@@ -178,6 +189,18 @@ func (g *Gateway) emitStatus(status string) {
 	if g.onStatus != nil {
 		g.onStatus(status)
 	}
+}
+
+// userLock returns a per-user mutex, creating one if it doesn't exist yet.
+func (g *Gateway) userLock(userKey string) *sync.Mutex {
+	g.userLocksMu.Lock()
+	defer g.userLocksMu.Unlock()
+	ul, ok := g.userLocks[userKey]
+	if !ok {
+		ul = &sync.Mutex{}
+		g.userLocks[userKey] = ul
+	}
+	return ul
 }
 
 // UpdateConfig updates the gateway config. Caller should Stop/Start to apply.
@@ -483,12 +506,20 @@ func (g *Gateway) handleC2CMessage(data json.RawMessage) {
 	log.Printf("[qqbot/gw] C2C from %s: %s", openID, truncate(text, 80))
 
 	if g.handler != nil {
-		g.handler(IncomingMessage{
+		incoming := IncomingMessage{
 			OpenID:    openID,
 			Text:      text,
 			RawData:   data,
 			Timestamp: time.Now(),
-		})
+		}
+		ul := g.userLock(openID)
+		g.handlerWg.Add(1)
+		go func() {
+			defer g.handlerWg.Done()
+			ul.Lock()
+			defer ul.Unlock()
+			g.handler(incoming)
+		}()
 	}
 }
 

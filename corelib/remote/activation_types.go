@@ -16,6 +16,7 @@ type RemoteActivationResult struct {
 	MachineID    string `json:"machine_id,omitempty"`
 	MachineToken string `json:"machine_token,omitempty"`
 	ExpiresAt    string `json:"expires_at,omitempty"`
+	VIPFlag      bool   `json:"vip_flag,omitempty"`
 }
 
 // RemoteProbeResult 远程探测结果。

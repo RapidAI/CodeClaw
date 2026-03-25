@@ -13,6 +13,7 @@ import (
 	"github.com/RapidAI/CodeClaw/hub/internal/im"
 	"github.com/RapidAI/CodeClaw/hub/internal/qqbot"
 	"github.com/RapidAI/CodeClaw/hub/internal/invitation"
+	"github.com/RapidAI/CodeClaw/hub/internal/security"
 	"github.com/RapidAI/CodeClaw/hub/internal/mail"
 	"github.com/RapidAI/CodeClaw/hub/internal/session"
 	"github.com/RapidAI/CodeClaw/hub/internal/store"
@@ -29,6 +30,7 @@ func NewRouter(
 	deviceSvc *device.Service,
 	sessionSvc *session.Service,
 	invitationSvc *invitation.Service,
+	emailInviteRepo store.EmailInviteRepository,
 	system store.SystemSettingsRepository,
 	feishuNotifier *feishu.Notifier,
 	feishuPlugin *feishu.FeishuPlugin,
@@ -45,6 +47,7 @@ func NewRouter(
 	chatVoiceSignaling *chat.VoiceSignaling,
 	chatNotifier *chat.Notifier,
 	voiceprintSvc *voiceprint.Service,
+	securitySvc *security.SecurityService,
 	hubCfg *config.Config,
 	configPath string,
 	ensureTLSCert func(certFile, keyFile string) error,
@@ -56,13 +59,7 @@ func NewRouter(
 	if invitationSvc != nil {
 		invChecker = invitationSvc
 	}
-	var feishuChecker entry.FeishuAutoEnrollChecker
-	if feishuNotifier != nil {
-		if ae := feishuNotifier.AutoEnroller(); ae != nil {
-			feishuChecker = ae
-		}
-	}
-	entrySvc := entry.NewService(identity, invChecker, feishuChecker)
+	entrySvc := entry.NewService(identity, invChecker)
 	var userLookup machineUserLookup
 	if identity != nil {
 		userLookup = identity.UsersRepo()
@@ -94,9 +91,10 @@ func NewRouter(
 	mux.HandleFunc("GET /api/admin/blocklist", RequireAdmin(admins, ListBlockedEmailsHandler(identity)))
 	mux.HandleFunc("POST /api/admin/blocklist", RequireAdmin(admins, AddBlockedEmailHandler(identity)))
 	mux.HandleFunc("DELETE /api/admin/blocklist/{email}", RequireAdmin(admins, RemoveBlockedEmailHandler(identity)))
-	// Deprecated Email invite routes — return 410 Gone
-	mux.HandleFunc("POST /api/admin/invites", RequireAdmin(admins, DeprecatedEmailInviteHandler()))
-	mux.HandleFunc("GET /api/admin/invites", RequireAdmin(admins, DeprecatedEmailInviteHandler()))
+	// Email invite routes (restored)
+	mux.HandleFunc("POST /api/admin/invites", RequireAdmin(admins, CreateEmailInviteHandler(emailInviteRepo)))
+	mux.HandleFunc("GET /api/admin/invites", RequireAdmin(admins, ListEmailInvitesHandler(emailInviteRepo)))
+	mux.HandleFunc("DELETE /api/admin/invites/{id}", RequireAdmin(admins, DeleteEmailInviteHandler(emailInviteRepo)))
 	mux.HandleFunc("POST /api/admin/invitation-codes/generate", RequireAdmin(admins, GenerateInvitationCodesHandler(invitationSvc)))
 	mux.HandleFunc("GET /api/admin/invitation-codes", RequireAdmin(admins, ListInvitationCodesHandler(invitationSvc)))
 	mux.HandleFunc("POST /api/admin/invitation-codes/toggle", RequireAdmin(admins, ToggleInvitationCodeHandler(invitationSvc)))
@@ -105,7 +103,7 @@ func NewRouter(
 	mux.HandleFunc("POST /api/admin/invitation-codes/unbind", RequireAdmin(admins, UnbindInvitationCodeHandler(invitationSvc, identity, deviceSvc, feishuNotifier, imCleaners)))
 	mux.HandleFunc("GET /api/admin/enrollments/pending", RequireAdmin(admins, ListPendingEnrollmentsHandler(identity)))
 	mux.HandleFunc("GET /api/admin/enrollments/all", RequireAdmin(admins, ListAllEnrollmentsHandler(identity)))
-	mux.HandleFunc("POST /api/admin/enrollments/approve", RequireAdmin(admins, ApproveEnrollmentHandler(identity, feishuNotifier)))
+	mux.HandleFunc("POST /api/admin/enrollments/approve", RequireAdmin(admins, ApproveEnrollmentHandler(identity, securitySvc)))
 	mux.HandleFunc("POST /api/admin/enrollments/reject", RequireAdmin(admins, RejectEnrollmentHandler(identity)))
 	mux.HandleFunc("GET /api/admin/pending-logins", RequireAdmin(admins, ListPendingLoginsHandler(identity)))
 	mux.HandleFunc("POST /api/admin/pending-logins/confirm", RequireAdmin(admins, AdminConfirmLoginHandler(identity)))
@@ -142,6 +140,9 @@ func NewRouter(
 	mux.HandleFunc("PUT /api/admin/hub_llm_config", RequireAdmin(admins, UpdateHubLLMConfigHandler(system)))
 	mux.HandleFunc("POST /api/admin/hub_llm_test", RequireAdmin(admins, TestHubLLMHandler(system)))
 	mux.HandleFunc("GET /api/admin/hub_llm_status", RequireAdmin(admins, HubLLMStatusHandler(hubLLMStatusFn)))
+	// Content audit configuration
+	mux.HandleFunc("GET /api/admin/content_audit/config", RequireAdmin(admins, GetContentAuditConfigHandler(system)))
+	mux.HandleFunc("PUT /api/admin/content_audit/config", RequireAdmin(admins, UpdateContentAuditConfigHandler(system)))
 	// TLS configuration
 	mux.HandleFunc("GET /api/admin/tls_config", RequireAdmin(admins, GetTLSConfigHandler(hubCfg)))
 	mux.HandleFunc("POST /api/admin/tls_config", RequireAdmin(admins, UpdateTLSConfigHandler(hubCfg, configPath, ensureTLSCert, centerSvc)))
@@ -157,6 +158,24 @@ func NewRouter(
 		mux.HandleFunc("POST /api/admin/voiceprint/identify", RequireAdmin(admins, VoiceprintIdentifyHandler(voiceprintSvc)))
 		mux.HandleFunc("GET /api/admin/voiceprints", RequireAdmin(admins, ListVoiceprintsHandler(voiceprintSvc)))
 		mux.HandleFunc("DELETE /api/admin/voiceprints", RequireAdmin(admins, DeleteVoiceprintHandler(voiceprintSvc)))
+	}
+	// Security management
+	if securitySvc != nil {
+		mux.HandleFunc("GET /api/admin/security/groups", RequireAdmin(admins, SecurityGroupsHandler(securitySvc)))
+		mux.HandleFunc("POST /api/admin/security/groups", RequireAdmin(admins, CreateSecurityGroupHandler(securitySvc)))
+		mux.HandleFunc("PUT /api/admin/security/groups/{id}", RequireAdmin(admins, UpdateSecurityGroupHandler(securitySvc)))
+		mux.HandleFunc("DELETE /api/admin/security/groups/{id}", RequireAdmin(admins, DeleteSecurityGroupHandler(securitySvc)))
+		mux.HandleFunc("GET /api/admin/security/groups/{id}/members", RequireAdmin(admins, ListGroupMembersHandler(securitySvc)))
+		mux.HandleFunc("POST /api/admin/security/groups/{id}/members", RequireAdmin(admins, AddGroupMemberHandler(securitySvc)))
+		mux.HandleFunc("DELETE /api/admin/security/groups/{id}/members/{email}", RequireAdmin(admins, RemoveGroupMemberHandler(securitySvc)))
+		mux.HandleFunc("GET /api/admin/security/groups/{id}/policy", RequireAdmin(admins, GetGroupPolicyHandler(securitySvc)))
+		mux.HandleFunc("PUT /api/admin/security/groups/{id}/policy", RequireAdmin(admins, UpdateGroupPolicyHandler(securitySvc)))
+		mux.HandleFunc("GET /api/admin/security/users/{email}/effective-policy", RequireAdmin(admins, GetUserEffectivePolicyHandler(securitySvc)))
+		mux.HandleFunc("GET /api/admin/security/settings", RequireAdmin(admins, GetSecuritySettingsHandler(securitySvc)))
+		mux.HandleFunc("PUT /api/admin/security/settings", RequireAdmin(admins, UpdateSecuritySettingsHandler(securitySvc)))
+		mux.HandleFunc("PUT /api/admin/security/settings/default-group", RequireAdmin(admins, SetDefaultGroupHandler(securitySvc)))
+		// Public endpoint for enrollment group tree
+		mux.HandleFunc("GET /api/enroll/group-tree", EnrollGroupTreeHandler(securitySvc))
 	}
 	// Conversation stats
 	if convStatsFn != nil {
@@ -197,7 +216,7 @@ func NewRouter(
 	mux.HandleFunc("POST /api/bind/send-code", bindCORS(BindSendCodeHandler(identity, mailer, feishuNotifier)))
 	mux.HandleFunc("POST /api/bind/unbind", bindCORS(BindUnbindHandler(identity, deviceSvc, invitationSvc, feishuNotifier, imCleaners)))
 
-	mux.HandleFunc("POST /api/enroll/start", EnrollStartHandler(identity, feishuNotifier))
+	mux.HandleFunc("POST /api/enroll/start", EnrollStartHandler(identity, invitationSvc, securitySvc))
 	mux.HandleFunc("POST /api/auth/email-request", EmailRequestLoginHandler(identity))
 	mux.HandleFunc("POST /api/auth/email-confirm", EmailConfirmLoginHandler(identity))
 	mux.HandleFunc("POST /api/auth/email-poll", EmailPollLoginHandler(identity))

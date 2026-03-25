@@ -12,8 +12,8 @@ struct EcapaTdnnHParams {
   int32_t channels      = 1024;   // C=1024 for ECAPA-TDNN large
   int32_t emb_dim       = 192;    // output embedding dimension
   int32_t n_se_res2_blocks = 3;   // number of SE-Res2Block layers
-  // Res2Block internal scale (number of sub-bands)
-  int32_t res2_scale    = 8;
+  int32_t res2_scale    = 8;      // Res2Block internal scale (number of sub-bands)
+  int32_t attn_channels = 128;    // ASP attention bottleneck channels
   // Kernel sizes for the 3 SE-Res2Blocks
   int32_t kernel_sizes[3] = {3, 3, 3};
   // Dilation sizes for the 3 SE-Res2Blocks
@@ -25,6 +25,8 @@ struct EcapaTdnnHParams {
 struct EcapaTdnnState : public RSState {
   // Output embedding buffer (192-dim)
   std::vector<float> embedding;
+  // Debug: dump directory (empty = no dump)
+  std::string debug_dump_dir;
 
   EcapaTdnnState() {}
   ~EcapaTdnnState() override = default;
@@ -53,48 +55,38 @@ struct SEBlock {
 // SE-Res2Block: the core building block of ECAPA-TDNN
 // Conv1d(1x1) -> split into sub-bands -> Conv1d per sub-band -> concat -> Conv1d(1x1) -> SE -> residual
 struct SERes2Block {
-  // Input 1x1 conv (channel projection)
   TDNNBlock tdnn1;
-  // Per-sub-band 1D convolutions (res2_scale - 1 sub-convolutions)
-  // sub-band 0 is identity, sub-bands 1..scale-1 have convolutions
   std::vector<TDNNBlock> res2_convs;  // size = res2_scale - 1
-  // Output 1x1 conv
   TDNNBlock tdnn2;
-  // SE block
   SEBlock se;
-  // Shortcut conv (if input channels != output channels)
-  TDNNBlock shortcut;
+  // Shortcut: bare Conv1d (no BN) when in_channels != out_channels
+  struct ggml_tensor* shortcut_w = nullptr;  // [out_ch, in_ch, 1]
+  struct ggml_tensor* shortcut_b = nullptr;
   bool has_shortcut = false;
 };
 
-// Full ECAPA-TDNN model weights
+// Full ECAPA-TDNN model weights (matches SpeechBrain spkrec-ecapa-voxceleb)
 struct EcapaTdnnWeights {
   // Initial TDNN layer: Conv1d(n_mels, C, 5) + BN + ReLU
   TDNNBlock layer0;
   // 3 SE-Res2Blocks
   std::vector<SERes2Block> se_res2_blocks;  // size = 3
-  // MFA (Multi-layer Feature Aggregation) conv: Conv1d(3*C, C*3, 1)
-  // Actually: concatenate outputs of 3 blocks -> Conv1d -> BN -> ReLU
+  // MFA: TDNNBlock(3*C, 3*C, 1)
   TDNNBlock mfa_conv;
-  // Attentive Statistical Pooling
-  struct {
-    struct ggml_tensor* tdnn_w;   // Conv1d weight for attention
-    struct ggml_tensor* tdnn_b;
-    struct ggml_tensor* bn_w;
-    struct ggml_tensor* bn_b;
-    struct ggml_tensor* bn_mean;
-    struct ggml_tensor* bn_var;
-    struct ggml_tensor* attn_w;   // final attention linear weight
-    struct ggml_tensor* attn_b;
-  } asp;
-  // Final FC layer: Linear(C*2, emb_dim)
-  struct ggml_tensor* fc_w;
+  // ASP (Attentive Statistical Pooling) with global_context=true
+  // tdnn: TDNNBlock(C*3, attn_ch, 1) — input is cat(x, mean, std)
+  TDNNBlock asp_tdnn;
+  // conv: Conv1d(attn_ch, C, 1) — channel-dependent attention
+  struct ggml_tensor* asp_conv_w;  // [C, attn_ch, 1]
+  struct ggml_tensor* asp_conv_b;
+  // asp_bn: BatchNorm1d(C*2) — applied after pooling (mean+std concat)
+  struct ggml_tensor* asp_bn_w;
+  struct ggml_tensor* asp_bn_b;
+  struct ggml_tensor* asp_bn_mean;
+  struct ggml_tensor* asp_bn_var;
+  // Final FC: Conv1d(C*2, emb_dim, 1)
+  struct ggml_tensor* fc_w;  // [emb_dim, C*2, 1]
   struct ggml_tensor* fc_b;
-  // Final BatchNorm on embedding
-  struct ggml_tensor* fc_bn_w;
-  struct ggml_tensor* fc_bn_b;
-  struct ggml_tensor* fc_bn_mean;
-  struct ggml_tensor* fc_bn_var;
 };
 
 // --- ECAPA-TDNN Model Class ---

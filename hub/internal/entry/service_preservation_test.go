@@ -46,7 +46,7 @@ func newPreservationTestService(t *testing.T) *Service {
 		nil,    // no mailer
 		"http://127.0.0.1:9399",
 	)
-	return NewService(identity, nil, nil)
+	return NewService(identity, nil)
 }
 
 // TestProbeByEmail_Preservation_EmptyEmail verifies that an empty email
@@ -203,7 +203,7 @@ func TestProbeByEmail_Preservation_BoundUser(t *testing.T) {
 		t.Fatalf("ManualBind failed: %v", err)
 	}
 
-	svc := NewService(identity, nil, nil)
+	svc := NewService(identity, nil)
 	result, err := svc.ProbeByEmail(ctx, "bound@example.com")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

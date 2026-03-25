@@ -7,15 +7,38 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/RapidAI/CodeClaw/corelib"
+	"github.com/RapidAI/CodeClaw/corelib/brand"
+	"github.com/RapidAI/CodeClaw/corelib/skill"
 	"github.com/RapidAI/CodeClaw/tui/commands"
 )
 
 var version = "dev"
 
+func init() {
+	// Wire up security policy bridge functions so the commands package
+	// can check Hub security policy without importing package main.
+	commands.GossipGuardFn = func() error {
+		if !tuiSecurityPolicy.IsGossipAllowed() {
+			return fmt.Errorf("Gossip 功能已被管理员禁止")
+		}
+		return nil
+	}
+	commands.SecurityReadOnlyFn = func() bool {
+		return tuiSecurityPolicy.IsReadOnly()
+	}
+	commands.ConfigSecurityReadOnlyFn = func() bool {
+		return tuiSecurityPolicy.IsReadOnly()
+	}
+}
+
 func main() {
+	// Migrate ~/.maclaw/skills → ~/.maclaw/data/skills (one-time).
+	skill.MigrateSkillsDir()
+
 	if len(os.Args) < 2 {
 		// 默认启动 TUI 交互模式
 		runTUI()
@@ -29,6 +52,8 @@ func main() {
 		runSessionCommand(os.Args[2:])
 	case "config":
 		runConfigCommand(os.Args[2:])
+	case "project":
+		runLocalCommand("project", os.Args[2:])
 	case "template":
 		runLocalCommand("template", os.Args[2:])
 	case "memory":
@@ -106,7 +131,7 @@ func main() {
 			os.Exit(exitCodeForError(err))
 		}
 	case "--version", "-v":
-		fmt.Printf("maclaw-tui %s\n", version)
+		fmt.Printf("%s-tui %s\n", strings.ToLower(brand.Current().DisplayName), version)
 	case "--help", "-h":
 		printUsage()
 	default:
@@ -124,13 +149,23 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `Usage: maclaw-tui [command] [flags]
+	brandName := brand.Current().DisplayName
+	cliName := strings.ToLower(brandName) + "-tui"
+
+	// 构建 launch 命令的工具列表描述
+	launchTools := "claude/codex/gemini/opencode/iflow/kilo"
+	for _, t := range brand.Current().ExtraTools {
+		launchTools += "/" + t.Name
+	}
+
+	fmt.Fprintf(os.Stderr, `Usage: %s [command] [flags]
 
 Commands:
   (default)     启动 TUI 交互界面
   daemon        以守护进程模式运行（无 UI，仅后台服务）
   session       会话管理（list/start/attach/kill）
   config        配置管理（get/set/export/import/schema）
+  project       项目管理（create/list/delete/switch）
   template      会话模板管理（list/create/delete）
   memory        记忆管理（list/search/save/delete/compress/backup）
   schedule      定时任务管理（list/create/delete/pause/resume/trigger）
@@ -153,7 +188,7 @@ Commands:
   mcp           MCP 服务器管理（list/add/remove/health-check/tools/call-tool）
   remote        远程模式管理（status/set-hub/set-email/deactivate）
   loop          后台任务管理（list/stop/continue）— 仅 TUI/daemon 模式
-  launch        启动编程工具（claude/codex/gemini/opencode/iflow/kilo）
+  launch        启动编程工具（%s）
   swarm         Swarm 多任务编排（create/status/cancel/resume/list）
   llm           LLM 管理（test/ping/providers/status/set-provider/set-max-iterations/get-max-iterations）
   system        系统信息（info/python-envs）
@@ -163,7 +198,7 @@ Flags:
   --no-tui      批处理模式（无交互 UI）
   --version     显示版本号
   --help        显示帮助信息
-`)
+`, cliName, launchTools)
 }
 
 // buildKernelOptions 从环境变量和命令行参数构建 KernelOptions。
@@ -190,6 +225,8 @@ func runLocalCommand(cmd string, args []string) {
 	dataDir := commands.ResolveDataDir()
 	var err error
 	switch cmd {
+	case "project":
+		err = commands.RunProject(args, dataDir)
 	case "template":
 		err = commands.RunTemplate(args, dataDir)
 	case "memory":
@@ -224,7 +261,7 @@ func runDaemon() {
 		defer logger.Close()
 	}
 
-	logger.Info("maclaw-tui daemon starting (version %s)", version)
+	logger.Info("%s-tui daemon starting (version %s)", strings.ToLower(brand.Current().DisplayName), version)
 
 	// 写 PID 文件
 	if *pidFile != "" {
@@ -255,7 +292,7 @@ func runDaemon() {
 	defer shutdownCancel()
 	_ = kernel.Shutdown(shutdownCtx)
 
-	logger.Info("maclaw-tui daemon stopped")
+	logger.Info("%s-tui daemon stopped", strings.ToLower(brand.Current().DisplayName))
 }
 
 // runBatch 批处理模式（--no-tui），执行一次性操作后退出。
@@ -306,7 +343,7 @@ func resolveHubCredentials() (hubURL, token string) {
 }
 
 // runLaunchCommand 处理 launch 子命令：启动编程工具。
-// 用法: maclaw-tui launch <tool> [--project <dir>] [--yolo] [--admin]
+// 用法: <brand>-tui launch <tool> [--project <dir>] [--yolo] [--admin]
 func runLaunchCommand(args []string) {
 	launchFlags := flag.NewFlagSet("launch", flag.ExitOnError)
 	projectDir := launchFlags.String("project", "", "项目目录路径")
@@ -316,8 +353,13 @@ func runLaunchCommand(args []string) {
 
 	remaining := launchFlags.Args()
 	if len(remaining) == 0 {
-		fmt.Fprintln(os.Stderr, "用法: maclaw-tui launch <tool> [--project <dir>] [--yolo] [--admin]")
-		fmt.Fprintln(os.Stderr, "支持的工具: claude, codex, gemini, opencode, iflow, kilo, cursor")
+		cliName := strings.ToLower(brand.Current().DisplayName) + "-tui"
+		fmt.Fprintf(os.Stderr, "用法: %s launch <tool> [--project <dir>] [--yolo] [--admin]\n", cliName)
+		toolList := "claude, codex, gemini, opencode, iflow, kilo, cursor"
+		for _, t := range brand.Current().ExtraTools {
+			toolList += ", " + t.Name
+		}
+		fmt.Fprintf(os.Stderr, "支持的工具: %s\n", toolList)
 		os.Exit(commands.ExitUsage)
 	}
 

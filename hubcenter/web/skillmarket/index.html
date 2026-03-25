@@ -177,8 +177,9 @@ async function doSearch() {
   try {
     const r = await fetch(API + '/api/v1/skillmarket/search?q=' + encodeURIComponent(q) + '&top_n=30');
     if (!r.ok) return;
-    const list = await r.json();
-    renderCards('search-results', 'search-empty', list || []);
+    const data = await r.json();
+    const list = data.results || data || [];
+    renderCards('search-results', 'search-empty', Array.isArray(list) ? list : []);
   } catch(e) {}
 }
 
@@ -188,8 +189,9 @@ async function loadTop(sortBy) {
   try {
     const r = await fetch(API + '/api/v1/skillmarket/top?sort=' + sortBy + '&limit=20');
     if (!r.ok) return;
-    const list = await r.json();
-    renderCards(key + '-list', key + '-empty', list || []);
+    const data = await r.json();
+    const list = data.entries || data || [];
+    renderCards(key + '-list', key + '-empty', Array.isArray(list) ? list : []);
   } catch(e) {}
 }
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/RapidAI/CodeClaw/corelib"
+	"github.com/RapidAI/CodeClaw/corelib/brand"
+	"github.com/RapidAI/CodeClaw/corelib/configfile"
 	"github.com/RapidAI/CodeClaw/corelib/remote"
 	"github.com/RapidAI/CodeClaw/corelib/tool"
 	"github.com/RapidAI/CodeClaw/tui/commands"
@@ -136,6 +138,11 @@ func (l *TUIToolLauncher) LaunchToolByName(ctx context.Context, toolName, projec
 	}
 	args := buildToolArgs(tn, projectDir, yoloMode, adminMode)
 
+	// Pre-configure tool onboarding flags so interactive first-run prompts
+	// (theme selection, trust dialogs, bypass-permissions TOS, etc.) don't
+	// block the process.
+	ensureTUIToolOnboarding(tn, projectDir, env)
+
 	opts := tool.LaunchOptions{
 		ProjectDir: projectDir,
 		Tool:       toolPath,
@@ -166,6 +173,12 @@ func resolveProjectDir(cfg corelib.AppConfig) string {
 
 // buildToolArgs 构建工具启动参数。
 func buildToolArgs(tool, projectDir string, yoloMode, adminMode bool) []string {
+	// Hub security policy: force-disable YOLO if not allowed (Req 7.8)
+	if yoloMode && !tuiSecurityPolicy.IsYoloModeAllowed() {
+		fmt.Fprintln(os.Stderr, "⚠ YOLO 模式已被 Hub 安全策略禁止，将以普通模式启动")
+		yoloMode = false
+	}
+
 	var args []string
 	switch tool {
 	case "claude":
@@ -181,4 +194,46 @@ func buildToolArgs(tool, projectDir string, yoloMode, adminMode bool) []string {
 		// gemini CLI 无特殊参数
 	}
 	return args
+}
+
+// ensureTUIToolOnboarding pre-configures tool onboarding flags so that
+// interactive first-run prompts don't block the TUI process.
+// This is the TUI equivalent of gui/tool_onboarding.go's ensureToolOnboardingComplete.
+func ensureTUIToolOnboarding(toolName, projectDir string, env map[string]string) {
+	logFn := func(msg string) {
+		fmt.Fprintf(os.Stderr, "%s\n", msg)
+	}
+
+	switch toolName {
+	case "claude":
+		apiKey := env["ANTHROPIC_AUTH_TOKEN"]
+		if err := configfile.EnsureClaudeOnboarding(configfile.ClaudeOnboardingOptions{
+			ConfigFileName: ".claude.json",
+			LogTag:         "claude",
+			ProjectPath:    projectDir,
+			ApiKey:         apiKey,
+		}, logFn); err != nil {
+			fmt.Fprintf(os.Stderr, "[tool-onboarding] claude pre-check warning: %v\n", err)
+		}
+	case "codebuddy":
+		if err := configfile.EnsureClaudeOnboarding(configfile.ClaudeOnboardingOptions{
+			ConfigFileName: ".codebuddy.json",
+			LogTag:         "codebuddy",
+			ProjectPath:    projectDir,
+		}, logFn); err != nil {
+			fmt.Fprintf(os.Stderr, "[tool-onboarding] codebuddy pre-check warning: %v\n", err)
+		}
+	case "gemini":
+		if err := configfile.EnsureGeminiOnboarding(logFn); err != nil {
+			fmt.Fprintf(os.Stderr, "[tool-onboarding] gemini pre-check warning: %v\n", err)
+		}
+	default:
+		// Check OEM extra tools for a matching onboarding function.
+		for _, et := range brand.Current().ExtraTools {
+			if et.Name == toolName && et.OnboardingFunc != nil {
+				et.OnboardingFunc(projectDir, env)
+				break
+			}
+		}
+	}
 }

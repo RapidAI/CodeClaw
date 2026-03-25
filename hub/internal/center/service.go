@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RapidAI/CodeClaw/corelib/brand"
 	"github.com/RapidAI/CodeClaw/hub/internal/config"
 )
 
@@ -274,8 +275,8 @@ func (s *Service) Register(ctx context.Context, ownerEmail string) (*Registratio
 		Capabilities: map[string]any{
 			"supports_remote_control": true,
 			"supports_pwa":            true,
-			"supports_tools":          []string{"claude"},
-			"brand":                   "MaClaw",
+			"supports_tools":          brandTools(),
+			"brand":                   brand.Current().DisplayName,
 		},
 	}
 
@@ -775,4 +776,13 @@ func detectAdvertisedIPv4() (string, error) {
 	}
 
 	return "", fmt.Errorf("unable to detect non-loopback IPv4 address")
+}
+
+// brandTools returns the list of supported tool names, including any OEM extra tools.
+func brandTools() []string {
+	tools := []string{"claude"}
+	for _, t := range brand.Current().ExtraTools {
+		tools = append(tools, t.Name)
+	}
+	return tools
 }

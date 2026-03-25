@@ -155,6 +155,8 @@ export function WindowHide():Promise<void>;
 // NL Skill management bindings
 export function ListNLSkills():Promise<Array<any>>;
 
+export function DiagnoseSkillFiles():Promise<Array<any>>;
+
 export function CreateNLSkill(arg1:any):Promise<void>;
 
 export function UpdateNLSkill(arg1:any):Promise<void>;
@@ -440,6 +442,8 @@ export function GossipRate(arg1:string, arg2:number):Promise<any>;
 
 export function GossipGetComments(arg1:string, arg2:number):Promise<any>;
 
+export function IsGossipAllowed():Promise<boolean>;
+
 // NL Skill upload binding
 export function UploadNLSkillToMarket(arg1:string):Promise<string>;
 
@@ -459,8 +463,14 @@ export function IsDangbeiLoggedIn():Promise<boolean>;
 
 export function DetectBrowser():Promise<Record<string, string>>;
 
-export function DangbeiLogin():Promise<number>;
+export function DangbeiLogin():Promise<void>;
 
-export function DangbeiFinishLogin(arg1:number):Promise<string>;
+export function DangbeiFinishLogin():Promise<string>;
 
 export function DangbeiEnsureAuth():Promise<string>;
+
+export function GetFreeProxyModels():Promise<Array<Record<string, string>>>;
+
+export function GetFreeProxyModel():Promise<string>;
+
+export function SetFreeProxyModel(arg1:string):Promise<void>;

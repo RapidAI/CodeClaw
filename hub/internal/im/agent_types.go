@@ -17,12 +17,13 @@ type AgentResponse struct {
 // IMUserMessage is sent from Hub to MaClaw client via WebSocket
 // when a user sends a message through an IM platform.
 type IMUserMessage struct {
-	Type      string `json:"type"`       // "im.user_message"
-	RequestID string `json:"request_id"` // Correlates with the agent response
-	UserID    string `json:"user_id"`
-	Platform  string `json:"platform"`   // "feishu", "qbot", "openclaw"
-	Text      string `json:"text"`
-	Timestamp int64  `json:"ts"`
+	Type        string              `json:"type"`                  // "im.user_message"
+	RequestID   string              `json:"request_id"`            // Correlates with the agent response
+	UserID      string              `json:"user_id"`
+	Platform    string              `json:"platform"`              // "feishu", "qbot", "openclaw"
+	Text        string              `json:"text"`
+	Attachments []MessageAttachment `json:"attachments,omitempty"` // File/image attachments from user
+	Timestamp   int64               `json:"ts"`
 }
 
 // IMAgentResponseMsg is sent from MaClaw client to Hub via WebSocket

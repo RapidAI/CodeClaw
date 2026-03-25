@@ -60,6 +60,7 @@ type AppConfig struct {
 	MaclawLLMProviders       []MaclawLLMProvider `json:"maclaw_llm_providers,omitempty"`
 	MaclawLLMCurrentProvider string              `json:"maclaw_llm_current_provider,omitempty"`
 	MaclawAgentMaxIterations int                 `json:"maclaw_agent_max_iterations,omitempty"`
+	FreeProxyModel           string              `json:"free_proxy_model,omitempty"` // selected model for 当贝 free proxy
 	// MaClaw Role configuration
 	MaclawRoleName        string `json:"maclaw_role_name,omitempty"`
 	MaclawRoleDescription string `json:"maclaw_role_description,omitempty"`
@@ -97,6 +98,8 @@ type AppConfig struct {
 	// IM — local mode toggles for QQ Bot and Telegram (same semantics as WeChat)
 	QQBotLocalMode    *bool `json:"qqbot_local_mode,omitempty"`    // nil = auto-detect, true = local, false = hub
 	TelegramLocalMode *bool `json:"telegram_local_mode,omitempty"` // nil = auto-detect, true = local, false = hub
+	// Extra tool configs for OEM brands (keyed by ExtraToolDef.ConfigKey)
+	ExtraToolConfigs map[string]ToolConfig `json:"extra_tool_configs,omitempty"`
 	// UI mode: "pro" (full coding tools) or "lite" (default, simplified, no coding tools)
 	UIMode string `json:"ui_mode,omitempty"`
 	// SkillMarket — Skill 获取策略

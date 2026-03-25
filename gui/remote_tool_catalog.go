@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"strings"
 	"unicode"
+
+	"github.com/RapidAI/CodeClaw/corelib/brand"
 )
 
 type RemoteToolMetadata struct {
@@ -160,7 +162,32 @@ func normalizeRemoteToolName(toolName string) string {
 func lookupRemoteToolMetadata(toolName string) (RemoteToolMetadata, bool) {
 	tool := normalizeRemoteToolName(toolName)
 	meta, ok := remoteToolCatalog[tool]
-	return meta, ok
+	if ok {
+		return meta, true
+	}
+	// Check OEM extra tools from brand config
+	for _, et := range brand.Current().ExtraTools {
+		if et.Name == tool {
+			return RemoteToolMetadata{
+				Name:             et.Name,
+				DisplayName:      et.DisplayName,
+				BinaryName:       et.Name,
+				DefaultTitle:     et.DisplayName + " Session",
+				UsesOpenAICompat: true,
+				SupportsProxy:    true,
+				SupportsRemote:   true,
+				ConfigSelector: func(cfg AppConfig) ToolConfig {
+					if cfg.ExtraToolConfigs != nil {
+						if tc, ok := cfg.ExtraToolConfigs[et.ConfigKey]; ok {
+							return tc
+						}
+					}
+					return ToolConfig{}
+				},
+			}, true
+		}
+	}
+	return RemoteToolMetadata{}, false
 }
 
 func getRemoteToolMetadata(toolName string) (RemoteToolMetadata, error) {
@@ -230,12 +257,22 @@ func remoteToolVisible(cfg AppConfig, toolName string) bool {
 	case "codebuddy":
 		return cfg.ShowCodeBuddy
 	default:
+		// OEM extra tools are always visible when present in brand config
+		for _, et := range brand.Current().ExtraTools {
+			if et.Name == normalizeRemoteToolName(toolName) {
+				return true
+			}
+		}
 		return false
 	}
 }
 
 func listRemoteToolMetadataForApp(app *App) []RemoteToolMetadataView {
 	order := []string{"claude", "gemini", "codex", "opencode", "cursor", "codebuddy", "iflow", "kilo"}
+	// Append OEM extra tools to the order
+	for _, et := range brand.Current().ExtraTools {
+		order = append(order, et.Name)
+	}
 	out := make([]RemoteToolMetadataView, 0, len(order))
 	cfg, err := app.LoadConfig()
 	if err != nil {
@@ -251,7 +288,7 @@ func listRemoteToolMetadataForApp(app *App) []RemoteToolMetadataView {
 	}
 	toolManager := NewToolManager(app)
 	for _, name := range order {
-		meta, ok := remoteToolCatalog[name]
+		meta, ok := lookupRemoteToolMetadata(name)
 		if !ok {
 			continue
 		}

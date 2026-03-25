@@ -74,7 +74,6 @@ class HubDiscovery {
       pwaUrl: body['pwa_url'] as String? ?? '',
       enrollmentMode: body['enrollment_mode'] as String? ?? '',
       invitationCodeRequired: body['invitation_code_required'] as bool? ?? false,
-      feishuAutoEnroll: body['feishu_auto_enroll'] as bool? ?? false,
     );
   }
 
@@ -155,11 +154,9 @@ class ProbeResult {
   final String pwaUrl;
   final String enrollmentMode;
   final bool invitationCodeRequired;
-  final bool feishuAutoEnroll;
   const ProbeResult({
     required this.status, required this.message, required this.pwaUrl,
     required this.enrollmentMode, required this.invitationCodeRequired,
-    required this.feishuAutoEnroll,
   });
 }
 

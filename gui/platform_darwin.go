@@ -71,12 +71,12 @@ func (a *App) CheckEnvironment(force bool) {
 			a.log(a.tr("Init mode: Forcing environment check (ignoring configuration)."))
 		}
 
-		// If .cceasy directory doesn't exist, force environment check
+		// If .maclaw/data directory doesn't exist, force environment check
 		home := a.GetUserHomeDir()
-		ccDir := filepath.Join(home, ".cceasy")
+		ccDir := filepath.Join(home, ".maclaw", "data")
 		if _, err := os.Stat(ccDir); os.IsNotExist(err) {
 			force = true
-			a.log(a.tr("Detected missing .cceasy directory. Forcing environment check..."))
+			a.log(a.tr("Detected missing .maclaw/data directory. Forcing environment check..."))
 		}
 
 		if force {
@@ -94,7 +94,7 @@ func (a *App) CheckEnvironment(force bool) {
 		}
 
 		home, _ = os.UserHomeDir()
-		localNodeDir := filepath.Join(home, ".cceasy", "tools")
+		localNodeDir := filepath.Join(home, ".maclaw", "data", "tools")
 		localBinDir := filepath.Join(localNodeDir, "bin")
 
 		// 1. Setup PATH
@@ -227,7 +227,7 @@ func (a *App) installToolsInBackground() {
 	a.log(a.tr("Starting background tool check/update..."))
 
 	home, _ := os.UserHomeDir()
-	localBinDir := filepath.Join(home, ".cceasy", "tools", "bin")
+	localBinDir := filepath.Join(home, ".maclaw", "data", "tools", "bin")
 
 	// Find npm
 	npmPath, err := exec.LookPath("npm")
@@ -245,7 +245,7 @@ func (a *App) installToolsInBackground() {
 
 	tm := NewToolManager(a)
 	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "iflow", "cursor"}
-	expectedPrefix := filepath.Join(home, ".cceasy", "tools")
+	expectedPrefix := filepath.Join(home, ".maclaw", "data", "tools")
 
 	for _, tool := range tools {
 		// Try to acquire lock for this tool
@@ -371,7 +371,7 @@ func (a *App) updatePathForNode() {
 		return
 	}
 
-	localBinDir := filepath.Join(home, ".cceasy", "tools", "bin")
+	localBinDir := filepath.Join(home, ".maclaw", "data", "tools", "bin")
 	if _, err := os.Stat(localBinDir); err != nil {
 		return
 	}
@@ -570,7 +570,7 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 	}
 
 	home, _ := os.UserHomeDir()
-	localBin := filepath.Join(home, ".cceasy", "tools", "bin")
+	localBin := filepath.Join(home, ".maclaw", "data", "tools", "bin")
 	scriptContent += fmt.Sprintf("export PATH=\"%s:$PATH\"\n", localBin)
 
 	scriptContent += fmt.Sprintf("\"%s\" %s\n", status.Path, strings.Join(cmdArgs, " "))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,11 +13,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RapidAI/CodeClaw/corelib"
 	configPkg "github.com/RapidAI/CodeClaw/corelib/config"
 	"github.com/RapidAI/CodeClaw/corelib/memory"
+	"github.com/RapidAI/CodeClaw/corelib/project"
 	"github.com/RapidAI/CodeClaw/corelib/remote"
 	"github.com/RapidAI/CodeClaw/corelib/scheduler"
 	"github.com/RapidAI/CodeClaw/corelib/security"
+	"github.com/RapidAI/CodeClaw/corelib/websearch"
 	"github.com/RapidAI/CodeClaw/tui/commands"
 )
 
@@ -58,16 +62,67 @@ func (h *TUIAgentHandler) toolGetSessionOutput(args map[string]interface{}) stri
 	s.mu.Lock()
 	lines := make([]string, len(s.PreviewLines))
 	copy(lines, s.PreviewLines)
+	status := s.Status
+	stallState := s.StallState
+	nudgeCount := s.NudgeCount
+	lastOutputAt := s.LastOutputAt
+	createdAt := s.CreatedAt
 	s.mu.Unlock()
 
 	tailLines := intArg(args, "tail_lines", 0)
 	if tailLines > 0 && len(lines) > tailLines {
 		lines = lines[len(lines)-tailLines:]
 	}
-	if len(lines) == 0 {
-		return "(无输出)"
+
+	// 构建诊断头
+	var diag strings.Builder
+	diag.WriteString(fmt.Sprintf("[diag] status=%s", string(status)))
+	if !lastOutputAt.IsZero() {
+		ago := time.Since(lastOutputAt).Truncate(time.Second)
+		diag.WriteString(fmt.Sprintf(" last_output_ago=%s", ago))
+	} else {
+		diag.WriteString(fmt.Sprintf(" last_output_ago=never (created %s ago)", time.Since(createdAt).Truncate(time.Second)))
 	}
-	return strings.Join(lines, "\n")
+	switch stallState {
+	case remote.StallStateSuspected:
+		diag.WriteString(fmt.Sprintf(" stall=suspected nudge_count=%d", nudgeCount))
+	case remote.StallStateStuck:
+		diag.WriteString(fmt.Sprintf(" stall=stuck nudge_count=%d", nudgeCount))
+	}
+
+	// 状态提示
+	hint := sessionDiagHint(status, stallState)
+	if hint != "" {
+		diag.WriteString("\n" + hint)
+	}
+
+	if len(lines) == 0 {
+		return diag.String() + "\n(无输出)"
+	}
+	return diag.String() + "\n" + strings.Join(lines, "\n")
+}
+
+// sessionDiagHint 根据会话状态和停滞状态生成诊断提示。
+func sessionDiagHint(status remote.SessionStatus, stallState remote.StallState) string {
+	switch status {
+	case remote.SessionBusy, remote.SessionRunning:
+		switch stallState {
+		case remote.StallStateSuspected:
+			return "⏳ 编程工具输出暂停，系统正在尝试恢复，请稍后再检查"
+		case remote.StallStateStuck:
+			return "⚠️ 编程工具可能已卡住，建议发送具体指令或终止会话"
+		default:
+			return "⏳ 编程工具正在工作中，请等待后再检查进度"
+		}
+	case remote.SessionWaitingInput:
+		return "⚠️ 会话正在等待用户输入"
+	case remote.SessionExited:
+		return "会话已退出"
+	case remote.SessionError:
+		return "⚠️ 会话出错"
+	default:
+		return ""
+	}
 }
 
 func (h *TUIAgentHandler) toolGetSessionEvents(args map[string]interface{}) string {
@@ -160,12 +215,35 @@ func (h *TUIAgentHandler) toolSendAndObserve(args map[string]interface{}) string
 		newLines = make([]string, len(s.PreviewLines)-beforeLen)
 		copy(newLines, s.PreviewLines[beforeLen:])
 	}
+	status := s.Status
+	stallState := s.StallState
+	nudgeCount := s.NudgeCount
+	lastOutputAt := s.LastOutputAt
 	s.mu.Unlock()
 
-	if len(newLines) == 0 {
-		return "(等待后无新输出)"
+	// 诊断头
+	var diag strings.Builder
+	diag.WriteString(fmt.Sprintf("[diag] status=%s", string(status)))
+	if !lastOutputAt.IsZero() {
+		ago := time.Since(lastOutputAt).Truncate(time.Second)
+		diag.WriteString(fmt.Sprintf(" last_output_ago=%s", ago))
+	} else {
+		diag.WriteString(" last_output_ago=never")
 	}
-	return strings.Join(newLines, "\n")
+	if stallState == remote.StallStateSuspected {
+		diag.WriteString(fmt.Sprintf(" stall=suspected nudge_count=%d", nudgeCount))
+	} else if stallState == remote.StallStateStuck {
+		diag.WriteString(fmt.Sprintf(" stall=stuck nudge_count=%d", nudgeCount))
+	}
+	hint := sessionDiagHint(status, stallState)
+	if hint != "" {
+		diag.WriteString("\n" + hint)
+	}
+
+	if len(newLines) == 0 {
+		return diag.String() + "\n(等待后无新输出)"
+	}
+	return diag.String() + "\n" + strings.Join(newLines, "\n")
 }
 
 func (h *TUIAgentHandler) toolControlSession(args map[string]interface{}) string {
@@ -586,6 +664,7 @@ func isOriginalBuiltin(name string) bool {
 		"query_audit_log": true, "send_file": true, "parallel_execute": true,
 		"switch_llm_provider": true, "set_max_iterations": true,
 		"recommend_tool": true, "screenshot": true,
+		"project_manage": true, "web_search": true, "web_fetch": true,
 	}
 	return builtins[name]
 }
@@ -639,20 +718,214 @@ func (h *TUIAgentHandler) toolRunSkill(args map[string]interface{}) string {
 	if err != nil {
 		return fmt.Sprintf("加载配置失败: %v", err)
 	}
-	for _, sk := range cfg.NLSkills {
-		if sk.Name == skillName {
-			if sk.Status == "disabled" {
-				return fmt.Sprintf("技能 %s 已禁用", skillName)
-			}
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("执行技能: %s\n", sk.Name))
-			for i, step := range sk.Steps {
-				sb.WriteString(fmt.Sprintf("  步骤 %d: %s\n", i+1, step.Action))
-			}
-			return sb.String()
+
+	var skill *corelib.NLSkillEntry
+	for i := range cfg.NLSkills {
+		if cfg.NLSkills[i].Name == skillName {
+			skill = &cfg.NLSkills[i]
+			break
 		}
 	}
-	return fmt.Sprintf("技能 %s 不存在", skillName)
+	if skill == nil {
+		return fmt.Sprintf("技能 %s 不存在", skillName)
+	}
+	if skill.Status == "disabled" {
+		return fmt.Sprintf("技能 %s 已禁用", skillName)
+	}
+	if len(skill.Steps) == 0 {
+		return fmt.Sprintf("技能 %s 没有定义步骤", skillName)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("▶ 执行技能: %s (%d 步)\n", skill.Name, len(skill.Steps)))
+	allSuccess := true
+	startTime := time.Now()
+
+	for i, step := range skill.Steps {
+		stepStart := time.Now()
+		sb.WriteString(fmt.Sprintf("\n── 步骤 %d/%d: %s ──\n", i+1, len(skill.Steps), step.Action))
+
+		output, execErr := runSkillStep(step, skill.SkillDir)
+		elapsed := time.Since(stepStart).Truncate(time.Millisecond)
+
+		if execErr != nil {
+			sb.WriteString(fmt.Sprintf("[FAIL] %s (耗时 %s)\n", execErr.Error(), elapsed))
+			if output != "" {
+				appendTruncated(&sb, output, 2048)
+			}
+			allSuccess = false
+			if step.OnError != "continue" {
+				sb.WriteString("⛔ 步骤失败且 on_error!=continue，终止执行\n")
+				break
+			}
+			sb.WriteString("⚠️ 步骤失败但 on_error=continue，继续下一步\n")
+		} else {
+			sb.WriteString(fmt.Sprintf("[OK] 耗时 %s\n", elapsed))
+			if output != "" {
+				appendTruncated(&sb, output, 2048)
+			}
+		}
+	}
+
+	totalElapsed := time.Since(startTime).Truncate(time.Millisecond)
+	if allSuccess {
+		sb.WriteString(fmt.Sprintf("\n✅ 技能 '%s' 全部完成 (总耗时 %s)\n", skill.Name, totalElapsed))
+	} else {
+		sb.WriteString(fmt.Sprintf("\n❌ 技能 '%s' 执行失败 (总耗时 %s)\n", skill.Name, totalElapsed))
+	}
+
+	// 更新使用统计
+	skill.UsageCount++
+	skill.LastUsedAt = time.Now().Format(time.RFC3339)
+	if allSuccess {
+		skill.SuccessCount++
+		skill.LastError = ""
+	} else {
+		// 记录最后一个错误到 skill 元数据
+		skill.LastError = "执行失败，详见输出"
+	}
+	_ = store.SaveConfig(cfg)
+
+	return sb.String()
+}
+
+// runSkillStep 执行单个 skill 步骤，支持流式输出收集。
+func runSkillStep(step corelib.NLSkillStep, skillDir string) (string, error) {
+	switch step.Action {
+	case "bash":
+		command, _ := step.Params["command"].(string)
+		if command == "" {
+			return "", fmt.Errorf("missing command parameter")
+		}
+		return runSkillBashStreaming(command, step.Params, skillDir)
+	default:
+		return "", fmt.Errorf("unsupported action: %s", step.Action)
+	}
+}
+
+// runSkillBashStreaming 执行 bash 命令，使用流式输出收集而非等待完成。
+// 每秒检查一次输出，超时后报告已收集的部分输出。
+func runSkillBashStreaming(command string, params map[string]interface{}, skillDir string) (string, error) {
+	timeout := 30
+	if t, ok := params["timeout"].(float64); ok && t > 0 {
+		timeout = int(t)
+		if timeout > 120 {
+			timeout = 120
+		}
+	}
+
+	workDir, _ := params["working_dir"].(string)
+	if workDir == "" && skillDir != "" {
+		workDir = skillDir
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	var shellName string
+	var shellArgs []string
+	if runtime.GOOS == "windows" {
+		shellName = "powershell"
+		shellArgs = []string{"-NoProfile", "-NonInteractive", "-Command", command}
+	} else {
+		shellName = "bash"
+		shellArgs = []string{"-c", command}
+	}
+
+	cmd := exec.CommandContext(ctx, shellName, shellArgs...)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+
+	// 使用 pipe 实现流式读取
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("创建 stdout pipe 失败: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return "", fmt.Errorf("创建 stderr pipe 失败: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("启动命令失败: %w", err)
+	}
+
+	// 并发收集 stdout 和 stderr
+	var mu sync.Mutex
+	var stdoutBuf, stderrBuf strings.Builder
+	var wg sync.WaitGroup
+
+	collect := func(pipe io.ReadCloser, buf *strings.Builder) {
+		defer wg.Done()
+		const maxBufSize = 64 * 1024 // 64KB per stream
+		tmp := make([]byte, 4096)
+		for {
+			n, readErr := pipe.Read(tmp)
+			if n > 0 {
+				mu.Lock()
+				if buf.Len() < maxBufSize {
+					remaining := maxBufSize - buf.Len()
+					if n > remaining {
+						n = remaining
+					}
+					buf.Write(tmp[:n])
+				}
+				mu.Unlock()
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}
+
+	wg.Add(2)
+	go collect(stdoutPipe, &stdoutBuf)
+	go collect(stderrPipe, &stderrBuf)
+
+	wg.Wait()
+	cmdErr := cmd.Wait()
+
+	mu.Lock()
+	stdout := stdoutBuf.String()
+	stderr := stderrBuf.String()
+	mu.Unlock()
+
+	var b strings.Builder
+	if len(stdout) > 0 {
+		b.WriteString(stdout)
+	}
+	if len(stderr) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("[stderr] ")
+		b.WriteString(stderr)
+	}
+
+	if cmdErr != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			b.WriteString(fmt.Sprintf("\n[timeout] 命令超时 (%ds)，已收集部分输出", timeout))
+		}
+		return b.String(), cmdErr
+	}
+	if b.Len() == 0 {
+		return "(completed, no output)", nil
+	}
+	return b.String(), nil
+}
+
+// appendTruncated 将 text 追加到 sb，超过 maxLen 时截断。
+func appendTruncated(sb *strings.Builder, text string, maxLen int) {
+	if len(text) > maxLen {
+		sb.WriteString(text[:maxLen])
+		sb.WriteString("\n... (truncated)\n")
+	} else {
+		sb.WriteString(text)
+		if !strings.HasSuffix(text, "\n") {
+			sb.WriteString("\n")
+		}
+	}
 }
 
 // ===================== ClawNet =====================
@@ -824,6 +1097,9 @@ func (h *TUIAgentHandler) toolSetMaxIterations(args map[string]interface{}) stri
 	if value <= 0 {
 		return "错误: value 必须为正整数"
 	}
+	if value < 30 {
+		value = 30
+	}
 	if value > 300 {
 		value = 300
 	}
@@ -893,4 +1169,154 @@ func intArg(args map[string]interface{}, key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
+}
+
+// ===================== Web Search & Fetch =====================
+
+func (h *TUIAgentHandler) toolWebSearch(args map[string]interface{}) string {
+	query := stringArg(args, "query")
+	if query == "" {
+		return "缺少 query 参数"
+	}
+	maxResults := intArg(args, "max_results", 8)
+
+	results, err := websearch.Search(query, maxResults)
+	if err != nil {
+		return fmt.Sprintf("搜索失败: %v", err)
+	}
+	if len(results) == 0 {
+		return "未找到相关结果"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("搜索 \"%s\" 找到 %d 条结果:\n\n", query, len(results)))
+	for i, r := range results {
+		sb.WriteString(fmt.Sprintf("%d. %s\n   %s\n", i+1, r.Title, r.URL))
+		if r.Snippet != "" {
+			sb.WriteString(fmt.Sprintf("   %s\n", r.Snippet))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func (h *TUIAgentHandler) toolWebFetch(args map[string]interface{}) string {
+	rawURL := stringArg(args, "url")
+	if rawURL == "" {
+		return "缺少 url 参数"
+	}
+
+	opts := &websearch.FetchOptions{}
+	if renderJS, ok := args["render_js"].(bool); ok {
+		opts.RenderJS = renderJS
+	}
+	if savePath := stringArg(args, "save_path"); savePath != "" {
+		opts.SavePath = savePath
+		opts.MaxBytes = 10 * 1024 * 1024
+	} else {
+		opts.MaxBytes = 2 * 1024 * 1024
+	}
+	opts.TimeoutS = intArg(args, "timeout", 30)
+
+	result, err := websearch.Fetch(rawURL, opts)
+	if err != nil {
+		return fmt.Sprintf("抓取失败: %v", err)
+	}
+
+	if result.SavedTo != "" {
+		return result.Content
+	}
+
+	var sb strings.Builder
+	if result.Title != "" {
+		sb.WriteString(fmt.Sprintf("标题: %s\n", result.Title))
+	}
+	sb.WriteString(fmt.Sprintf("URL: %s\n", result.URL))
+	sb.WriteString(fmt.Sprintf("类型: %s | 大小: %d 字节\n\n", result.ContentType, result.BytesRead))
+
+	content := result.Content
+	const webFetchMaxContent = 16384
+	if len(content) > webFetchMaxContent {
+		headLen := webFetchMaxContent * 2 / 3
+		tailLen := webFetchMaxContent - headLen - 60
+		content = content[:headLen] + "\n\n... (内容已截断，共 " + fmt.Sprintf("%d", len(content)) + " 字符) ...\n\n" + content[len(content)-tailLen:]
+	}
+	sb.WriteString(content)
+	return sb.String()
+}
+
+// ===================== 项目管理 =====================
+
+func (h *TUIAgentHandler) toolProjectManage(args map[string]interface{}) string {
+	action := stringArg(args, "action")
+	dataDir := commands.ResolveDataDir()
+	store := commands.NewFileConfigStore(dataDir)
+
+	switch action {
+	case "create":
+		return h.projectCreate(store, args)
+	case "list":
+		return h.projectList(store)
+	case "delete":
+		return h.projectDelete(store, args)
+	case "switch":
+		return h.projectSwitch(store, args)
+	default:
+		return fmt.Sprintf("未知 action: %s（支持 create/list/delete/switch）", action)
+	}
+}
+
+func (h *TUIAgentHandler) projectCreate(store project.ConfigStore, args map[string]interface{}) string {
+	name := stringArg(args, "name")
+	path := stringArg(args, "path")
+	if name == "" || path == "" {
+		return "create 需要 name 和 path 参数"
+	}
+
+	res, err := project.Create(store, name, path)
+	if err != nil {
+		return fmt.Sprintf("创建项目失败: %v", err)
+	}
+
+	result, _ := json.Marshal(map[string]string{"id": res.Id, "name": res.Name, "path": res.Path, "status": "created"})
+	return string(result)
+}
+
+func (h *TUIAgentHandler) projectList(store project.ConfigStore) string {
+	items, err := project.List(store)
+	if err != nil {
+		return fmt.Sprintf("加载配置失败: %v", err)
+	}
+	data, _ := json.Marshal(items)
+	return string(data)
+}
+
+func (h *TUIAgentHandler) projectDelete(store project.ConfigStore, args map[string]interface{}) string {
+	target := stringArg(args, "target")
+	if target == "" {
+		return "delete 需要 target 参数（项目名称或 ID）"
+	}
+
+	res, err := project.Delete(store, target)
+	if err != nil {
+		return fmt.Sprintf("删除项目失败: %v", err)
+	}
+
+	result, _ := json.Marshal(map[string]string{"id": res.Id, "name": res.Name, "status": "deleted"})
+	return string(result)
+}
+
+func (h *TUIAgentHandler) projectSwitch(store project.ConfigStore, args map[string]interface{}) string {
+	target := stringArg(args, "target")
+	if target == "" {
+		return "switch 需要 target 参数（项目名称或 ID）"
+	}
+
+	res, err := project.Switch(store, target)
+	if err != nil {
+		return fmt.Sprintf("切换项目失败: %v", err)
+	}
+
+	result, _ := json.Marshal(map[string]string{"id": res.Id, "name": res.Name, "path": res.Path, "status": "switched"})
+	return string(result)
 }

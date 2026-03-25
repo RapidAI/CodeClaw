@@ -286,10 +286,11 @@ func (p *RemoteGatewayPlugin) HandleGatewayMessage(machineID string, payload jso
 	}
 
 	var msg struct {
-		PlatformUID  string `json:"platform_uid"`
-		Text         string `json:"text"`
-		MessageType  string `json:"message_type"`
-		ContextToken string `json:"context_token"`
+		PlatformUID  string              `json:"platform_uid"`
+		Text         string              `json:"text"`
+		MessageType  string              `json:"message_type"`
+		ContextToken string              `json:"context_token"`
+		Attachments  []MessageAttachment `json:"attachments,omitempty"`
 	}
 	if err := json.Unmarshal(payload, &msg); err != nil {
 		log.Printf("[remote-gw/%s] parse gateway_message failed: %v", p.platform, err)
@@ -313,7 +314,7 @@ func (p *RemoteGatewayPlugin) HandleGatewayMessage(machineID string, payload jso
 		p.ctxTokenMu.Unlock()
 	}
 
-	log.Printf("[remote-gw/%s] dispatching: uid=%s type=%s text_len=%d has_ctx_token=%v", p.platform, msg.PlatformUID, msg.MessageType, len(msg.Text), msg.ContextToken != "")
+	log.Printf("[remote-gw/%s] dispatching: uid=%s type=%s text_len=%d attachments=%d has_ctx_token=%v", p.platform, msg.PlatformUID, msg.MessageType, len(msg.Text), len(msg.Attachments), msg.ContextToken != "")
 
 	// Auto-bind: if the sender is not yet bound and the message comes from
 	// the gateway owner's machine, automatically bind this platformUID to
@@ -336,6 +337,7 @@ func (p *RemoteGatewayPlugin) HandleGatewayMessage(machineID string, payload jso
 		PlatformUID:  msg.PlatformUID,
 		MessageType:  msgType,
 		Text:         msg.Text,
+		Attachments:  msg.Attachments,
 		RawPayload:   payload,
 		Timestamp:    time.Now(),
 	})

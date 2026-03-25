@@ -30,8 +30,13 @@ typedef enum {
   RS_TASK_ASR_ONLINE,
   RS_TASK_TTS_OFFLINE,
   RS_TASK_TTS_ONLINE,
-  RS_TASK_E2E_SPEECH_LLM, // End-to-End Speech LLM
-  RS_TASK_SPEAKER_EMBED    // Speaker embedding extraction
+  RS_TASK_E2E_SPEECH_LLM,  // End-to-End Speech LLM
+  RS_TASK_SPEAKER_EMBED,    // Speaker embedding extraction
+  RS_TASK_VAD,              // Voice Activity Detection
+  RS_TASK_ASR_STREAMING,    // Streaming ASR (Moonshine)
+  RS_TASK_SPEAKER_DIARIZE,  // Speaker diarization (ECAPA + clustering)
+  RS_TASK_INTENT,           // Intent recognition (Gemma embedding)
+  RS_TASK_TEXT_EMBED         // Text embedding extraction
 } rs_task_type_t;
 
 // Initialization Parameters
@@ -101,6 +106,52 @@ RS_API float rs_speaker_verify(rs_context_t* ctx,
 // Returns 0 on success, -1 on error.
 RS_API int rs_push_reference_audio(rs_context_t* ctx, const float* samples,
                                    int n_samples, int sample_rate);
+
+// --- VAD (Voice Activity Detection) ---
+
+// Run VAD on audio chunk. Returns speech probability [0, 1].
+// The audio should be 512 samples (32ms at 16kHz) + 64 context samples.
+RS_API float rs_vad_detect(rs_context_t* ctx, const float* pcm, int n_samples);
+
+// Get whether speech is currently active (state machine result).
+RS_API bool rs_vad_is_speaking(rs_context_t* ctx);
+
+// --- Streaming ASR (Moonshine) ---
+
+// Push audio chunk for streaming ASR. Returns number of new encoder frames.
+RS_API int rs_push_streaming_audio(rs_context_t* ctx, const float* pcm, int n_samples);
+
+// Run streaming decode on accumulated encoder frames.
+// Returns 0=no output, 1=new text available, -1=error.
+RS_API int rs_streaming_decode(rs_context_t* ctx);
+
+// --- Speaker Diarization ---
+
+// Assign a speaker embedding to a cluster. Returns speaker ID (0-based).
+// Must be used with a SPEAKER_EMBED model to extract embeddings first.
+// Returns -1 if max speakers exceeded.
+RS_API int rs_assign_speaker(rs_context_t* ctx, const float* embedding, int dim);
+
+// Get number of identified speakers.
+RS_API int rs_get_num_speakers(rs_context_t* ctx);
+
+// Reset speaker clusters.
+RS_API void rs_reset_speakers(rs_context_t* ctx);
+
+// --- Intent Recognition ---
+
+// Register an intent with a name and pre-computed embedding.
+// Call multiple times with different embeddings for the same intent name.
+RS_API int rs_register_intent(rs_context_t* ctx, const char* intent_name,
+                              const float* embedding, int dim);
+
+// Match a query embedding against registered intents.
+// Returns intent name (empty string if no match). out_score receives similarity.
+RS_API const char* rs_match_intent(rs_context_t* ctx, const float* embedding,
+                                   int dim, float* out_score);
+
+// Clear all registered intents.
+RS_API void rs_clear_intents(rs_context_t* ctx);
 
 #ifdef __cplusplus
 }

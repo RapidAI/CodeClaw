@@ -5,6 +5,8 @@ import (
     "os"
     "path/filepath"
     "strings"
+
+    "github.com/RapidAI/CodeClaw/corelib/brand"
 )
 
 func registerPWAStaticRoutes(mux *http.ServeMux, staticDir string, routePrefix string) {
@@ -12,7 +14,62 @@ func registerPWAStaticRoutes(mux *http.ServeMux, staticDir string, routePrefix s
 }
 
 func registerAdminStaticRoutes(mux *http.ServeMux, staticDir string, routePrefix string) {
-    registerStaticRoutes(mux, staticDir, routePrefix)
+    brandName := brand.Current().DisplayName
+    if brandName == "" || brandName == "MaClaw" {
+        // Default brand — serve files as-is, no replacement needed.
+        registerStaticRoutes(mux, staticDir, routePrefix)
+        return
+    }
+
+    staticDir = strings.TrimSpace(staticDir)
+    if staticDir == "" {
+        return
+    }
+    if routePrefix == "" {
+        routePrefix = "/admin"
+    }
+    if !strings.HasPrefix(routePrefix, "/") {
+        routePrefix = "/" + routePrefix
+    }
+    routePrefix = strings.TrimRight(routePrefix, "/")
+    indexPath := filepath.Join(staticDir, "index.html")
+
+    serve := func(w http.ResponseWriter, r *http.Request) {
+        serveAdminBranded(w, r, staticDir, indexPath, routePrefix, brandName)
+    }
+    mux.HandleFunc("GET "+routePrefix, serve)
+    mux.HandleFunc("GET "+routePrefix+"/{rest...}", serve)
+}
+
+// serveAdminBranded serves admin static files, replacing "MaClaw" with the
+// current brand name in index.html responses.
+func serveAdminBranded(w http.ResponseWriter, r *http.Request, staticDir, indexPath, routePrefix, brandName string) {
+    relPath := strings.TrimPrefix(r.URL.Path, routePrefix)
+    relPath = strings.TrimPrefix(relPath, "/")
+
+    // For non-index static assets, serve directly.
+    if relPath != "" {
+        candidate := filepath.Join(staticDir, filepath.FromSlash(relPath))
+        if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+            http.ServeFile(w, r, candidate)
+            return
+        }
+        ext := strings.ToLower(filepath.Ext(relPath))
+        if staticAssetExtensions[ext] {
+            http.NotFound(w, r)
+            return
+        }
+    }
+
+    // Serve index.html with brand replacement.
+    data, err := os.ReadFile(indexPath)
+    if err != nil {
+        http.NotFound(w, r)
+        return
+    }
+    replaced := strings.ReplaceAll(string(data), "MaClaw", brandName)
+    w.Header().Set("Content-Type", "text/html; charset=utf-8")
+    w.Write([]byte(replaced))
 }
 
 func registerBindStaticRoutes(mux *http.ServeMux, staticDir string, routePrefix string) {

@@ -143,6 +143,11 @@ type MessageRouter struct {
 	// Key: userID, Value: machineID. Protected by mu.
 	selectedMachine map[string]string
 
+	// pendingAttachments temporarily holds attachments for the current
+	// message being routed. Key: userID. Set by StashAttachments before
+	// RouteToAgent, consumed by routeToSingleMachine. Protected by mu.
+	pendingAttachments map[string][]MessageAttachment
+
 	// discussions tracks active /discuss sessions per user. Protected by mu.
 	discussions map[string]*DiscussionState
 
@@ -153,15 +158,37 @@ type MessageRouter struct {
 // NewMessageRouter creates a MessageRouter with the given device finder.
 func NewMessageRouter(devices DeviceFinder) *MessageRouter {
 	r := &MessageRouter{
-		devices:         devices,
-		pendingReqs:     make(map[string]*PendingIMRequest),
-		selectedMachine: make(map[string]string),
-		discussions:     make(map[string]*DiscussionState),
-		llmSem:          NewLLMSemaphore(DefaultMaxConcurrent),
-		stopCh:          make(chan struct{}),
+		devices:            devices,
+		pendingReqs:        make(map[string]*PendingIMRequest),
+		selectedMachine:    make(map[string]string),
+		pendingAttachments: make(map[string][]MessageAttachment),
+		discussions:        make(map[string]*DiscussionState),
+		llmSem:             NewLLMSemaphore(DefaultMaxConcurrent),
+		stopCh:             make(chan struct{}),
 	}
 	go r.cleanupLoop()
 	return r
+}
+
+// StashAttachments stores attachments for the current message being routed.
+// Called by the IM Adapter before RouteToAgent so that routeToSingleMachine
+// can include them in the WebSocket payload without changing the routing API.
+func (r *MessageRouter) StashAttachments(userID string, attachments []MessageAttachment) {
+	if len(attachments) == 0 {
+		return
+	}
+	r.mu.Lock()
+	r.pendingAttachments[userID] = attachments
+	r.mu.Unlock()
+}
+
+// popAttachments retrieves and removes stashed attachments for a user.
+func (r *MessageRouter) popAttachments(userID string) []MessageAttachment {
+	r.mu.Lock()
+	att := r.pendingAttachments[userID]
+	delete(r.pendingAttachments, userID)
+	r.mu.Unlock()
+	return att
 }
 
 // LLMSemaphore returns the shared LLM concurrency semaphore so that
@@ -469,7 +496,8 @@ func (r *MessageRouter) RouteToAgent(ctx context.Context, userID, platformName, 
 
 // routeToSingleMachine sends a message to one machine and waits for the reply.
 // If namePrefix is non-empty, progress and response text are prefixed with [namePrefix].
-func (r *MessageRouter) routeToSingleMachine(ctx context.Context, userID, platformName, platformUID, text, machineID, namePrefix string) (*GenericResponse, error) {
+// extraAttachments, if non-nil, are used instead of popping from the stash (used by broadcast).
+func (r *MessageRouter) routeToSingleMachine(ctx context.Context, userID, platformName, platformUID, text, machineID, namePrefix string, extraAttachments ...[]MessageAttachment) (*GenericResponse, error) {
 	seq := requestIDCounter.Add(1)
 	requestID := fmt.Sprintf("im_%s_%d_%d", userID, time.Now().UnixNano(), seq)
 	now := time.Now()
@@ -497,6 +525,12 @@ func (r *MessageRouter) routeToSingleMachine(ctx context.Context, userID, platfo
 	}()
 
 	// 4. Send im.user_message to MaClaw client via WebSocket.
+	var attachments []MessageAttachment
+	if len(extraAttachments) > 0 && len(extraAttachments[0]) > 0 {
+		attachments = extraAttachments[0]
+	} else {
+		attachments = r.popAttachments(userID)
+	}
 	wsMsg := map[string]interface{}{
 		"type":       "im.user_message",
 		"request_id": requestID,
@@ -506,6 +540,9 @@ func (r *MessageRouter) routeToSingleMachine(ctx context.Context, userID, platfo
 			"platform": platformName,
 			"text":     text,
 		},
+	}
+	if len(attachments) > 0 {
+		wsMsg["payload"].(map[string]interface{})["attachments"] = attachments
 	}
 	if err := r.devices.SendToMachine(machineID, wsMsg); err != nil {
 		log.Printf("[MessageRouter] SendToMachine failed for machine=%s: %v", machineID, err)
@@ -647,17 +684,21 @@ func (r *MessageRouter) routeBroadcast(ctx context.Context, userID, platformName
 	// different devices (e.g. "📨 收到，正在处理中…") are only sent once.
 	dedupCtx := withBroadcastDedup(ctx, newBroadcastProgressDedup())
 
+	// Pop attachments once and re-stash for each target device so every
+	// device receives the same attachments (popAttachments is destructive).
+	broadcastAttachments := r.popAttachments(userID)
+
 	for _, m := range targets {
-		go func(m OnlineMachineInfo) {
+		go func(m OnlineMachineInfo, atts []MessageAttachment) {
 			// Acquire LLM semaphore slot; degrade on timeout.
 			if !r.llmSem.Acquire(dedupCtx) {
 				ch <- result{name: m.Name, resp: nil, err: fmt.Errorf("LLM 并发已满，请稍后重试")}
 				return
 			}
 			defer r.llmSem.Release()
-			resp, err := r.routeToSingleMachine(dedupCtx, userID, platformName, platformUID, text, m.MachineID, m.Name)
+			resp, err := r.routeToSingleMachine(dedupCtx, userID, platformName, platformUID, text, m.MachineID, m.Name, atts)
 			ch <- result{name: m.Name, resp: resp, err: err}
-		}(m)
+		}(m, broadcastAttachments)
 	}
 
 	// Collect all responses, delivering rich (image/file) ones individually.

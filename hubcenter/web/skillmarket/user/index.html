@@ -353,6 +353,8 @@ async function ensureAccount() {
     const d = await r.json();
     currentUserID = d.id;
     showAccountInfo(d);
+    loadTier(email);
+    loadTransactions();
     showMsg('account-msg', t('msg.account.created'), false);
   } catch(e) { showMsg('account-msg', parseApiError(e), true); }
 }
@@ -381,9 +383,9 @@ async function loadTier(email) {
 }
 
 async function loadTransactions() {
-  if (!currentEmail) return;
+  if (!currentUserID) return;
   try {
-    const r = await fetch(API + '/api/v1/credits/transactions?email=' + encodeURIComponent(currentEmail));
+    const r = await fetch(API + '/api/v1/credits/transactions?user_id=' + encodeURIComponent(currentUserID));
     if (!r.ok) return;
     const list = await r.json();
     const tbody = document.getElementById('tx-list');
@@ -396,11 +398,11 @@ async function loadTransactions() {
 
 async function topUp() {
   const amount = parseInt(document.getElementById('credits-amount').value);
-  if (!amount || !currentEmail) return;
+  if (!amount || !currentUserID) return;
   try {
     const r = await fetch(API + '/api/v1/credits/topup', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({email: currentEmail, amount})
+      body: JSON.stringify({user_id: currentUserID, amount})
     });
     if (!r.ok) throw await readErrorBody(r);
     showMsg('credits-msg', t('msg.topup.ok'), false);
@@ -410,11 +412,11 @@ async function topUp() {
 
 async function withdraw() {
   const amount = parseInt(document.getElementById('credits-amount').value);
-  if (!amount || !currentEmail) return;
+  if (!amount || !currentUserID) return;
   try {
     const r = await fetch(API + '/api/v1/credits/withdraw', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({email: currentEmail, amount})
+      body: JSON.stringify({user_id: currentUserID, amount})
     });
     if (!r.ok) throw await readErrorBody(r);
     showMsg('credits-msg', t('msg.withdraw.ok'), false);
@@ -428,7 +430,8 @@ async function loadPendingReview() {
   try {
     const r = await fetch(API + '/api/v1/skillmarket/search?q=&top_n=50');
     if (!r.ok) return;
-    const list = await r.json();
+    const data = await r.json();
+    const list = data.results || data || [];
     const tbody = document.getElementById('review-list');
     tbody.innerHTML = '';
     const pending = (list || []).filter(s => s.status === 'pending_review' || s.status === 'trial');

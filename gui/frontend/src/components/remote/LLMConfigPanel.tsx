@@ -13,6 +13,9 @@ import {
     DangbeiLogin,
     DangbeiFinishLogin,
     DangbeiEnsureAuth,
+    GetFreeProxyModels,
+    GetFreeProxyModel,
+    SetFreeProxyModel,
 } from "../../../wailsjs/go/main/App";
 import { colors } from "./styles";
 import { UsageDisplay } from "./UsageDisplay";
@@ -87,6 +90,8 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
     const [loginBusy, setLoginBusy] = useState(false);
     const [browserLaunched, setBrowserLaunched] = useState(false);
     const [authChecking, setAuthChecking] = useState(false);
+    const [freeModels, setFreeModels] = useState<{id: string; name: string}[]>([]);
+    const [freeSelectedModel, setFreeSelectedModel] = useState("");
 
     const t = useCallback((zh: string, en: string) => lang?.startsWith("zh") ? zh : en, [lang]);
 
@@ -173,15 +178,30 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
         return () => { cancelled = true; clearInterval(id); };
     }, [dlgOpen, dlgAuthType]);
 
-    // Detect browser and check dangbei login when dialog opens with free provider
+    // Detect browser and check dangbei login when dialog opens with free provider.
+    // If cookie is valid, auto-start proxy so user doesn't need to do anything.
     useEffect(() => {
         if (!dlgOpen || dlgAuthType !== "none") return;
         DetectBrowser().then((info: any) => setBrowserInfo(info || { found: "false" })).catch(() => setBrowserInfo({ found: "false" }));
+        // Load available models and current selection
+        GetFreeProxyModels().then((models: any) => setFreeModels(models || [])).catch(() => {});
+        GetFreeProxyModel().then((m: string) => setFreeSelectedModel(m || "deepseek_r1")).catch(() => {});
         // Validate persisted cookie — if valid, skip browser login flow
         setAuthChecking(true);
-        DangbeiEnsureAuth().then((result: string) => {
-            setDangbeiLoggedIn(result === "authenticated");
+        DangbeiEnsureAuth().then(async (result: string) => {
+            const loggedIn = result === "authenticated";
+            setDangbeiLoggedIn(loggedIn);
             setAuthChecking(false);
+            // Auto-start proxy if logged in and not already running
+            if (loggedIn) {
+                try {
+                    const running = await IsFreeProxyRunning();
+                    if (!running) {
+                        await StartFreeProxy();
+                        setProxyRunning(true);
+                    }
+                } catch { /* proxy start failure is non-fatal here */ }
+            }
         }).catch(() => {
             setDangbeiLoggedIn(false);
             setAuthChecking(false);
@@ -712,39 +732,82 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
 
                                         {/* Finish login button — shown after browser is launched */}
                                         {browserLaunched && (
-                                            <button
-                                                disabled={loginBusy}
-                                                onClick={async () => {
-                                                    setLoginBusy(true);
-                                                    setDlgTestResult(null);
-                                                    try {
-                                                        await DangbeiFinishLogin();
-                                                        setDangbeiLoggedIn(true);
-                                                        setBrowserLaunched(false);
-                                                        setDlgTestResult({ ok: true, msg: t("登录成功", "Login successful") });
-                                                    } catch (e) {
-                                                        setDlgTestResult({ ok: false, msg: String(e) });
-                                                    }
-                                                    setLoginBusy(false);
-                                                }}
-                                                style={{
-                                                    width: "100%", padding: "10px 0", fontSize: "0.8rem", marginBottom: 10,
-                                                    cursor: loginBusy ? "default" : "pointer",
-                                                    background: "#22c55e", color: "#fff",
-                                                    border: "none", borderRadius: 4,
-                                                    opacity: loginBusy ? 0.6 : 1,
-                                                }}
-                                            >
-                                                {loginBusy ? `⏳ ${t("提取登录信息...", "Extracting login info...")}` : t("✅ 我已在浏览器中登录，完成登录", "✅ I've logged in, finish login")}
-                                            </button>
+                                            <div style={{ marginBottom: 10 }}>
+                                                <button
+                                                    disabled={loginBusy}
+                                                    onClick={async () => {
+                                                        setLoginBusy(true);
+                                                        setDlgTestResult(null);
+                                                        try {
+                                                            await DangbeiFinishLogin();
+                                                            setDangbeiLoggedIn(true);
+                                                            setBrowserLaunched(false);
+                                                            // Auto-start proxy after successful login
+                                                            try {
+                                                                const running = await IsFreeProxyRunning();
+                                                                if (!running) {
+                                                                    await StartFreeProxy();
+                                                                    setProxyRunning(true);
+                                                                }
+                                                            } catch { /* non-fatal */ }
+                                                            setDlgTestResult({ ok: true, msg: t("登录成功，代理已自动启动", "Login successful, proxy auto-started") });
+                                                        } catch (e) {
+                                                            setDlgTestResult({ ok: false, msg: String(e) });
+                                                        }
+                                                        setLoginBusy(false);
+                                                    }}
+                                                    style={{
+                                                        width: "100%", padding: "10px 0", fontSize: "0.8rem",
+                                                        cursor: loginBusy ? "default" : "pointer",
+                                                        background: "#22c55e", color: "#fff",
+                                                        border: "none", borderRadius: 4,
+                                                        opacity: loginBusy ? 0.6 : 1,
+                                                    }}
+                                                >
+                                                    {loginBusy ? `⏳ ${t("正在关闭浏览器并提取登录信息...", "Closing browser & extracting login info...")}` : t("✅ 我已在浏览器中登录，完成登录", "✅ I've logged in, finish login")}
+                                                </button>
+                                                {dlgTestResult && (
+                                                    <div style={{
+                                                        marginTop: 8, padding: "8px 12px", borderRadius: 4, fontSize: "0.74rem",
+                                                        lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                                                        background: dlgTestResult.ok ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                                                        border: `1px solid ${dlgTestResult.ok ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
+                                                        color: dlgTestResult.ok ? "#22c55e" : "#ef4444",
+                                                    }}>
+                                                        {dlgTestResult.ok ? "✅ " : "❌ "}{dlgTestResult.msg}
+                                                    </div>
+                                                )}
+                                            </div>
                                         )}
 
                                         <p style={{ fontSize: "0.68rem", color: colors.textMuted, margin: "0 0 12px 0", lineHeight: 1.5 }}>
                                             💡 {t(
-                                                "已登录的 cookie 会自动保存，下次打开无需重复登录。如 cookie 失效会自动提示重新登录。支持 DeepSeek-R1、GLM-5、通义、Kimi 等 11 个模型。",
-                                                "Login cookies are saved automatically. If expired, you'll be prompted to re-login. Supports 11 models including DeepSeek-R1, GLM-5, etc."
+                                                "已登录的 cookie 会自动保存，下次打开无需重复登录。如 cookie 失效会自动提示重新登录。",
+                                                "Login cookies are saved automatically. If expired, you'll be prompted to re-login."
                                             )}
                                         </p>
+
+                                        {/* Model selection */}
+                                        <label style={labelStyle}>{t("模型选择", "Model Selection")}</label>
+                                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 12 }}>
+                                            {freeModels.map(m => {
+                                                const active = freeSelectedModel === m.id;
+                                                return (
+                                                    <button key={m.id} onClick={() => {
+                                                        setFreeSelectedModel(m.id);
+                                                        SetFreeProxyModel(m.id).catch(() => {});
+                                                    }} style={{
+                                                        fontSize: "0.72rem", padding: "4px 10px", cursor: "pointer",
+                                                        background: active ? "#6366f1" : colors.surface,
+                                                        color: active ? "#fff" : colors.text,
+                                                        border: `1px solid ${active ? "#6366f1" : colors.border}`,
+                                                        borderRadius: 4, transition: "all 0.15s",
+                                                    }}>
+                                                        {m.name}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
 
                                         {/* Proxy status */}
                                         <label style={labelStyle}>{t("代理状态", "Proxy Status")}</label>
@@ -761,17 +824,22 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                                             }} />
                                             <span style={{ fontSize: "0.76rem", color: proxyRunning ? "#22c55e" : "#ef4444", flex: 1 }}>
                                                 {proxyRunning
-                                                    ? t("代理服务运行中 (localhost:10099)", "Proxy running (localhost:10099)")
+                                                    ? t("代理服务运行中 (localhost:18099)", "Proxy running (localhost:18099)")
                                                     : t("代理服务未运行", "Proxy not running")}
                                             </span>
                                             <button
                                                 disabled={proxyBusy}
                                                 onClick={async () => {
                                                     setProxyBusy(true);
+                                                    setDlgTestResult(null);
                                                     try {
                                                         if (proxyRunning) { await StopFreeProxy(); setProxyRunning(false); }
                                                         else { await StartFreeProxy(); setProxyRunning(true); }
-                                                    } catch { /* ignore */ }
+                                                    } catch (e) {
+                                                        setDlgTestResult({ ok: false, msg: String(e) });
+                                                        // Refresh actual status
+                                                        IsFreeProxyRunning().then(r => setProxyRunning(r)).catch(() => {});
+                                                    }
                                                     setProxyBusy(false);
                                                 }}
                                                 style={{

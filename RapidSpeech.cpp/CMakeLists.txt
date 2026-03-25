@@ -76,6 +76,11 @@ set(RS_SOURCES
         rapidspeech/src/arch/funasr-nano.cpp
         rapidspeech/src/arch/ecapa_tdnn.cpp
         rapidspeech/src/arch/openvoice2.cpp
+        rapidspeech/src/arch/silero_vad.cpp
+        rapidspeech/src/arch/moonshine.cpp
+        rapidspeech/src/arch/gemma_embedding.cpp
+        rapidspeech/src/arch/online_clusterer.cpp
+        rapidspeech/src/arch/intent_recognizer.cpp
         rapidspeech/src/utils/rs_wav.cpp
 )
 

@@ -1,4 +1,6 @@
 #include "core/rs_context.h"
+#include "arch/online_clusterer.h"
+#include "arch/intent_recognizer.h"
 #include "utils/rs_log.h"
 #include "ggml-alloc.h"
 #include "ggml-cpu.h"
@@ -43,6 +45,10 @@ rs_context_t::~rs_context_t() {
     // are deallocated while the backends and scheduler are still valid.
     processor.reset();
     model.reset();
+    vad_state.reset();
+    streaming_state.reset();
+    clusterer.reset();
+    intent_recognizer.reset();
 
     // Free weight buffers explicitly to satisfy Metal residency set assertions
     for (auto buf : weight_buffers) {
@@ -213,14 +219,16 @@ rs_context_t* rs_context_init_internal(rs_init_params_t params) {
 
     ctx->model = it->second();
 
-    // 6. Initialize processor and audio frontend
-    ctx->processor = std::make_unique<RSProcessor>(ctx->model, ctx->sched);
-
-    // 7. Execute model-specific Load (e.g., mapping pointers, loading CMVN)
+    // 6. Execute model-specific Load (e.g., mapping pointers, loading CMVN)
+    //    Must happen BEFORE processor creation so meta_.arch_name is available
+    //    for architecture-specific frontend config (e.g., SpeechBrain fbank for ECAPA-TDNN).
     if (!ctx->model->Load(ctx, ctx->backends[0])) {
         RS_LOG_ERR("Model load failed.");
         return nullptr;
     }
+
+    // 7. Initialize processor and audio frontend (uses model meta for config)
+    ctx->processor = std::make_unique<RSProcessor>(ctx->model, ctx->sched);
 
     RS_LOG_INFO("RapidSpeech context core initialized successfully.");
     return ctx.release();

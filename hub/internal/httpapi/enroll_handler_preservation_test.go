@@ -174,8 +174,7 @@ func TestEnrollStartHandler_Preservation_TableDriven(t *testing.T) {
 				}
 			}
 
-			// feishuNotifier is nil — preservation tests cover non-feishu paths.
-			handler := EnrollStartHandler(identity, nil)
+			handler := EnrollStartHandler(identity, nil, nil)
 
 			req := httptest.NewRequest(http.MethodPost, "/api/enroll/start", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
@@ -239,7 +238,7 @@ func TestEnrollStartHandler_Preservation_TableDriven(t *testing.T) {
 // successful enrollment (no feishu) returns all expected fields.
 func TestEnrollStartHandler_Preservation_SuccessResponseFields(t *testing.T) {
 	identity, _ := newPreservationTestIdentity(t)
-	handler := EnrollStartHandler(identity, nil)
+	handler := EnrollStartHandler(identity, nil, nil)
 
 	body := `{"email":"fields-test@example.com","machine_name":"my-mac","platform":"darwin","client_id":"cid-001"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/enroll/start", strings.NewReader(body))

@@ -15,10 +15,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RapidAI/CodeClaw/corelib/skill"
 	"gopkg.in/yaml.v3"
 )
 
 // NLSkillEntry, NLSkillStep — see corelib_aliases.go
+
+// SkillDiagEntry reports the scan result for a single skill directory.
+type SkillDiagEntry struct {
+	Dir    string `json:"dir"`
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
 
 // NLSkillDefinition is the Wails-facing view of a Skill.
 type NLSkillDefinition struct {
@@ -58,7 +67,7 @@ func NewSkillExecutor(app *App, mcpRegistry *MCPRegistry, manager *RemoteSession
 }
 
 // loadSkills reads skill entries from config and merges skills discovered
-// from on-disk YAML files under ~/.maclaw/skills/*/skill.yaml.
+// from on-disk YAML files under ~/.maclaw/data/skills/ and ~/.agents/skills/.
 // Config-based skills take precedence over file-based ones with the same name.
 func (e *SkillExecutor) loadSkills() []NLSkillEntry {
 	cfg, err := e.app.LoadConfig()
@@ -73,7 +82,7 @@ func (e *SkillExecutor) loadSkills() []NLSkillEntry {
 		known[s.Name] = true
 	}
 
-	// Scan ~/.maclaw/skills/*/skill.yaml for file-based skills.
+	// Scan ~/.maclaw/data/skills/*/skill.yaml for file-based skills.
 	fileSkills := e.scanSkillYAMLFiles()
 	for _, fs := range fileSkills {
 		if !known[fs.Name] {
@@ -85,110 +94,14 @@ func (e *SkillExecutor) loadSkills() []NLSkillEntry {
 	return skills
 }
 
-// skillYAMLFile is the on-disk YAML format for a skill definition.
-type skillYAMLFile struct {
-	Name        string            `yaml:"name"`
-	Description string            `yaml:"description"`
-	Triggers    []string          `yaml:"triggers"`
-	Steps       []skillYAMLStep   `yaml:"steps"`
-	Status      string            `yaml:"status"`
-	Platforms   []string          `yaml:"platforms"`    // "windows","linux","macos"; empty = universal
-	RequiresGUI bool              `yaml:"requires_gui"` // Linux 下是否需要 GUI 环境
-}
-
-type skillYAMLStep struct {
-	Action  string                 `yaml:"action"`
-	Params  map[string]interface{} `yaml:"params"`
-	OnError string                 `yaml:"on_error"`
-}
-
-// scanSkillYAMLFiles discovers skill definitions from ~/.maclaw/skills/*/skill.yaml.
+// scanSkillYAMLFiles discovers skill definitions from all known skill
+// directories (e.g. ~/.maclaw/data/skills, ~/.agents/skills) via corelib.
 func (e *SkillExecutor) scanSkillYAMLFiles() []NLSkillEntry {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	skillsRoot := filepath.Join(home, ".maclaw", "skills")
-	entries, err := os.ReadDir(skillsRoot)
-	if err != nil {
-		return nil
-	}
-
-	var result []NLSkillEntry
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		yamlPath := filepath.Join(skillsRoot, entry.Name(), "skill.yaml")
-		data, err := os.ReadFile(yamlPath)
-		if err != nil {
-			// Also try skill.yml
-			yamlPath = filepath.Join(skillsRoot, entry.Name(), "skill.yml")
-			data, err = os.ReadFile(yamlPath)
-			if err != nil {
-				continue
-			}
-		}
-
-		var sf skillYAMLFile
-		if err := yaml.Unmarshal(data, &sf); err != nil {
-			continue
-		}
-
-		name := strings.TrimSpace(sf.Name)
-		if name == "" {
-			name = entry.Name() // fallback to directory name
-		}
-		status := sf.Status
-		if status == "" {
-			status = "active"
-		}
-
-		steps := make([]NLSkillStep, 0, len(sf.Steps))
-		for _, s := range sf.Steps {
-			steps = append(steps, NLSkillStep{
-				Action:  s.Action,
-				Params:  s.Params,
-				OnError: s.OnError,
-			})
-		}
-
-		skillDir := filepath.Join(skillsRoot, entry.Name())
-
-		// Check if this file-based skill has been uploaded before.
-		var hubSkillID string
-		if statusData, err := os.ReadFile(filepath.Join(skillDir, "upload_status.json")); err == nil {
-			var us uploadStatusFile
-			if json.Unmarshal(statusData, &us) == nil && us.SubmissionID != "" {
-				hubSkillID = us.SubmissionID
-			}
-		}
-
-		result = append(result, NLSkillEntry{
-			Name:        name,
-			Description: sf.Description,
-			Triggers:    sf.Triggers,
-			Steps:       steps,
-			Status:      status,
-			Source:      "file",
-			Platforms:   sf.Platforms,
-			RequiresGUI: sf.RequiresGUI,
-			SkillDir:    skillDir,
-			HubSkillID:  hubSkillID,
-			CreatedAt:   fileModTime(yamlPath),
-		})
-	}
-	return result
+	return skill.ScanAllSkillDirs()
 }
 
-// fileModTime returns the modification time of a file as RFC3339, or empty string on error.
-func fileModTime(path string) string {
-	info, err := os.Stat(path)
-	if err != nil {
-		return time.Now().Format(time.RFC3339)
-	}
-	return info.ModTime().Format(time.RFC3339)
-}
+// skillYAMLFile is a local alias for the corelib type, used by delete and diag.
+type skillYAMLFile = skill.SkillYAMLFile
 
 // saveSkills persists skill entries to config.
 // File-based skills (source == "file") are excluded to avoid polluting config.json.
@@ -231,6 +144,12 @@ func (e *SkillExecutor) Register(entry NLSkillEntry) error {
 	}
 	if entry.Source == "" {
 		entry.Source = "manual"
+	}
+	if entry.Triggers == nil {
+		entry.Triggers = []string{}
+	}
+	if entry.Steps == nil {
+		entry.Steps = []NLSkillStep{}
 	}
 	skills = append(skills, entry)
 	return e.saveSkills(skills)
@@ -346,18 +265,16 @@ func (e *SkillExecutor) Delete(name string) error {
 		if s.Name == name {
 			// For file-based skills, remove the YAML file from disk.
 			if s.Source == "file" {
-				home, err := os.UserHomeDir()
-				if err == nil {
-					skillDir := filepath.Join(home, ".maclaw", "skills")
-					// Try to find and remove the skill directory.
-					entries, _ := os.ReadDir(skillDir)
+				// Search all scan roots (e.g. ~/.maclaw/data/skills, ~/.agents/skills).
+				for _, root := range skill.SkillScanRoots() {
+					entries, _ := os.ReadDir(root)
 					for _, entry := range entries {
 						if !entry.IsDir() {
 							continue
 						}
-						yamlPath := filepath.Join(skillDir, entry.Name(), "skill.yaml")
+						yamlPath := filepath.Join(root, entry.Name(), "skill.yaml")
 						if _, err := os.Stat(yamlPath); err != nil {
-							yamlPath = filepath.Join(skillDir, entry.Name(), "skill.yml")
+							yamlPath = filepath.Join(root, entry.Name(), "skill.yml")
 							if _, err := os.Stat(yamlPath); err != nil {
 								continue
 							}
@@ -375,8 +292,8 @@ func (e *SkillExecutor) Delete(name string) error {
 							parsedName = entry.Name()
 						}
 						if parsedName == name {
-							os.RemoveAll(filepath.Join(skillDir, entry.Name()))
-							break
+							os.RemoveAll(filepath.Join(root, entry.Name()))
+							return nil
 						}
 					}
 				}
@@ -435,11 +352,19 @@ func (e *SkillExecutor) List() []NLSkillDefinition {
 	skills := e.loadSkills()
 	defs := make([]NLSkillDefinition, 0, len(skills))
 	for _, s := range skills {
+		triggers := s.Triggers
+		if triggers == nil {
+			triggers = []string{}
+		}
+		steps := s.Steps
+		if steps == nil {
+			steps = []NLSkillStep{}
+		}
 		d := NLSkillDefinition{
 			Name:          s.Name,
 			Description:   s.Description,
-			Triggers:      s.Triggers,
-			Steps:         s.Steps,
+			Triggers:      triggers,
+			Steps:         steps,
 			Status:        s.Status,
 			Source:        s.Source,
 			SourceProject: s.SourceProject,
@@ -605,14 +530,86 @@ func (e *SkillExecutor) executeStep(step NLSkillStep) (string, error) {
 
 // ListNLSkills returns all registered NL Skill definitions (Wails binding).
 func (a *App) ListNLSkills() []NLSkillDefinition {
+	a.ensureRemoteInfra()
 	if a.skillExecutor == nil {
 		return nil
 	}
 	return a.skillExecutor.List()
 }
 
+// DiagnoseSkillFiles scans ~/.maclaw/data/skills/ and reports load status for each
+// subdirectory, including the reason if a skill failed to load (Wails binding).
+func (a *App) DiagnoseSkillFiles() []SkillDiagEntry {
+	skillsRoot, err := skill.PrimarySkillsDir()
+	if err != nil {
+		return []SkillDiagEntry{{Dir: "~", Reason: "无法获取用户主目录: " + err.Error()}}
+	}
+
+	// Check if directory exists at all.
+	if info, err := os.Stat(skillsRoot); err != nil {
+		if os.IsNotExist(err) {
+			return []SkillDiagEntry{{Dir: skillsRoot, Reason: "skills 目录不存在，请创建 " + skillsRoot}}
+		}
+		return []SkillDiagEntry{{Dir: skillsRoot, Reason: "无法访问 skills 目录: " + err.Error()}}
+	} else if !info.IsDir() {
+		return []SkillDiagEntry{{Dir: skillsRoot, Reason: skillsRoot + " 不是目录"}}
+	}
+
+	entries, err := os.ReadDir(skillsRoot)
+	if err != nil {
+		return []SkillDiagEntry{{Dir: skillsRoot, Reason: "无法读取 skills 目录: " + err.Error()}}
+	}
+	if len(entries) == 0 {
+		return []SkillDiagEntry{{Dir: skillsRoot, Reason: "skills 目录为空，没有子目录"}}
+	}
+
+	// Collect config-based skill names to detect dedup conflicts.
+	configNames := make(map[string]bool)
+	if cfg, err := a.LoadConfig(); err == nil {
+		for _, s := range cfg.NLSkills {
+			configNames[s.Name] = true
+		}
+	}
+
+	var result []SkillDiagEntry
+	for _, entry := range entries {
+		dirName := entry.Name()
+		dirPath := filepath.Join(skillsRoot, dirName)
+		if !entry.IsDir() {
+			result = append(result, SkillDiagEntry{Dir: dirName, Reason: "不是目录，已跳过"})
+			continue
+		}
+		yamlPath := filepath.Join(dirPath, "skill.yaml")
+		data, err := os.ReadFile(yamlPath)
+		if err != nil {
+			yamlPath = filepath.Join(dirPath, "skill.yml")
+			data, err = os.ReadFile(yamlPath)
+			if err != nil {
+				result = append(result, SkillDiagEntry{Dir: dirName, Reason: "找不到 skill.yaml 或 skill.yml"})
+				continue
+			}
+		}
+		var sf skillYAMLFile
+		if err := yaml.Unmarshal(data, &sf); err != nil {
+			result = append(result, SkillDiagEntry{Dir: dirName, Reason: "YAML 解析失败: " + err.Error()})
+			continue
+		}
+		name := strings.TrimSpace(sf.Name)
+		if name == "" {
+			name = dirName
+		}
+		if configNames[name] {
+			result = append(result, SkillDiagEntry{Dir: dirName, Name: name, OK: false, Reason: "与配置中同名 Skill 冲突，被去重跳过"})
+			continue
+		}
+		result = append(result, SkillDiagEntry{Dir: dirName, Name: name, OK: true})
+	}
+	return result
+}
+
 // CreateNLSkill registers a new NL Skill definition (Wails binding).
 func (a *App) CreateNLSkill(def NLSkillEntry) error {
+	a.ensureRemoteInfra()
 	if a.skillExecutor == nil {
 		return fmt.Errorf("skill executor not initialized")
 	}
@@ -621,6 +618,7 @@ func (a *App) CreateNLSkill(def NLSkillEntry) error {
 
 // UpdateNLSkill updates an existing NL Skill definition (Wails binding).
 func (a *App) UpdateNLSkill(def NLSkillEntry) error {
+	a.ensureRemoteInfra()
 	if a.skillExecutor == nil {
 		return fmt.Errorf("skill executor not initialized")
 	}
@@ -629,6 +627,7 @@ func (a *App) UpdateNLSkill(def NLSkillEntry) error {
 
 // DeleteNLSkill removes an NL Skill by name (Wails binding).
 func (a *App) DeleteNLSkill(name string) error {
+	a.ensureRemoteInfra()
 	if a.skillExecutor == nil {
 		return fmt.Errorf("skill executor not initialized")
 	}
@@ -639,6 +638,7 @@ func (a *App) DeleteNLSkill(name string) error {
 // standard NL Skill package (must contain skill.json with valid NLSkillEntry),
 // and registers the skill. Returns the imported skill name on success.
 func (a *App) ImportNLSkillZip() (string, error) {
+	a.ensureRemoteInfra()
 	if a.skillExecutor == nil {
 		return "", fmt.Errorf("skill executor not initialized")
 	}
@@ -758,6 +758,7 @@ func (e *SkillExecutor) CleanupStaleSkills() []string {
 
 // CleanupStaleNLSkills disables stale learned/crafted Skills (Wails binding).
 func (a *App) CleanupStaleNLSkills() []string {
+	a.ensureRemoteInfra()
 	if a.skillExecutor == nil {
 		return nil
 	}
@@ -768,6 +769,7 @@ func (a *App) CleanupStaleNLSkills() []string {
 
 // RunNLSkillAsync 异步启动 skill 执行，返回 runID（Wails binding）。
 func (a *App) RunNLSkillAsync(skillName string) (string, error) {
+	a.ensureRemoteInfra()
 	if a.skillRunner == nil {
 		return "", fmt.Errorf("skill runner not initialized")
 	}
@@ -776,6 +778,7 @@ func (a *App) RunNLSkillAsync(skillName string) (string, error) {
 
 // GetNLSkillRunStatus 获取 skill 执行状态（Wails binding）。
 func (a *App) GetNLSkillRunStatus(runID string) (*SkillRunStatus, error) {
+	a.ensureRemoteInfra()
 	if a.skillRunner == nil {
 		return nil, fmt.Errorf("skill runner not initialized")
 	}
@@ -784,6 +787,7 @@ func (a *App) GetNLSkillRunStatus(runID string) (*SkillRunStatus, error) {
 
 // CancelNLSkillRun 取消正在执行的 skill（Wails binding）。
 func (a *App) CancelNLSkillRun(runID string) error {
+	a.ensureRemoteInfra()
 	if a.skillRunner == nil {
 		return fmt.Errorf("skill runner not initialized")
 	}
@@ -792,6 +796,7 @@ func (a *App) CancelNLSkillRun(runID string) error {
 
 // UploadNLSkillToMarket 手动打包并上传 skill 到 SkillMarket（Wails binding）。
 func (a *App) UploadNLSkillToMarket(skillName string) (string, error) {
+	a.ensureRemoteInfra()
 	if a.skillExecutor == nil {
 		return "", fmt.Errorf("skill executor not initialized")
 	}

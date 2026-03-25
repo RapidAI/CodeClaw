@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -15,6 +16,256 @@ type TokenCallback func(delta string)
 
 // NewRoundCallback is called when a new agent loop iteration starts LLM generation.
 type NewRoundCallback func()
+
+// stripThinkTags removes <think>...</think> blocks (including the tags) from
+// LLM output. Some models (e.g. kimi, deepseek) include reasoning traces
+// wrapped in these tags that should not be shown to end users.
+var reThinkBlock = regexp.MustCompile(`(?s)<think>.*?</think>\s*`)
+
+func stripThinkTags(s string) string {
+	return strings.TrimSpace(reThinkBlock.ReplaceAllString(s, ""))
+}
+
+// ---------------------------------------------------------------------------
+// thinkFilter — stateful streaming filter for <think>...</think> blocks
+// ---------------------------------------------------------------------------
+
+// thinkFilter wraps a TokenCallback to suppress <think>...</think> content
+// in real-time during streaming. It uses a simple state machine:
+//   - outside: normal text is forwarded; watch for "<think>"
+//   - inside:  all text is swallowed; watch for "</think>"
+//
+// Because SSE deltas can split tags across chunks (e.g. "<thi" + "nk>"),
+// a small pending buffer holds ambiguous prefixes until they can be resolved.
+type thinkFilter struct {
+	downstream TokenCallback
+	inside     bool           // true while between <think> and </think>
+	pending    strings.Builder // buffered text that might be part of a tag
+}
+
+const (
+	thinkOpen  = "<think>"
+	thinkClose = "</think>"
+
+	funcCallOpen  = "<|FunctionCallBegin|>"
+	funcCallClose = "<|FunctionCallEnd|>"
+)
+
+// newThinkFilter returns a TokenCallback that filters out <think> blocks
+// before forwarding to downstream.
+func newThinkFilter(downstream TokenCallback) *thinkFilter {
+	return &thinkFilter{downstream: downstream}
+}
+
+// Write processes a new delta from the stream.
+func (f *thinkFilter) Write(delta string) {
+	f.pending.WriteString(delta)
+	f.drain()
+}
+
+// Flush should be called when the stream ends to emit any remaining buffered
+// text (only matters if a partial "<thi" was buffered but never completed).
+func (f *thinkFilter) Flush() {
+	if f.pending.Len() > 0 && !f.inside {
+		f.downstream(f.pending.String())
+		f.pending.Reset()
+	}
+}
+
+func (f *thinkFilter) drain() {
+	for f.pending.Len() > 0 {
+		s := f.pending.String()
+		if f.inside {
+			// Look for closing tag.
+			idx := strings.Index(s, thinkClose)
+			if idx >= 0 {
+				// Skip everything up to and including </think> plus trailing whitespace.
+				after := s[idx+len(thinkClose):]
+				after = strings.TrimLeft(after, " \t\r\n")
+				f.pending.Reset()
+				f.pending.WriteString(after)
+				f.inside = false
+				continue
+			}
+			// No full closing tag found. Keep only the tail that could be a
+			// partial "</think>" prefix to prevent unbounded buffer growth
+			// while inside a long <think> block.
+			tail := f.partialTagTail(s, thinkClose)
+			f.pending.Reset()
+			if tail != "" {
+				f.pending.WriteString(tail)
+			}
+			return
+		}
+
+		// Outside: look for opening tag.
+		idx := strings.Index(s, thinkOpen)
+		if idx >= 0 {
+			// Emit text before the tag.
+			if idx > 0 {
+				f.downstream(s[:idx])
+			}
+			after := s[idx+len(thinkOpen):]
+			f.pending.Reset()
+			f.pending.WriteString(after)
+			f.inside = true
+			continue
+		}
+		// Check if the tail could be a partial "<think>" prefix.
+		if f.couldBePrefix(s, thinkOpen) {
+			// Emit the safe portion (everything except the ambiguous tail).
+			safe := f.safePrefixLen(s, thinkOpen)
+			if safe > 0 {
+				f.downstream(s[:safe])
+				rest := s[safe:]
+				f.pending.Reset()
+				f.pending.WriteString(rest)
+			}
+			return // wait for more data
+		}
+		// No tag at all — emit everything.
+		f.downstream(s)
+		f.pending.Reset()
+		return
+	}
+}
+
+// couldBePrefix returns true if the tail of s could be the start of tag.
+func (f *thinkFilter) couldBePrefix(s, tag string) bool {
+	return hasPartialTagSuffix(s, tag)
+}
+
+// partialTagTail returns the longest suffix of s that is a proper prefix of
+// tag (i.e. could become the full tag with more data). Returns "" if no
+// suffix matches.
+// Delegates to the shared package-level helper.
+func (f *thinkFilter) partialTagTail(s, tag string) string {
+	return partialTagTail(s, tag)
+}
+
+// safePrefixLen returns the length of s that can be safely emitted, i.e.
+// everything except the trailing portion that could be a partial tag start.
+// Delegates to the shared package-level helper.
+func (f *thinkFilter) safePrefixLen(s, tag string) int {
+	return safeEmitLen(s, tag)
+}
+
+// ---------------------------------------------------------------------------
+// funcCallFilter — stateful streaming filter for <|FunctionCallBegin|>...<|FunctionCallEnd|>
+// ---------------------------------------------------------------------------
+
+// funcCallFilter wraps a TokenCallback to suppress function-call markup that
+// some free/low-quality providers leak into their text output.
+type funcCallFilter struct {
+	downstream TokenCallback
+	inside     bool
+	pending    strings.Builder
+}
+
+func newFuncCallFilter(downstream TokenCallback) *funcCallFilter {
+	return &funcCallFilter{downstream: downstream}
+}
+
+func (f *funcCallFilter) Write(delta string) {
+	f.pending.WriteString(delta)
+	f.drain()
+}
+
+func (f *funcCallFilter) Flush() {
+	// If inside an unclosed block, discard pending (incomplete func call markup).
+	if f.pending.Len() > 0 && !f.inside {
+		f.downstream(f.pending.String())
+		f.pending.Reset()
+	}
+}
+
+func (f *funcCallFilter) drain() {
+	for f.pending.Len() > 0 {
+		s := f.pending.String()
+		if f.inside {
+			idx := strings.Index(s, funcCallClose)
+			if idx >= 0 {
+				after := s[idx+len(funcCallClose):]
+				f.pending.Reset()
+				f.pending.WriteString(after)
+				f.inside = false
+				continue
+			}
+			tail := partialTagTail(s, funcCallClose)
+			f.pending.Reset()
+			if tail != "" {
+				f.pending.WriteString(tail)
+			}
+			return
+		}
+		idx := strings.Index(s, funcCallOpen)
+		if idx >= 0 {
+			if idx > 0 {
+				f.downstream(s[:idx])
+			}
+			after := s[idx+len(funcCallOpen):]
+			f.pending.Reset()
+			f.pending.WriteString(after)
+			f.inside = true
+			continue
+		}
+		if hasPartialTagSuffix(s, funcCallOpen) {
+			safe := safeEmitLen(s, funcCallOpen)
+			if safe > 0 {
+				f.downstream(s[:safe])
+				rest := s[safe:]
+				f.pending.Reset()
+				f.pending.WriteString(rest)
+			}
+			return
+		}
+		f.downstream(s)
+		f.pending.Reset()
+		return
+	}
+}
+
+// Shared helpers for partial-tag detection (used by both filters).
+
+func partialTagTail(s, tag string) string {
+	maxCheck := len(tag) - 1
+	if maxCheck > len(s) {
+		maxCheck = len(s)
+	}
+	for i := maxCheck; i >= 1; i-- {
+		suffix := s[len(s)-i:]
+		if strings.HasPrefix(tag, suffix) {
+			return suffix
+		}
+	}
+	return ""
+}
+
+func hasPartialTagSuffix(s, tag string) bool {
+	return partialTagTail(s, tag) != ""
+}
+
+func safeEmitLen(s, tag string) int {
+	maxCheck := len(tag) - 1
+	if maxCheck > len(s) {
+		maxCheck = len(s)
+	}
+	for i := maxCheck; i >= 1; i-- {
+		suffix := s[len(s)-i:]
+		if strings.HasPrefix(tag, suffix) {
+			return len(s) - i
+		}
+	}
+	return len(s)
+}
+
+// stripFunctionCalls removes <|FunctionCallBegin|>...<|FunctionCallEnd|> blocks
+// from a complete string (non-streaming path).
+var reFuncCallBlock = regexp.MustCompile(`(?s)<\|FunctionCallBegin\|>.*?<\|FunctionCallEnd\|>`)
+
+func stripFunctionCalls(s string) string {
+	return reFuncCallBlock.ReplaceAllString(s, "")
+}
 
 // ---------------------------------------------------------------------------
 // Streaming LLM request — dispatches to OpenAI or Anthropic
@@ -47,8 +298,9 @@ func (h *IMMessageHandler) doLLMRequestStream(
 
 // openAIStreamDelta mirrors the delta object inside a streaming chunk.
 type openAIStreamDelta struct {
-	Content   string                   `json:"content,omitempty"`
-	ToolCalls []openAIStreamToolDelta  `json:"tool_calls,omitempty"`
+	Content          string                   `json:"content,omitempty"`
+	ReasoningContent string                   `json:"reasoning_content,omitempty"`
+	ToolCalls        []openAIStreamToolDelta  `json:"tool_calls,omitempty"`
 }
 
 type openAIStreamToolDelta struct {
@@ -109,7 +361,9 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 		return parseNonStreamOpenAIResponse(resp, data)
 	}
 
-	// SSE parsing
+	// SSE parsing — wrap onToken with think-tag filter and func-call filter
+	fcf := newFuncCallFilter(onToken)
+	tf := newThinkFilter(func(s string) { fcf.Write(s) })
 	var contentBuf strings.Builder
 	type toolAccum struct {
 		id       string
@@ -118,6 +372,7 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 		args     strings.Builder
 	}
 	toolAccums := make(map[int]*toolAccum)
+	var reasoningBuf strings.Builder
 	var finishReason string
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -145,10 +400,15 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 		choice := chunk.Choices[0]
 		delta := choice.Delta
 
+		// Reasoning content delta (kimi-k2.5, deepseek, etc.)
+		if delta.ReasoningContent != "" {
+			reasoningBuf.WriteString(delta.ReasoningContent)
+		}
+
 		// Text content delta
 		if delta.Content != "" {
 			contentBuf.WriteString(delta.Content)
-			onToken(delta.Content)
+			tf.Write(delta.Content)
 		}
 
 		// Tool call deltas
@@ -184,11 +444,14 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 			return nil, fmt.Errorf("SSE stream read error: %w", err)
 		}
 	}
+	tf.Flush()
+	fcf.Flush()
 
 	// Assemble llmResponse
 	msg := llmMessage{
-		Role:    "assistant",
-		Content: contentBuf.String(),
+		Role:             "assistant",
+		Content:          stripFunctionCalls(stripThinkTags(contentBuf.String())),
+		ReasoningContent: reasoningBuf.String(),
 	}
 	// Collect tool calls in index order
 	if len(toolAccums) > 0 {
@@ -237,9 +500,23 @@ func parseNonStreamOpenAIResponse(resp *http.Response, requestBody []byte) (*llm
 		}
 		return nil, dumpLLMContext(resp.StatusCode, msg, requestBody)
 	}
+	// Guard: some gateways return SSE or plain-text even when stream=false.
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		preview := string(trimmed)
+		if len(preview) > 256 {
+			preview = preview[:256] + "..."
+		}
+		return nil, fmt.Errorf("expected JSON but got: %s", preview)
+	}
+
 	var result llmResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	// Strip <think>...</think> blocks from content.
+	for i := range result.Choices {
+		result.Choices[i].Message.Content = stripFunctionCalls(stripThinkTags(result.Choices[i].Message.Content))
 	}
 	return &result, nil
 }
@@ -426,6 +703,9 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 	blocks := make(map[int]*blockAccum)
 	var stopReason string
 
+	fcf := newFuncCallFilter(onToken)
+	tf := newThinkFilter(func(s string) { fcf.Write(s) })
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 
@@ -465,7 +745,7 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 			acc := &blockAccum{blockType: evt.ContentBlock.Type}
 			if evt.ContentBlock.Type == "text" && evt.ContentBlock.Text != "" {
 				acc.text.WriteString(evt.ContentBlock.Text)
-				onToken(evt.ContentBlock.Text)
+				tf.Write(evt.ContentBlock.Text)
 			}
 			if evt.ContentBlock.Type == "tool_use" {
 				acc.toolID = evt.ContentBlock.ID
@@ -480,7 +760,7 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 			}
 			if evt.Delta.Type == "text_delta" && evt.Delta.Text != "" {
 				acc.text.WriteString(evt.Delta.Text)
-				onToken(evt.Delta.Text)
+				tf.Write(evt.Delta.Text)
 			}
 			if evt.Delta.Type == "input_json_delta" && evt.Delta.PartialJSON != "" {
 				acc.toolArgs.WriteString(evt.Delta.PartialJSON)
@@ -506,6 +786,8 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 			return nil, fmt.Errorf("SSE stream read error: %w", err)
 		}
 	}
+	tf.Flush()
+	fcf.Flush()
 
 	// Assemble llmResponse
 	msg := llmMessage{Role: "assistant"}
@@ -539,7 +821,7 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 			})
 		}
 	}
-	msg.Content = strings.Join(textParts, "\n")
+	msg.Content = stripFunctionCalls(stripThinkTags(strings.Join(textParts, "\n")))
 
 	finishReason := "stop"
 	if stopReason == "tool_use" {
@@ -594,8 +876,7 @@ func parseNonStreamAnthropicResponse(resp *http.Response, requestBody []byte) (*
 			})
 		}
 	}
-	llmMsg.Content = strings.Join(textParts, "\n")
-
+	llmMsg.Content = stripFunctionCalls(stripThinkTags(strings.Join(textParts, "\n")))
 	finishReason := "stop"
 	if anthropicResp.StopReason == "tool_use" {
 		finishReason = "tool_calls"

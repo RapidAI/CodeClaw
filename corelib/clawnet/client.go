@@ -227,6 +227,10 @@ func (c *Client) isDaemonAlive() bool {
 		if c.ping() {
 			return true
 		}
+		// Process exists but not responding — not considered alive.
+		// Clean up stale PID file if present.
+		removePIDFile()
+		return false
 	}
 	// Fallback: PID file (covers edge cases where process name differs).
 	pid := readPIDFile()
@@ -266,6 +270,7 @@ func (c *Client) EnsureDaemon() error {
 }
 
 func (c *Client) EnsureDaemonWithProgress(emitProgress func(stage string, pct int, msg string)) error {
+	// Fast path: daemon already reachable.
 	if c.ping() {
 		c.mu.Lock()
 		c.running = true
@@ -273,8 +278,37 @@ func (c *Client) EnsureDaemonWithProgress(emitProgress func(stage string, pct in
 		return nil
 	}
 
-	// Check PID lock file — another instance may have started the daemon.
+	// Check if another instance already has the daemon running.
 	if c.isDaemonAlive() {
+		c.mu.Lock()
+		c.running = true
+		c.mu.Unlock()
+		return nil
+	}
+
+	// --- Cross-process file lock ---
+	// Only one process at a time may attempt to start the daemon.
+	// If another process holds the lock, wait for it to finish and then
+	// just check if the daemon is now reachable.
+	lockFile, lockErr := acquireDaemonLock()
+	if lockErr != nil {
+		// Another process is starting the daemon — wait for it.
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if c.ping() {
+				c.mu.Lock()
+				c.running = true
+				c.mu.Unlock()
+				return nil
+			}
+			time.Sleep(1 * time.Second)
+		}
+		return fmt.Errorf("another process is starting clawnet daemon but it did not become reachable")
+	}
+	defer lockFile.Close() // releases the file lock
+
+	// Re-check after acquiring lock — the previous holder may have started it.
+	if c.ping() {
 		c.mu.Lock()
 		c.running = true
 		c.mu.Unlock()
@@ -301,7 +335,6 @@ func (c *Client) EnsureDaemonWithProgress(emitProgress func(stage string, pct in
 		bin = downloaded
 	}
 	c.binPath = bin
-
 	c.mu.Unlock()
 
 	// Guard: if a clawnet process is already running (by name), don't start another.
@@ -321,7 +354,13 @@ func (c *Client) EnsureDaemonWithProgress(emitProgress func(stage string, pct in
 		if p, err := os.FindProcess(pid); err == nil {
 			_ = p.Kill()
 		}
-		time.Sleep(1 * time.Second)
+		// Wait until the process is truly gone (up to 3s).
+		for i := 0; i < 6; i++ {
+			if findProcessByName(LocalBinaryName()) == 0 {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 
 	stopCmd := exec.Command(bin, "stop")

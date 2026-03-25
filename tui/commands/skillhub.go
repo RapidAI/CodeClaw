@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/RapidAI/CodeClaw/corelib"
+	"github.com/RapidAI/CodeClaw/corelib/skill"
 )
 
 // HubSkillMeta 是 SkillHub 搜索返回的技能元数据。
@@ -39,13 +40,15 @@ type hubSearchResult struct {
 // RunSkillHub 执行 skillhub 子命令（search/install/rate）。
 func RunSkillHub(args []string) error {
 	if len(args) == 0 {
-		return NewUsageError("usage: maclaw-tui skillhub <search|install|rate|check-updates|update>")
+		return NewUsageError("usage: maclaw-tui skillhub <search|install|install-github|rate|check-updates|update>")
 	}
 	switch args[0] {
 	case "search":
 		return skillhubSearch(args[1:])
 	case "install":
 		return skillhubInstall(args[1:])
+	case "install-github":
+		return skillhubInstallGitHub(args[1:])
 	case "rate":
 		return skillhubRate(args[1:])
 	case "check-updates":
@@ -126,11 +129,40 @@ func skillhubSearch(args []string) error {
 	}
 
 	if *jsonOut {
+		if len(result.Skills) == 0 {
+			// JSON mode: also try GitHub fallback before returning empty.
+			gs := skill.NewGitHubSearcher("")
+			candidates, ghErr := gs.SearchGitHub(query)
+			if ghErr == nil && len(candidates) > 0 {
+				return PrintJSON(map[string]interface{}{
+					"source":     "github",
+					"candidates": candidates,
+				})
+			}
+		}
 		return PrintJSON(result)
 	}
 
 	if len(result.Skills) == 0 {
-		fmt.Printf("未找到匹配 \"%s\" 的技能。\n", query)
+		// Fallback: search GitHub for skill.yaml files matching the query.
+		fmt.Printf("SkillHub 未找到匹配 \"%s\" 的技能，正在搜索 GitHub...\n", query)
+		gs := skill.NewGitHubSearcher("") // unauthenticated
+		candidates, ghErr := gs.SearchGitHub(query)
+		if ghErr != nil || len(candidates) == 0 {
+			fmt.Printf("GitHub 也未找到匹配的技能。\n")
+			return nil
+		}
+		fmt.Printf("\n在 GitHub 上找到 %d 个候选技能:\n\n", len(candidates))
+		fmt.Printf("%-30s %-6s %-40s %s\n", "REPO", "★", "FILE", "DESCRIPTION")
+		fmt.Println(strings.Repeat("-", 100))
+		for _, c := range candidates {
+			fmt.Printf("%-30s %-6d %-40s %s\n",
+				TruncateDisplay(c.RepoFullName, 30),
+				c.Stars,
+				TruncateDisplay(c.FilePath, 40),
+				TruncateDisplay(c.Description, 30))
+		}
+		fmt.Println("\n使用 skillhub install-github <repo-url> 导入。")
 		return nil
 	}
 
@@ -225,6 +257,68 @@ func skillhubInstall(args []string) error {
 	}
 	fmt.Printf("✓ 技能 '%s' (v%s) 已安装\n", full.Name, full.Version)
 	fmt.Printf("  作者: %s  信任等级: %s\n", full.Author, full.TrustLevel)
+	return nil
+}
+
+// skillhubInstallGitHub imports skill(s) from a GitHub repository URL
+// and registers them as local NL Skills.
+func skillhubInstallGitHub(args []string) error {
+	fs := flag.NewFlagSet("skillhub install-github", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "JSON 格式输出")
+	fs.Parse(args)
+
+	if fs.NArg() == 0 {
+		return NewUsageError("usage: skillhub install-github <github-repo-url>")
+	}
+	repoURL := fs.Arg(0)
+
+	gs := skill.NewGitHubSearcher("")
+	imported, err := gs.ImportFromRepoURL(repoURL)
+	if err != nil {
+		return fmt.Errorf("从 GitHub 导入失败: %w", err)
+	}
+
+	store := NewFileConfigStore(ResolveDataDir())
+	cfg, loadErr := store.LoadConfig()
+	if loadErr != nil {
+		return fmt.Errorf("加载配置失败: %w", loadErr)
+	}
+
+	existingNames := make(map[string]bool)
+	for _, s := range cfg.NLSkills {
+		existingNames[s.Name] = true
+	}
+	// Also check file-based skills from all scan roots for dedup.
+	for _, s := range skill.ScanAllSkillDirs() {
+		existingNames[s.Name] = true
+	}
+
+	var installed []corelib.NLSkillEntry
+	for _, sk := range imported {
+		if existingNames[sk.Name] {
+			fmt.Printf("跳过已存在的技能: %s\n", sk.Name)
+			continue
+		}
+		cfg.NLSkills = append(cfg.NLSkills, sk)
+		existingNames[sk.Name] = true
+		installed = append(installed, sk)
+	}
+
+	if len(installed) == 0 {
+		fmt.Println("没有新技能需要安装。")
+		return nil
+	}
+
+	if err := store.SaveConfig(cfg); err != nil {
+		return fmt.Errorf("保存配置失败: %w", err)
+	}
+
+	if *jsonOut {
+		return PrintJSON(map[string]interface{}{"status": "installed", "count": len(installed), "skills": installed})
+	}
+	for _, sk := range installed {
+		fmt.Printf("✓ 技能 '%s' 已从 GitHub 导入 (%s)\n", sk.Name, sk.SourceProject)
+	}
 	return nil
 }
 

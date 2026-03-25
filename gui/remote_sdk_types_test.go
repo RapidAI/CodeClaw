@@ -201,6 +201,8 @@ func TestSDKUserInput_MarshalJSON_BackwardCompatible(t *testing.T) {
 			Role:    "user",
 			Content: "plain text message",
 		},
+		SessionID:       "default",
+		ParentToolUseID: nil,
 	}
 
 	data, err := json.Marshal(input)
@@ -212,6 +214,14 @@ func TestSDKUserInput_MarshalJSON_BackwardCompatible(t *testing.T) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("unmarshal raw: %v", err)
+	}
+
+	// Verify session_id and parent_tool_use_id are present
+	if _, ok := raw["session_id"]; !ok {
+		t.Fatal("expected session_id field in JSON output")
+	}
+	if _, ok := raw["parent_tool_use_id"]; !ok {
+		t.Fatal("expected parent_tool_use_id field in JSON output")
 	}
 
 	var msgRaw map[string]json.RawMessage

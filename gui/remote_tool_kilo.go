@@ -75,7 +75,7 @@ func buildOpenAICompatibleCommandEnv(base map[string]string, extra map[string]st
 	}
 
 	home, _ := os.UserHomeDir()
-	localToolPath := filepath.Join(home, ".cceasy", "tools")
+	localToolPath := filepath.Join(home, ".maclaw", "data", "tools")
 	npmPath := filepath.Join(os.Getenv("AppData"), "npm")
 	nodePath := `C:\Program Files\nodejs`
 	gitCmdPath := `C:\Program Files\Git\cmd`

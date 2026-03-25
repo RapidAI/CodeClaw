@@ -1,12 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
+
+	"github.com/RapidAI/CodeClaw/corelib/configfile"
 )
 
 // ensureToolOnboardingComplete runs pre-launch onboarding checks for the
@@ -38,128 +38,16 @@ func ensureToolOnboardingComplete(app *App, toolName string, projectPath string)
 	}
 }
 
-// ensureGeminiOnboardingComplete ensures that Gemini CLI's user-level
-// settings file (~/.gemini/settings.json) contains a theme setting so
-// the first-run theme selection prompt is skipped.
-//
-// Gemini CLI shows an interactive theme picker on first launch if no
-// theme is configured.  Pre-setting a theme avoids this.
+// ensureGeminiOnboardingComplete delegates to the shared corelib
+// implementation that writes theme, auth type, and UI flags to
+// ~/.gemini/settings.json so first-run interactive prompts are skipped.
 func ensureGeminiOnboardingComplete(app *App) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot determine home directory: %w", err)
-	}
-
-	dir := filepath.Join(home, ".gemini")
-	configPath := filepath.Join(dir, "settings.json")
-
-	existing := map[string]any{}
-	data, err := os.ReadFile(configPath)
-	if err == nil {
-		if err := json.Unmarshal(data, &existing); err != nil {
-			backupPath := configPath + ".bak"
-			_ = os.Rename(configPath, backupPath)
-			if app != nil {
-				app.log(fmt.Sprintf("[gemini-onboarding] backed up corrupt %s to %s", configPath, backupPath))
-			}
-			existing = map[string]any{}
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", configPath, err)
-	}
-
-	changed := false
-
-	// Ensure ui.theme is set to skip the theme selection prompt.
-	ui, _ := existing["ui"].(map[string]any)
-	if ui == nil {
-		ui = map[string]any{}
-		existing["ui"] = ui
-	}
-	if ui["theme"] == nil || strings.TrimSpace(fmt.Sprint(ui["theme"])) == "" {
-		ui["theme"] = "Default Dark"
-		changed = true
-	}
-
-	// Disable auto theme switching — it polls terminal background color
-	// which can cause repeated redraws in ConPTY environments.
-	if ui["autoThemeSwitching"] == nil {
-		ui["autoThemeSwitching"] = false
-		changed = true
-	}
-
-	// Hide tips and shortcuts hints to reduce TUI noise.
-	if ui["hideTips"] == nil {
-		ui["hideTips"] = true
-		changed = true
-	}
-	if ui["showShortcutsHint"] == nil {
-		ui["showShortcutsHint"] = false
-		changed = true
-	}
-
-	// Disable dynamic window title updates that can cause extra output.
-	if ui["dynamicWindowTitle"] == nil {
-		ui["dynamicWindowTitle"] = false
-		changed = true
-	}
-	if ui["showStatusInTitle"] == nil {
-		ui["showStatusInTitle"] = false
-		changed = true
-	}
-	if ui["hideWindowTitle"] == nil {
-		ui["hideWindowTitle"] = true
-		changed = true
-	}
-
-	// Disable compatibility warnings that may trigger interactive prompts.
-	if ui["showCompatibilityWarnings"] == nil {
-		ui["showCompatibilityWarnings"] = false
-		changed = true
-	}
-
-	// Disable home directory warning.
-	if ui["showHomeDirectoryWarning"] == nil {
-		ui["showHomeDirectoryWarning"] = false
-		changed = true
-	}
-
-	// Pre-select auth type to prevent the interactive auth selection prompt
-	// from blocking the ACP process.  When GEMINI_API_KEY is set, use
-	// "gemini-api-key"; otherwise default to "oauth-personal".
-	if existing["selectedAuthType"] == nil || strings.TrimSpace(fmt.Sprint(existing["selectedAuthType"])) == "" {
-		if os.Getenv("GEMINI_API_KEY") != "" {
-			existing["selectedAuthType"] = "gemini-api-key"
-		} else {
-			existing["selectedAuthType"] = "oauth-personal"
-		}
-		changed = true
-	}
-
-	if !changed {
+	logFn := func(msg string) {
 		if app != nil {
-			app.log("[gemini-onboarding] settings already complete, no changes needed")
+			app.log(msg)
 		}
-		return nil
 	}
-
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
-	}
-
-	out, err := json.MarshalIndent(existing, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, out, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", configPath, err)
-	}
-
-	if app != nil {
-		app.log(fmt.Sprintf("[gemini-onboarding] updated %s with theme setting", configPath))
-	}
-	return nil
+	return configfile.EnsureGeminiOnboarding(logFn)
 }
 
 // ensureCodeBuddyOnboardingComplete ensures that CodeBuddy CLI's user-level
@@ -179,134 +67,27 @@ func ensureCodeBuddyOnboardingComplete(app *App, projectPath string) error {
 	return ensureClaudeCodeForkOnboarding(app, ".codebuddy.json", "codebuddy", projectPath, "")
 }
 
-// ensureClaudeCodeForkOnboarding is the shared implementation for Claude Code
-// forks (CodeBuddy, etc.) that use the same ~/.{tool}.json config
-// format with hasCompletedOnboarding, theme, and project trust entries.
-//
-// configFileName is the basename of the config file (e.g. ".kode.json").
-// logTag is used for log messages (e.g. "kode", "codebuddy").
+// ensureClaudeCodeForkOnboarding delegates to the shared corelib
+// implementation for Claude Code forks (CodeBuddy, etc.) that use the
+// same ~/.{tool}.json config format.
 func ensureClaudeCodeForkOnboarding(app *App, configFileName, logTag, projectPath string, apiKey string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot determine home directory: %w", err)
-	}
-
-	configPath := filepath.Join(home, configFileName)
-
-	existing := map[string]any{}
-	data, err := os.ReadFile(configPath)
-	if err == nil {
-		if err := json.Unmarshal(data, &existing); err != nil {
-			backupPath := configPath + ".bak"
-			_ = os.Rename(configPath, backupPath)
-			if app != nil {
-				app.log(fmt.Sprintf("[%s-onboarding] backed up corrupt %s to %s", logTag, configPath, backupPath))
-			}
-			existing = map[string]any{}
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", configPath, err)
-	}
-
-	changed := false
-
-	if !isTruthy(existing["hasCompletedOnboarding"]) {
-		existing["hasCompletedOnboarding"] = true
-		changed = true
-	}
-
-	if existing["theme"] == nil || strings.TrimSpace(fmt.Sprint(existing["theme"])) == "" {
-		existing["theme"] = "dark"
-		changed = true
-	}
-
-	if projectPath != "" {
-		if ensureProjectTrust(existing, projectPath) {
-			changed = true
-		}
-	}
-
-	// When a custom API key is provided, ensure it is listed in
-	// customApiKeyResponses.approved so Claude Code does not show an
-	// interactive confirmation dialog.  In SDK mode (stream-json) such
-	// a dialog cannot be answered and causes an immediate exit with
-	// code 1.
-	if apiKey != "" {
-		if ensureCustomApiKeyApproved(existing, apiKey) {
-			changed = true
-		}
-	}
-
-	if !changed {
+	logFn := func(msg string) {
 		if app != nil {
-			app.log(fmt.Sprintf("[%s-onboarding] config already complete, no changes needed", logTag))
+			app.log(msg)
 		}
-		return nil
 	}
-
-	out, err := json.MarshalIndent(existing, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, out, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", configPath, err)
-	}
-
-	if app != nil {
-		app.log(fmt.Sprintf("[%s-onboarding] updated %s with onboarding flags", logTag, configPath))
-	}
-	return nil
+	return configfile.EnsureClaudeOnboarding(configfile.ClaudeOnboardingOptions{
+		ConfigFileName: configFileName,
+		LogTag:         logTag,
+		ProjectPath:    projectPath,
+		ApiKey:         apiKey,
+	}, logFn)
 }
 
-// ensureCustomApiKeyApproved adds the given API key to the
-// customApiKeyResponses.approved list in the config map.  Returns true
-// if the config was modified.
-//
-// Claude Code requires custom (non-Anthropic) API keys to be explicitly
-// approved in ~/.claude.json.  Without this entry, Claude Code shows an
-// interactive confirmation dialog which cannot be answered in SDK mode
-// (--input-format stream-json), causing an immediate exit with code 1.
+// ensureCustomApiKeyApproved delegates to the corelib implementation.
 func ensureCustomApiKeyApproved(config map[string]any, apiKey string) bool {
-	if apiKey == "" {
-		return false
-	}
-
-	responses, _ := config["customApiKeyResponses"].(map[string]any)
-	if responses == nil {
-		responses = map[string]any{}
-		config["customApiKeyResponses"] = responses
-	}
-
-	// Check if the key is already in the approved list.
-	approved, _ := responses["approved"].([]any)
-	for _, v := range approved {
-		if s, ok := v.(string); ok && s == apiKey {
-			return false // Already approved
-		}
-	}
-
-	// Add the key to the approved list.
-	approved = append(approved, apiKey)
-	responses["approved"] = approved
-
-	// Ensure rejected list exists.
-	if responses["rejected"] == nil {
-		responses["rejected"] = []any{}
-	}
-
-	return true
+	return configfile.EnsureCustomApiKeyApproved(config, apiKey)
 }
-
-// backupSuffix is the extension appended to config files when backing up
-// the user's original configuration before onboarding modifications.
-// Using ".cceasy.bak" to avoid collision with the ".bak" suffix used
-// for corrupt-file recovery in ensureClaudeCodeForkOnboarding.
-const backupSuffix = ".cceasy.bak"
 
 // toolConfigFiles maps tool names to their config file basenames (relative
 // to the user's home directory).  This is the single source of truth used

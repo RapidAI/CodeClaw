@@ -307,6 +307,10 @@ export function ListNLSkills() {
   return window['go']['main']['App']['ListNLSkills']();
 }
 
+export function DiagnoseSkillFiles() {
+  return window['go']['main']['App']['DiagnoseSkillFiles']();
+}
+
 export function CreateNLSkill(arg1) {
   return window['go']['main']['App']['CreateNLSkill'](arg1);
 }
@@ -988,6 +992,10 @@ export function GossipGetComments(arg1, arg2) {
   return window['go']['main']['App']['GossipGetComments'](arg1, arg2);
 }
 
+export function IsGossipAllowed() {
+  return window['go']['main']['App']['IsGossipAllowed']();
+}
+
 // NL Skill upload binding
 export function UploadNLSkillToMarket(arg1) {
   return window['go']['main']['App']['UploadNLSkillToMarket'](arg1);
@@ -1026,10 +1034,22 @@ export function DangbeiLogin() {
   return window['go']['main']['App']['DangbeiLogin']();
 }
 
-export function DangbeiFinishLogin(arg1) {
-  return window['go']['main']['App']['DangbeiFinishLogin'](arg1);
+export function DangbeiFinishLogin() {
+  return window['go']['main']['App']['DangbeiFinishLogin']();
 }
 
 export function DangbeiEnsureAuth() {
   return window['go']['main']['App']['DangbeiEnsureAuth']();
+}
+
+export function GetFreeProxyModels() {
+  return window['go']['main']['App']['GetFreeProxyModels']();
+}
+
+export function GetFreeProxyModel() {
+  return window['go']['main']['App']['GetFreeProxyModel']();
+}
+
+export function SetFreeProxyModel(arg1) {
+  return window['go']['main']['App']['SetFreeProxyModel'](arg1);
 }

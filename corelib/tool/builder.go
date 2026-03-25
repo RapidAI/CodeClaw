@@ -169,8 +169,12 @@ var GroupKeywords = map[string][]string{
 	"memory":    {"memory"},
 	"定时":       {"schedule", "task", "cron", "timer"},
 	"schedule":  {"schedule", "task", "cron", "timer"},
-	"网络":       {"network", "clawnet", "p2p"},
-	"network":   {"network", "clawnet", "p2p"},
+	"网络":       {"network", "clawnet", "p2p", "web", "search", "fetch"},
+	"network":   {"network", "clawnet", "p2p", "web", "search", "fetch"},
+	"搜索":       {"web", "search", "internet", "fetch"},
+	"search":    {"web", "search", "internet", "fetch"},
+	"网页":       {"web", "fetch", "browse", "url"},
+	"web":       {"web", "fetch", "browse", "url", "search"},
 }
 
 // DetectGroupTags checks if the user message contains any group activation

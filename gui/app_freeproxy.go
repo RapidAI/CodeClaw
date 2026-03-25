@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -18,7 +18,7 @@ var (
 )
 
 const (
-	freeProxyAddr    = ":10099"
+	freeProxyAddr    = ":18099"
 	freeProviderName = "免费"
 )
 
@@ -36,29 +36,46 @@ func freeProxyConfigDir() string {
 }
 
 // StartFreeProxy starts the local free proxy server backed by 当贝 AI.
-func (a *App) StartFreeProxy() string {
+// It waits briefly to confirm the server actually bound the port before returning.
+func (a *App) StartFreeProxy() (string, error) {
 	freeProxyMu.Lock()
 	defer freeProxyMu.Unlock()
 
 	if freeProxyServer != nil {
-		return "already running"
+		return "already running", nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	freeProxyCancel = cancel
-	freeProxyServer = freeproxy.NewServer(freeProxyAddr, freeProxyConfigDir())
+	srv := freeproxy.NewServer(freeProxyAddr, freeProxyConfigDir())
 
+	// Use a channel to get the startup result from the goroutine.
+	startErr := make(chan error, 1)
 	go func() {
-		if err := freeProxyServer.Start(ctx); err != nil {
-			log.Printf("[freeproxy] server error: %v", err)
-		}
+		err := srv.Start(ctx)
+		startErr <- err // signal startup result (nil if shut down normally)
 		freeProxyMu.Lock()
 		freeProxyServer = nil
 		freeProxyCancel = nil
 		freeProxyMu.Unlock()
 	}()
 
-	return "started on " + freeProxyAddr
+	// Wait briefly for the server to either start listening or fail.
+	// Server.Start calls net.Listen synchronously before entering Serve loop,
+	// so if it fails (port in use), the error comes back quickly.
+	select {
+	case err := <-startErr:
+		// Server exited immediately — startup failed
+		cancel()
+		if err != nil {
+			return "", fmt.Errorf("代理启动失败: %w", err)
+		}
+		return "", fmt.Errorf("代理启动失败: 服务器意外退出")
+	case <-time.After(300 * time.Millisecond):
+		// Server is still running after 300ms — assume it started OK
+		freeProxyServer = srv
+		freeProxyCancel = cancel
+		return "started on " + freeProxyAddr, nil
+	}
 }
 
 // StopFreeProxy stops the local free proxy server.
@@ -146,11 +163,81 @@ func (a *App) DangbeiEnsureAuth() string {
 
 // ensureFreeProxyIfNeeded starts the free proxy server if the current
 // LLM provider is "免费" and the server is not already running.
+// It also auto-loads persisted cookies so the user doesn't need to
+// re-login every time the app starts.
 func (a *App) ensureFreeProxyIfNeeded() {
 	data := a.GetMaclawLLMProviders()
-	if data.Current == freeProviderName {
-		a.StartFreeProxy()
+	if data.Current != freeProviderName {
+		return
 	}
+	if a.IsFreeProxyRunning() {
+		return
+	}
+	// Try to load persisted cookie and start proxy automatically
+	auth := freeproxy.NewAuthStore(freeProxyConfigDir())
+	if err := auth.Load(); err == nil && auth.HasAuth() {
+		a.StartFreeProxy()
+		// Sync persisted model selection to the running server
+		freeProxyMu.Lock()
+		srv := freeProxyServer
+		freeProxyMu.Unlock()
+		if srv != nil {
+			if m := a.GetFreeProxyModel(); m != "" {
+				srv.SetDefaultModel(m)
+			}
+		}
+	}
+}
+
+// GetFreeProxyModels returns the available models for the free proxy (当贝 AI).
+func (a *App) GetFreeProxyModels() []map[string]string {
+	models := freeproxy.AvailableModels()
+	result := make([]map[string]string, len(models))
+	for i, m := range models {
+		result[i] = map[string]string{"id": m.ID, "name": m.Name}
+	}
+	return result
+}
+
+// GetFreeProxyModel returns the currently selected free proxy model ID.
+func (a *App) GetFreeProxyModel() string {
+	cfg, err := a.LoadConfig()
+	if err != nil || cfg.FreeProxyModel == "" {
+		return "deepseek_r1"
+	}
+	return cfg.FreeProxyModel
+}
+
+// SetFreeProxyModel persists the selected model and syncs to the running server.
+func (a *App) SetFreeProxyModel(modelID string) error {
+	// Validate model ID
+	valid := false
+	for _, m := range freeproxy.AvailableModels() {
+		if m.ID == modelID {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return fmt.Errorf("unknown model: %s", modelID)
+	}
+
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.FreeProxyModel = modelID
+	if err := a.SaveConfig(cfg); err != nil {
+		return err
+	}
+	// Sync to running server
+	freeProxyMu.Lock()
+	srv := freeProxyServer
+	freeProxyMu.Unlock()
+	if srv != nil {
+		srv.SetDefaultModel(modelID)
+	}
+	return nil
 }
 
 // DetectBrowser returns info about the detected browser (Chrome/Edge).
@@ -167,17 +254,21 @@ func (a *App) DetectBrowser() map[string]string {
 }
 
 // DangbeiLogin launches a dedicated browser for the user to log in to 当贝 AI.
-func (a *App) DangbeiLogin() error {
-	return freeproxy.LoginViaBrowser()
+// Returns "ok" on success. Wails bindings work more reliably with (string, error)
+// than bare error returns.
+func (a *App) DangbeiLogin() (string, error) {
+	if err := freeproxy.LoginViaBrowser(); err != nil {
+		return "", err
+	}
+	return "ok", nil
 }
 
-// DangbeiFinishLogin extracts cookies from the browser after user login,
-// saves them, and optionally starts the proxy.
-// The debug port is auto-discovered from DevToolsActivePort — no parameter needed.
+// DangbeiFinishLogin extracts cookies from the browser profile after user login,
+// saves them, and optionally syncs to the running proxy server.
 func (a *App) DangbeiFinishLogin() (string, error) {
 	cookie, err := freeproxy.FinishLogin()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("提取 cookie 失败: %w", err)
 	}
 
 	// Save cookie to the running server's auth store (if running)
@@ -187,12 +278,16 @@ func (a *App) DangbeiFinishLogin() (string, error) {
 
 	if srv != nil {
 		srv.Auth().SetCookie(cookie)
-		srv.Auth().Save()
+		if err := srv.Auth().Save(); err != nil {
+			return "", fmt.Errorf("保存登录信息失败: %w", err)
+		}
 	} else {
 		// Save to disk even if server isn't running yet
 		auth := freeproxy.NewAuthStore(freeProxyConfigDir())
 		auth.SetCookie(cookie)
-		auth.Save()
+		if err := auth.Save(); err != nil {
+			return "", fmt.Errorf("保存登录信息失败: %w", err)
+		}
 	}
 
 	return "登录成功", nil
@@ -210,8 +305,5 @@ func (a *App) DetectChrome() string {
 // LaunchChromeDebug is kept for backward compatibility.
 // Now launches a dedicated browser instance for 当贝 login.
 func (a *App) LaunchChromeDebug() (string, error) {
-	if err := a.DangbeiLogin(); err != nil {
-		return "", err
-	}
-	return "browser launched", nil
+	return a.DangbeiLogin()
 }

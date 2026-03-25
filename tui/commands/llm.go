@@ -332,11 +332,14 @@ func llmSetProvider(args []string) error {
 
 func llmSetMaxIterations(args []string) error {
 	fs := flag.NewFlagSet("llm set-max-iterations", flag.ExitOnError)
-	value := fs.Int("value", 0, "最大推理轮次（必填，正整数）")
+	value := fs.Int("value", 0, "最大推理轮次（30-300）")
 	fs.Parse(args)
 
 	if *value <= 0 {
-		return NewUsageError("usage: llm set-max-iterations --value <N> (N > 0)")
+		return NewUsageError("usage: llm set-max-iterations --value <N> (30-300)")
+	}
+	if *value < 30 {
+		*value = 30
 	}
 	if *value > 300 {
 		*value = 300
@@ -367,7 +370,7 @@ func llmGetMaxIterations(args []string) error {
 	}
 	value := cfg.MaclawAgentMaxIterations
 	if value <= 0 {
-		value = 20 // default
+		value = 300 // default
 	}
 	if *jsonOut {
 		return PrintJSON(map[string]int{"max_iterations": value})

@@ -1074,13 +1074,12 @@ func TestToolCreateSession_ProjectIDPriorityOverProjectPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests for Task 4: list_projects tool
+// Tests for project_manage tool
 // ---------------------------------------------------------------------------
 
-// TestToolListProjects_WithProjects verifies that when projects exist,
-// toolListProjects returns a formatted list with project ID, name, path,
-// and current project marker.
-func TestToolListProjects_WithProjects(t *testing.T) {
+// TestToolProjectManage_List verifies that project_manage with action=list
+// returns project data when projects exist.
+func TestToolProjectManage_List(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	t.Setenv("USERPROFILE", tempHome)
@@ -1100,12 +1099,8 @@ func TestToolListProjects_WithProjects(t *testing.T) {
 	}
 
 	handler := &IMMessageHandler{app: app}
-	result := handler.toolListProjects()
+	result := handler.toolProjectManage(map[string]interface{}{"action": "list"})
 
-	// Should contain header.
-	if !contains(result, "已配置项目列表") {
-		t.Errorf("expected header in result, got: %s", result)
-	}
 	// Should contain both projects.
 	if !contains(result, "proj-1") || !contains(result, "MyProject") || !contains(result, "/path/to/project") {
 		t.Errorf("expected proj-1 details in result, got: %s", result)
@@ -1113,15 +1108,11 @@ func TestToolListProjects_WithProjects(t *testing.T) {
 	if !contains(result, "proj-2") || !contains(result, "OtherProject") || !contains(result, "/path/to/other") {
 		t.Errorf("expected proj-2 details in result, got: %s", result)
 	}
-	// Current project should be marked.
-	if !contains(result, "当前项目") {
-		t.Errorf("expected current project marker, got: %s", result)
-	}
 }
 
-// TestToolListProjects_NoProjects verifies that when no projects are configured,
-// toolListProjects returns a hint message.
-func TestToolListProjects_NoProjects(t *testing.T) {
+// TestToolProjectManage_ListEmpty verifies that when no projects are configured,
+// project_manage with action=list returns a hint message.
+func TestToolProjectManage_ListEmpty(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	t.Setenv("USERPROFILE", tempHome)
@@ -1137,35 +1128,35 @@ func TestToolListProjects_NoProjects(t *testing.T) {
 	}
 
 	handler := &IMMessageHandler{app: app}
-	result := handler.toolListProjects()
+	result := handler.toolProjectManage(map[string]interface{}{"action": "list"})
 
 	if result != "当前没有已配置的项目。请在桌面端添加项目。" {
 		t.Errorf("expected no projects hint, got: %s", result)
 	}
 }
 
-// TestBuildToolDefinitions_IncludesListProjects verifies that the tool
-// definitions include the list_projects tool.
-func TestBuildToolDefinitions_IncludesListProjects(t *testing.T) {
+// TestBuildToolDefinitions_IncludesProjectManage verifies that the tool
+// definitions include the project_manage tool.
+func TestBuildToolDefinitions_IncludesProjectManage(t *testing.T) {
 	handler := &IMMessageHandler{app: &App{}}
 	tools := handler.buildToolDefinitions()
 
 	var found bool
 	for _, tool := range tools {
 		name := extractToolName(tool)
-		if name == "list_projects" {
+		if name == "project_manage" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatal("list_projects tool not found in buildToolDefinitions")
+		t.Fatal("project_manage tool not found in buildToolDefinitions")
 	}
 }
 
-// TestExecuteTool_ListProjectsRouting verifies that executeTool routes
-// list_projects to the correct handler.
-func TestExecuteTool_ListProjectsRouting(t *testing.T) {
+// TestExecuteTool_ProjectManageRouting verifies that executeTool routes
+// project_manage to the correct handler.
+func TestExecuteTool_ProjectManageRouting(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	t.Setenv("USERPROFILE", tempHome)
@@ -1184,10 +1175,10 @@ func TestExecuteTool_ListProjectsRouting(t *testing.T) {
 	handler.registry = NewToolRegistry()
 	registerBuiltinTools(handler.registry, handler)
 
-	result := handler.executeTool("list_projects", "", nil)
+	result := handler.executeTool("project_manage", `{"action":"list"}`, nil)
 	// Should NOT return "未知工具".
 	if contains(result, "未知工具") {
-		t.Errorf("list_projects should be routed, got: %s", result)
+		t.Errorf("project_manage should be routed, got: %s", result)
 	}
 	// With no projects, should return hint.
 	if !contains(result, "当前没有已配置的项目") {

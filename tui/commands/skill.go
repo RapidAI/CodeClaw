@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/RapidAI/CodeClaw/corelib/skill"
 	"gopkg.in/yaml.v3"
 )
 
@@ -50,49 +51,36 @@ func skillList(args []string) error {
 	jsonOut := fs.Bool("json", false, "JSON 格式输出")
 	fs.Parse(args)
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot determine home directory: %w", err)
-	}
-	skillsRoot := filepath.Join(home, ".maclaw", "skills")
-	entries, err := os.ReadDir(skillsRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if *jsonOut {
-				return PrintJSON([]localSkillInfo{})
-			}
-			fmt.Println("No skills found. Skills directory does not exist.")
-			fmt.Printf("  Path: %s\n", skillsRoot)
-			return nil
-		}
-		return err
+	// Merge config-based skills with file-based skills (same as GUI loadSkills).
+	store := NewFileConfigStore(ResolveDataDir())
+	cfg, _ := store.LoadConfig()
+
+	known := make(map[string]bool)
+	var skills []localSkillInfo
+
+	// Config skills first (highest priority).
+	for _, s := range cfg.NLSkills {
+		skills = append(skills, localSkillInfo{
+			Name:        s.Name,
+			Description: s.Description,
+			Triggers:    s.Triggers,
+			Status:      s.Status,
+		})
+		known[s.Name] = true
 	}
 
-	var skills []localSkillInfo
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	// File-based skills from all scan roots.
+	allFileSkills := skill.ScanAllSkillDirs()
+	for _, s := range allFileSkills {
+		if !known[s.Name] {
+			skills = append(skills, localSkillInfo{
+				Name:        s.Name,
+				Description: s.Description,
+				Triggers:    s.Triggers,
+				Status:      s.Status,
+			})
+			known[s.Name] = true
 		}
-		yamlPath := filepath.Join(skillsRoot, entry.Name(), "skill.yaml")
-		data, readErr := os.ReadFile(yamlPath)
-		if readErr != nil {
-			yamlPath = filepath.Join(skillsRoot, entry.Name(), "skill.yml")
-			data, readErr = os.ReadFile(yamlPath)
-			if readErr != nil {
-				continue
-			}
-		}
-		var info localSkillInfo
-		if err := yaml.Unmarshal(data, &info); err != nil {
-			continue
-		}
-		if info.Name == "" {
-			info.Name = entry.Name()
-		}
-		if info.Status == "" {
-			info.Status = "active"
-		}
-		skills = append(skills, info)
 	}
 
 	if *jsonOut {
@@ -100,7 +88,10 @@ func skillList(args []string) error {
 	}
 	if len(skills) == 0 {
 		fmt.Println("No skills found.")
-		fmt.Printf("  Skills directory: %s\n", skillsRoot)
+		roots := skill.SkillScanRoots()
+		for _, r := range roots {
+			fmt.Printf("  Scanned: %s\n", r)
+		}
 		return nil
 	}
 	fmt.Printf("%-20s %-8s %-30s %s\n", "NAME", "STATUS", "TRIGGERS", "DESCRIPTION")
@@ -127,11 +118,11 @@ func skillAdd(args []string) error {
 		return NewUsageError("usage: skill add --name <name> [--desc <description>] [--triggers <t1,t2>]")
 	}
 
-	home, err := os.UserHomeDir()
+	skillsRoot, err := skill.PrimarySkillsDir()
 	if err != nil {
-		return fmt.Errorf("cannot determine home directory: %w", err)
+		return fmt.Errorf("cannot determine skills directory: %w", err)
 	}
-	skillDir := filepath.Join(home, ".maclaw", "skills", *name)
+	skillDir := filepath.Join(skillsRoot, *name)
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		return fmt.Errorf("create skill directory: %w", err)
 	}
@@ -166,27 +157,24 @@ func skillDelete(args []string) error {
 	}
 	name := fs.Arg(0)
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot determine home directory: %w", err)
+	// Search all scan roots for the skill directory.
+	roots := skill.SkillScanRoots()
+	for _, root := range roots {
+		skillDir := filepath.Join(root, name)
+		if _, err := os.Stat(skillDir); err == nil {
+			if err := os.RemoveAll(skillDir); err != nil {
+				return fmt.Errorf("delete skill: %w", err)
+			}
+			fmt.Printf("Skill '%s' deleted from %s.\n", name, root)
+			return nil
+		}
 	}
-	skillDir := filepath.Join(home, ".maclaw", "skills", name)
-	if _, err := os.Stat(skillDir); os.IsNotExist(err) {
-		return fmt.Errorf("skill '%s' not found at %s", name, skillDir)
-	}
-	if err := os.RemoveAll(skillDir); err != nil {
-		return fmt.Errorf("delete skill: %w", err)
-	}
-	fmt.Printf("Skill '%s' deleted.\n", name)
-	return nil
+
+	return fmt.Errorf("skill '%s' not found in any skill directory", name)
 }
 
 func skillsRoot() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
-	}
-	return filepath.Join(home, ".maclaw", "skills"), nil
+	return skill.PrimarySkillsDir()
 }
 
 func skillBackup(args []string) error {

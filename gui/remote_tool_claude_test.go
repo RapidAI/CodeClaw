@@ -49,13 +49,81 @@ func TestClaudeAdapterBuildCommandEnvPreservesBaseEntries(t *testing.T) {
 	if env["CLAUDE_CODE_USE_COLORS"] != "true" {
 		t.Fatalf("CLAUDE_CODE_USE_COLORS = %q, want %q", env["CLAUDE_CODE_USE_COLORS"], "true")
 	}
-	if env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] != "64000" {
-		t.Fatalf("CLAUDE_CODE_MAX_OUTPUT_TOKENS = %q, want %q", env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "64000")
+	// CLAUDE_CODE_MAX_OUTPUT_TOKENS was removed (incompatible with newer Claude Code).
+	// Verify it is NOT set by buildCommandEnv.
+	if v, ok := env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"]; ok {
+		t.Fatalf("CLAUDE_CODE_MAX_OUTPUT_TOKENS should not be set, got %q", v)
 	}
 	if !strings.Contains(env["PATH"], `D:\custom\bin`) {
 		t.Fatalf("PATH %q should include custom base PATH", env["PATH"])
 	}
 	if !strings.Contains(env["PATH"], `C:\Program Files\nodejs`) {
 		t.Fatalf("PATH %q should include Node.js path", env["PATH"])
+	}
+}
+
+// TestClaudeAdapterBuildCommandIncludesPrintFlag verifies that BuildCommand
+// produces args containing "-p" (print mode) which is required for Claude Code
+// 2.x to accept --output-format/--input-format stream-json.
+func TestClaudeAdapterBuildCommandIncludesPrintFlag(t *testing.T) {
+	// Create a temp HOME with a fake claude executable so ResolveToolPath finds it.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome) // Windows
+
+	toolsDir := filepath.Join(tmpHome, ".maclaw", "data", "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	var fakeBin string
+	if runtime.GOOS == "windows" {
+		fakeBin = filepath.Join(toolsDir, "claude.exe")
+	} else {
+		fakeBin = filepath.Join(toolsDir, "claude")
+	}
+	if err := os.WriteFile(fakeBin, []byte("stub"), 0o755); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	adapter := NewClaudeAdapter(&App{})
+
+	spec := LaunchSpec{
+		Tool:        "claude",
+		ProjectPath: tmpHome,
+		YoloMode:    true,
+		Env: map[string]string{
+			"ANTHROPIC_AUTH_TOKEN": "sk-test",
+		},
+	}
+
+	cmd, err := adapter.BuildCommand(spec)
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+
+	// Check that -p is present in args.
+	foundP := false
+	foundStreamJSON := false
+	foundMaxTurns := false
+	for i, arg := range cmd.Args {
+		if arg == "-p" {
+			foundP = true
+		}
+		if arg == "--output-format" && i+1 < len(cmd.Args) && cmd.Args[i+1] == "stream-json" {
+			foundStreamJSON = true
+		}
+		if arg == "--max-turns" && i+1 < len(cmd.Args) && cmd.Args[i+1] == "200" {
+			foundMaxTurns = true
+		}
+	}
+
+	if !foundP {
+		t.Fatalf("BuildCommand args %v missing -p flag", cmd.Args)
+	}
+	if !foundStreamJSON {
+		t.Fatalf("BuildCommand args %v missing --output-format stream-json", cmd.Args)
+	}
+	if !foundMaxTurns {
+		t.Fatalf("BuildCommand args %v missing --max-turns 200", cmd.Args)
 	}
 }

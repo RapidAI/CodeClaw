@@ -59,7 +59,7 @@ func NewConfigModel() ConfigModel {
 			{Key: "hub_url", Value: "", Desc: "Hub 服务器地址", Section: "general"},
 			{Key: "token", Value: "", Desc: "认证令牌", Section: "general"},
 			{Key: "data_dir", Value: "", Desc: "数据目录", Section: "general"},
-			{Key: "max_iterations", Value: "12", Desc: "Agent 最大迭代次数", Section: "general"},
+			{Key: "max_iterations", Value: "300", Desc: "Agent 最大迭代次数（30-300）", Section: "general"},
 			{Key: "clawnet_enabled", Value: "false", Desc: "启用 ClawNet", Section: "general"},
 			// LLM 配置
 			{Key: "maclaw_llm_url", Value: "", Desc: "LLM API 地址", Section: "maclaw_llm"},

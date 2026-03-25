@@ -8,6 +8,10 @@ import (
 	"github.com/RapidAI/CodeClaw/corelib/security"
 )
 
+// SecurityReadOnlyFn is set by the main package. When it returns true,
+// security settings modifications are blocked (centralized security mode).
+var SecurityReadOnlyFn func() bool
+
 // RunPolicy 执行 policy 子命令。
 func RunPolicy(args []string, dataDir string) error {
 	if len(args) == 0 {

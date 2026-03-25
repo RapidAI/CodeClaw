@@ -729,6 +729,15 @@ func (c *RemoteHubClient) SendHeartbeat() error {
 	return c.conn.WriteJSON(msg)
 }
 
+// handleAck processes heartbeat ack messages from the Hub.
+// It extracts the security_policy field and updates the local cache.
+func (c *RemoteHubClient) handleAck(msg inboundHubEnvelope) {
+	if len(msg.Payload) == 0 {
+		return
+	}
+	c.app.updateHubSecurityPolicy(msg.Payload)
+}
+
 func (c *RemoteHubClient) readLoop() {
 	for {
 		c.mu.Lock()
@@ -774,6 +783,8 @@ func (c *RemoteHubClient) readLoop() {
 			c.handleIMGatewayClaimResult(msg)
 		case "machine.nickname_assigned":
 			c.handleNicknameAssigned(msg)
+		case "ack":
+			c.handleAck(msg)
 		}
 	}
 }
@@ -1158,7 +1169,7 @@ func (c *RemoteHubClient) SendIMProactiveFile(b64Data, fileName, mimeType, messa
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.connected || c.conn == nil {
-		return nil
+		return fmt.Errorf("not connected to Hub")
 	}
 
 	msg := HubEnvelope{

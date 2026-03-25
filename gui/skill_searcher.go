@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	cskill "github.com/RapidAI/CodeClaw/corelib/skill"
 )
 
 // SkillSearchResult 搜索结果条目。
@@ -85,8 +87,8 @@ func (s *SkillSearcher) SearchAndInstall(ctx context.Context, query string) (*Sk
 		return nil, nil // 不中断任务
 	}
 	if len(results) == 0 {
-		log.Printf("[skill-search] no results for query: %s", query)
-		return nil, nil
+		log.Printf("[skill-search] no results for query: %s, trying GitHub fallback...", query)
+		return s.searchGitHubFallback(ctx, query)
 	}
 
 	// 根据 Skill获取策略 过滤
@@ -109,4 +111,27 @@ func (s *SkillSearcher) SearchAndInstall(ctx context.Context, query string) (*Sk
 	best := &results[0]
 	log.Printf("[skill-search] found: %s (score=%.2f, rating=%.1f)", best.Name, best.Score, best.AvgRating)
 	return best, nil
+}
+
+// searchGitHubFallback searches GitHub for skill.yaml files when SkillMarket
+// returns no results. Returns the first matching candidate as a SkillSearchResult.
+func (s *SkillSearcher) searchGitHubFallback(ctx context.Context, query string) (*SkillSearchResult, error) {
+	gs := cskill.NewGitHubSearcher("")
+	candidates, err := gs.SearchGitHub(query)
+	if err != nil {
+		log.Printf("[skill-search] GitHub fallback error: %v", err)
+		return nil, nil
+	}
+	if len(candidates) == 0 {
+		log.Printf("[skill-search] GitHub fallback: no results for query: %s", query)
+		return nil, nil
+	}
+	best := candidates[0]
+	log.Printf("[skill-search] GitHub fallback found: %s (★%d)", best.RepoFullName, best.Stars)
+	return &SkillSearchResult{
+		ID:          best.RepoFullName,
+		Name:        best.RepoFullName,
+		Description: best.Description,
+		Status:      "github",
+	}, nil
 }

@@ -67,7 +67,11 @@ func (e *ExperienceExtractor) Extract(session *RemoteSession) error {
 	eventCount := len(session.Events)
 	session.mu.RUnlock()
 	if hasExitCode && exitCodeVal != 0 {
-		return nil
+		// Structured sessions (Claude Code, Gemini, Codex, iFlow) normally
+		// exit with code 1 — still extract experience from them.
+		if !(session.isStructuredSession() && exitCodeVal == 1) {
+			return nil
+		}
 	}
 	// Skip sessions with no events — too little signal to extract from.
 	if eventCount == 0 {

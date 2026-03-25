@@ -108,7 +108,7 @@ func (tm *ToolManager) InstallTool(name string) error {
 	}
 
 	home, _ := os.UserHomeDir()
-	localNodeDir := filepath.Join(home, ".cceasy", "tools")
+	localNodeDir := filepath.Join(home, ".maclaw", "data", "tools")
 
 	// Ensure the local node directory exists for prefix usage
 	if err := os.MkdirAll(localNodeDir, 0755); err != nil {
@@ -296,7 +296,7 @@ func (tm *ToolManager) UpdateTool(name string) error {
 	}
 
 	home, _ := os.UserHomeDir()
-	expectedPrefix := filepath.Join(home, ".cceasy", "tools")
+	expectedPrefix := filepath.Join(home, ".maclaw", "data", "tools")
 	if !strings.HasPrefix(status.Path, expectedPrefix) {
 		return fmt.Errorf("tool %s is not installed in private directory (%s), cannot update. Only private installations can be updated.", name, status.Path)
 	}
@@ -324,7 +324,7 @@ func (tm *ToolManager) UpdateTool(name string) error {
 	}
 
 	// Set up npm prefix to private directory
-	localToolsDir := filepath.Join(home, ".cceasy", "tools")
+	localToolsDir := filepath.Join(home, ".maclaw", "data", "tools")
 
 	// Use npm install with latest version to update
 	args := []string{"install", "-g", "--prefix", localToolsDir, packageName + "@latest", "--force"}
@@ -412,7 +412,7 @@ func (tm *ToolManager) installClaudeNative(target string) error {
 	const gcsBucket = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
 
 	home, _ := os.UserHomeDir()
-	installDir := filepath.Join(home, ".cceasy", "tools")
+	installDir := filepath.Join(home, ".maclaw", "data", "tools")
 	downloadDir := filepath.Join(home, ".claude", "downloads")
 
 	// Determine platform
@@ -596,8 +596,8 @@ func (tm *ToolManager) installClaudeNative(target string) error {
 
 	// Create wrapper scripts (Windows only)
 	if runtime.GOOS == "windows" {
-		cmdWrapper := fmt.Sprintf("@echo off\n\"%%USERPROFILE%%\\.cceasy\\tools\\claude.exe\" %%*\n")
-		ps1Wrapper := `& "$env:USERPROFILE\.cceasy\tools\claude.exe" @args`
+		cmdWrapper := fmt.Sprintf("@echo off\n\"%%USERPROFILE%%\\.maclaw\\data\\tools\\claude.exe\" %%*\n")
+		ps1Wrapper := `& "$env:USERPROFILE\.maclaw\data\tools\claude.exe" @args`
 
 		os.WriteFile(filepath.Join(installDir, "claude.cmd"), []byte(cmdWrapper), 0755)
 		os.WriteFile(filepath.Join(installDir, "claude.ps1"), []byte(ps1Wrapper), 0755)
@@ -634,7 +634,7 @@ func (tm *ToolManager) installClaudeNative(target string) error {
 // On Windows it is not officially supported natively, so we skip gracefully.
 func (tm *ToolManager) installCursorAgent() error {
 	home, _ := os.UserHomeDir()
-	installDir := filepath.Join(home, ".cceasy", "tools", "bin")
+	installDir := filepath.Join(home, ".maclaw", "data", "tools", "bin")
 
 	if err := os.MkdirAll(installDir, 0755); err != nil {
 		return fmt.Errorf("failed to create install directory: %w", err)
@@ -801,9 +801,9 @@ func (tm *ToolManager) getNpmPath() string {
 	home, _ := os.UserHomeDir()
 	var localNpm string
 	if runtime.GOOS == "windows" {
-		localNpm = filepath.Join(home, ".cceasy", "tools", "npm.cmd")
+		localNpm = filepath.Join(home, ".maclaw", "data", "tools", "npm.cmd")
 	} else {
-		localNpm = filepath.Join(home, ".cceasy", "tools", "bin", "npm")
+		localNpm = filepath.Join(home, ".maclaw", "data", "tools", "bin", "npm")
 	}
 
 	if _, err := os.Stat(localNpm); err == nil {

@@ -3,6 +3,7 @@ package skillmarket
 import (
 	"archive/zip"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -164,21 +165,33 @@ func (p *Processor) processOne(ctx context.Context, subID string) error {
 		Triggers: meta.Triggers,
 	}
 
-	// 读取包内文件
+	// 读取包内文件（仅白名单扩展名，单文件 ≤ 256KB）
 	full.Files = make(map[string]string)
+	allowedExts := map[string]bool{
+		".sh": true, ".py": true, ".js": true, ".yaml": true,
+		".yml": true, ".json": true, ".txt": true, ".md": true,
+	}
 	_ = filepath.Walk(pkgRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil || info.IsDir() {
 			return walkErr
 		}
 		rel, _ := filepath.Rel(pkgRoot, path)
-		if rel == "skill.yaml" {
+		rel = filepath.ToSlash(rel) // 统一为正斜杠
+		if rel == "skill.yaml" || rel == "skill.yml" {
 			return nil // 元数据已解析
+		}
+		ext := strings.ToLower(filepath.Ext(rel))
+		if !allowedExts[ext] {
+			return nil
+		}
+		if info.Size() > 256<<10 { // 256KB
+			return nil
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
-		full.Files[rel] = string(data)
+		full.Files[rel] = base64.StdEncoding.EncodeToString(data)
 		return nil
 	})
 

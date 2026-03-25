@@ -310,10 +310,10 @@ func (a *App) CheckEnvironment(force bool) {
 		}
 
 		home := a.GetUserHomeDir()
-		ccDir := filepath.Join(home, ".cceasy")
+		ccDir := filepath.Join(home, ".maclaw", "data")
 		if _, err := os.Stat(ccDir); os.IsNotExist(err) {
 			force = true
-			a.log(a.tr("Detected missing .cceasy directory. Forcing environment check..."))
+			a.log(a.tr("Detected missing .maclaw/data directory. Forcing environment check..."))
 		}
 
 		if force {
@@ -526,7 +526,7 @@ func (a *App) installToolsInBackground() {
 	tm := NewToolManager(a)
 	tools := []string{"kilo", "claude", "gemini", "codex", "opencode", "codebuddy", "iflow"}
 	home, _ := os.UserHomeDir()
-	expectedPrefix := filepath.Join(home, ".cceasy", "tools")
+	expectedPrefix := filepath.Join(home, ".maclaw", "data", "tools")
 
 	for _, tool := range tools {
 		// Try to acquire lock for this tool
@@ -883,7 +883,7 @@ func (a *App) updatePathForNode() {
 	nodePath := `C:\Program Files\nodejs`
 	npmPath := filepath.Join(os.Getenv("AppData"), "npm")
 	home, _ := os.UserHomeDir()
-	localToolPath := filepath.Join(home, ".cceasy", "tools")
+	localToolPath := filepath.Join(home, ".maclaw", "data", "tools")
 	oldToolPath := filepath.Join(home, ".cceasy", "node")
 
 	currentPath := os.Getenv("PATH")
@@ -1518,7 +1518,7 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 	}
 
 	home, _ := os.UserHomeDir()
-	localToolPath := filepath.Join(home, ".cceasy", "tools")
+	localToolPath := filepath.Join(home, ".maclaw", "data", "tools")
 	nodePath := `C:\Program Files\nodejs`
 	npmPath := filepath.Join(os.Getenv("AppData"), "npm")
 
@@ -1551,11 +1551,11 @@ func (a *App) platformLaunch(binaryName string, yoloMode bool, adminMode bool, p
 	ext := strings.ToLower(filepath.Ext(binaryPath))
 
 	if ext == ".cmd" || ext == ".bat" {
-		if strings.Contains(binaryPath, filepath.Join(home, ".cceasy", "tools")) {
+		if strings.Contains(binaryPath, filepath.Join(home, ".maclaw", "data", "tools")) {
 			var jsEntryPoint string
 			packageName := tm.GetPackageName(binaryName)
 			if packageName != "" {
-				pkgDir := filepath.Join(home, ".cceasy", "tools", "node_modules", packageName)
+				pkgDir := filepath.Join(home, ".maclaw", "data", "tools", "node_modules", packageName)
 
 				possibleEntries := []string{
 					filepath.Join(pkgDir, "index.js"),
@@ -1805,7 +1805,7 @@ func createCondaEnvListCmd(condaCmd string) *exec.Cmd {
 
 func (a *App) ensureLocalNodeBinary() {
 	home, _ := os.UserHomeDir()
-	localNodeDir := filepath.Join(home, ".cceasy", "tools")
+	localNodeDir := filepath.Join(home, ".maclaw", "data", "tools")
 
 	if err := os.MkdirAll(localNodeDir, 0755); err != nil {
 		a.log("Failed to create local tools dir: " + err.Error())

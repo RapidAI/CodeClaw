@@ -314,6 +314,7 @@ export function RemoteSessionConsole(props: Props) {
     const sessionClosed = TERMINAL_STATUSES.has(status);
     const disabled = sessionClosed || sending;
     const isSDK = session.execution_mode === "sdk";
+    const isStructured = isSDK || session.execution_mode === "gemini-acp" || session.execution_mode === "codex";
 
     // Merge incoming lines with the local cache — content only grows.
     const incomingLines = session.raw_output_lines || session.preview?.preview_lines || [];
@@ -400,6 +401,12 @@ export function RemoteSessionConsole(props: Props) {
     const handleSendRaw = useCallback(async () => {
         const text = inputValueRef.current;
         if (!text || sending) return;
+        // For structured sessions (SDK, Gemini ACP, Codex), fall back to normal send
+        // to avoid sending each character as a separate prompt.
+        if (isStructured) {
+            handleSend();
+            return;
+        }
         setSending(true);
         try {
             for (let i = 0; i < text.length; i++) {
@@ -417,7 +424,7 @@ export function RemoteSessionConsole(props: Props) {
             showSendInfo(`✗ raw: ${String(e)}`);
         }
         setSending(false);
-    }, [session.id, sending, setRemoteInputDrafts, refreshSessionsOnly, showSendInfo]);
+    }, [session.id, sending, isStructured, handleSend, setRemoteInputDrafts, refreshSessionsOnly, showSendInfo]);
 
     const handleInputChange = (value: string) => {
         inputValueRef.current = value;
@@ -426,9 +433,9 @@ export function RemoteSessionConsole(props: Props) {
 
     const handleCtrlC = useCallback(async () => {
         try {
-            if (isSDK) {
+            if (isStructured) {
                 await InterruptRemoteSession(session.id);
-                showSendInfo("✓ Interrupt (SDK)");
+                showSendInfo("✓ Interrupt");
             } else {
                 await SendRemoteSessionRawInput(session.id, "\x03");
                 showSendInfo("✓ Ctrl+C");
@@ -437,7 +444,7 @@ export function RemoteSessionConsole(props: Props) {
         } catch (e) {
             showSendInfo(`✗ Ctrl+C: ${String(e)}`);
         }
-    }, [session.id, isSDK, refreshSessionsOnly, showSendInfo]);
+    }, [session.id, isStructured, refreshSessionsOnly, showSendInfo]);
 
     const handleEsc = useCallback(async () => {
         try {
@@ -783,7 +790,7 @@ export function RemoteSessionConsole(props: Props) {
                     </div>
                     <span style={{ color: statusColor, fontSize: "9px", flexShrink: 0 }}>●</span>
                     <span style={titleTextStyle}>
-                        {session.tool || "session"}{isSDK ? " (SDK)" : ""} · {status}
+                        {session.tool || "session"}{session.execution_mode && session.execution_mode !== "pty" ? ` (${session.execution_mode})` : ""} · {status}
                     </span>
                 </div>
 
@@ -793,7 +800,7 @@ export function RemoteSessionConsole(props: Props) {
                         title="清屏">
                         ⌧
                     </button>
-                    {!readOnly && !isSDK && (
+                    {!readOnly && !isStructured && (
                         <button onClick={handleEsc} disabled={sessionClosed}
                             style={actionBtnStyle} title="Escape">
                             Esc
@@ -802,8 +809,8 @@ export function RemoteSessionConsole(props: Props) {
                     {!readOnly && (
                         <button onClick={handleCtrlC} disabled={sessionClosed}
                             style={{ ...actionBtnStyle, color: "#e8a838" }}
-                            title={isSDK ? "中断" : "Ctrl+C"}>
-                            {isSDK ? "⏸" : "⌃C"}
+                            title={isStructured ? "中断" : "Ctrl+C"}>
+                            {isStructured ? "⏸" : "⌃C"}
                         </button>
                     )}
                     {!readOnly && (
@@ -867,13 +874,13 @@ export function RemoteSessionConsole(props: Props) {
                             handleSend();
                         }
                     }}
-                    placeholder={disabled ? (sessionClosed ? "会话已结束" : "发送中...") : (isSDK ? "输入消息..." : "输入命令...")}
+                    placeholder={disabled ? (sessionClosed ? "会话已结束" : "发送中...") : (isStructured ? "输入消息..." : "输入命令...")}
                     disabled={disabled}
                     autoCapitalize="off"
                     autoCorrect="off"
                     spellCheck={false}
                 />
-                {!isSDK && (
+                {!isStructured && (
                     <button onClick={handleSendRaw} disabled={disabled}
                         style={{ ...inputBtnStyle, color: "#6a9955", borderColor: "#6a9955" }}
                         title="逐字符发送 (TUI)">
