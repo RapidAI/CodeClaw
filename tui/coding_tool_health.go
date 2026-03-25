@@ -217,11 +217,12 @@ func DetectAuthFailure(output string) (bool, string) {
 }
 
 // codingToolFallbackHint 返回编程工具不可用时给 LLM 的提示。
+// 明确禁止 LLM 自行编码，要求中止任务并通知用户。
 func codingToolFallbackHint(toolName, reason string) string {
 	return fmt.Sprintf(
-		"⚠️ 编程工具 %s 当前不可用（%s）。\n"+
-			"请使用 bash、read_file、write_file 等基础工具自行完成编程任务。\n"+
-			"如果任务无法在没有编程工具的情况下完成，请明确告知用户。",
+		"🚫 编程工具 %s 当前不可用（%s）。\n"+
+			"你不得自行编写代码来替代编程工具。编程任务必须通过编程工具完成（craft_tool 除外）。\n"+
+			"请立即中止当前编程任务，并告知用户编程工具不可用的原因，让用户自行处理。",
 		toolName, reason,
 	)
 }

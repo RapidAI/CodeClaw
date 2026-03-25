@@ -82,6 +82,54 @@ jobs:
         shell: pwsh
         run: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
 
+      - name: Generate ICO from PNG if needed
+        shell: pwsh
+        run: |
+          $ico = $env:BRAND_ICON_ICO
+          if ($ico -and -not (Test-Path $ico)) {
+            $png = $ico -replace '\.ico$', '.png'
+            if (-not (Test-Path $png)) {
+              Write-Error "Neither $ico nor $png found"; exit 1
+            }
+            Write-Host "Converting $png -> $ico (multi-size)"
+            Add-Type -AssemblyName System.Drawing
+            $src = [System.Drawing.Bitmap]::FromFile((Resolve-Path $png))
+            # Build ICO binary: header + directory entries + PNG data for each size
+            $sizes = @(256, 128, 64, 48, 32, 16)
+            $ms = New-Object System.IO.MemoryStream
+            $bw = New-Object System.IO.BinaryWriter($ms)
+            # ICO header: reserved(2) + type=1(2) + count(2)
+            $bw.Write([uint16]0); $bw.Write([uint16]1); $bw.Write([uint16]$sizes.Count)
+            # Collect PNG data first to calculate offsets
+            $pngDataList = @()
+            foreach ($sz in $sizes) {
+              $resized = New-Object System.Drawing.Bitmap($src, $sz, $sz)
+              $pngMs = New-Object System.IO.MemoryStream
+              $resized.Save($pngMs, [System.Drawing.Imaging.ImageFormat]::Png)
+              $pngDataList += ,($pngMs.ToArray())
+              $pngMs.Dispose(); $resized.Dispose()
+            }
+            # Directory entries offset starts after header(6) + entries(16 * count)
+            $dataOffset = 6 + 16 * $sizes.Count
+            for ($i = 0; $i -lt $sizes.Count; $i++) {
+              $sz = $sizes[$i]; $data = $pngDataList[$i]
+              $bw.Write([byte]$(if ($sz -ge 256) { 0 } else { $sz }))  # width
+              $bw.Write([byte]$(if ($sz -ge 256) { 0 } else { $sz }))  # height
+              $bw.Write([byte]0)       # color palette
+              $bw.Write([byte]0)       # reserved
+              $bw.Write([uint16]1)     # color planes
+              $bw.Write([uint16]32)    # bits per pixel
+              $bw.Write([uint32]$data.Length)  # image data size
+              $bw.Write([uint32]$dataOffset)   # offset
+              $dataOffset += $data.Length
+            }
+            # Write PNG data
+            foreach ($data in $pngDataList) { $bw.Write($data) }
+            [System.IO.File]::WriteAllBytes($ico, $ms.ToArray())
+            $bw.Dispose(); $ms.Dispose(); $src.Dispose()
+            Write-Host "Created $ico with sizes: $($sizes -join ', ')"
+          }
+
       - name: Generate Windows resources & build GUI
         shell: pwsh
         run: |
@@ -121,13 +169,13 @@ jobs:
           & $goversioninfo -64 -icon $env:BRAND_ICON_ICO -manifest build/windows/wails.exe.manifest.tmp -o gui/resource_windows_amd64.syso build/windows/versioninfo.json.tmp
           $env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
           go build -tags $guiTags -ldflags "-s -w -H windowsgui" -o "dist/${outName}_amd64.exe" ./gui/
-          Remove-Item gui/resource_windows_amd64.syso
+          Remove-Item gui/resource_windows_amd64.syso -ErrorAction SilentlyContinue
 
           # --- arm64 ---
           & $goversioninfo -64 -arm -icon $env:BRAND_ICON_ICO -manifest build/windows/wails.exe.manifest.tmp -o gui/resource_windows_arm64.syso build/windows/versioninfo.json.tmp
           $env:GOARCH='arm64'
           go build -tags $guiTags -ldflags "-s -w -H windowsgui" -o "dist/${outName}_arm64.exe" ./gui/
-          Remove-Item gui/resource_windows_arm64.syso
+          Remove-Item gui/resource_windows_arm64.syso -ErrorAction SilentlyContinue
 
           Remove-Item build/windows/wails.exe.manifest.tmp, build/windows/versioninfo.json.tmp
 
@@ -222,9 +270,11 @@ jobs:
         run: |
           BRAND="${{ matrix.brand }}"
           if [ -n "$BRAND" ]; then
-            # Brand display name mapping
-            declare -A DISPLAY_NAMES=( ["qianxin"]="TigerClaw" )
-            DISPLAY_NAME="${DISPLAY_NAMES[$BRAND]:-$BRAND}"
+            # Brand display name mapping (case instead of declare -A for macOS bash 3.x compat)
+            case "$BRAND" in
+              qianxin) DISPLAY_NAME="TigerClaw" ;;
+              *)       DISPLAY_NAME="$BRAND" ;;
+            esac
             echo "BRAND_TAG=oem_${BRAND}" >> $GITHUB_ENV
             echo "BRAND_ICON_PNG=assets/${BRAND}.png" >> $GITHUB_ENV
             echo "BRAND_APP_NAME=${DISPLAY_NAME}" >> $GITHUB_ENV
@@ -409,8 +459,10 @@ jobs:
         run: |
           BRAND="${{ matrix.brand }}"
           if [ -n "$BRAND" ]; then
-            declare -A DISPLAY_NAMES=( ["qianxin"]="TigerClaw" )
-            DISPLAY_NAME="${DISPLAY_NAMES[$BRAND]:-$BRAND}"
+            case "$BRAND" in
+              qianxin) DISPLAY_NAME="TigerClaw" ;;
+              *)       DISPLAY_NAME="$BRAND" ;;
+            esac
             echo "BRAND_TAG=oem_${BRAND}" >> $GITHUB_ENV
             echo "BRAND_ICON_PNG=assets/${BRAND}.png" >> $GITHUB_ENV
             echo "BRAND_APP_NAME=${DISPLAY_NAME}" >> $GITHUB_ENV

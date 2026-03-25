@@ -236,10 +236,11 @@ func (h *TUIAgentHandler) buildSystemPrompt() string {
 		if summary := h.codingToolHealth.UnavailableToolsSummary(); summary != "" {
 			prompt += fmt.Sprintf(`
 
-⚠️ 以下编程工具当前不可用：
+🚫 以下编程工具当前不可用：
 %s
-请使用 bash、read_file、write_file 等基础工具自行完成编程任务，不要尝试创建这些工具的会话。
-如果任务确实无法在没有编程工具的情况下完成，请明确告知用户。`, summary)
+你不得自行编写代码来替代编程工具。编程任务（除 craft_tool 外）必须通过编程工具完成。
+如果编程工具不可用，请立即中止编程任务，告知用户具体原因，让用户自行排查和修复。
+不要尝试创建这些工具的会话，也不要使用 bash、write_file 等工具代替编程工具写代码。`, summary)
 		}
 	}
 

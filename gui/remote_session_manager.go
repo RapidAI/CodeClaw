@@ -943,12 +943,21 @@ func (m *RemoteSessionManager) runSDKOutputLoop(s *RemoteSession) {
 			// the terminal is no longer blank.
 			stopBusyTicker()
 
+			// Always reset the stall timer — any output (even nudge echoes)
+			// proves the tool is alive.
+			m.stallDetector.ResetTimer(s.ID, len(text) > 0)
+
+			// Filter nudge echoes — when the stall detector sends a nudge,
+			// the tool may echo it back. Strip those lines to avoid clutter.
+			text = m.filterNudgeEchoLines(s.ID, text)
+			if text == "" {
+				continue
+			}
+
 			// Accumulate text for RawOutputLines (desktop terminal)
 			s.mu.Lock()
 			appendStreamText(text)
 			s.mu.Unlock()
-
-			m.stallDetector.ResetTimer(s.ID, len(text) > 0)
 
 			// Accumulate text for preview pipeline — only send complete
 			// lines (containing \n) to avoid fragmenting words/characters
@@ -1415,15 +1424,28 @@ func (m *RemoteSessionManager) runGeminiACPOutputLoop(s *RemoteSession) {
 			}
 		}
 
-		// Append to raw output lines
+		// Append to raw output lines — filter nudge echoes first.
 		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-		s.mu.Lock()
-		appendRawOutputLines(s, lines)
-		s.mu.Unlock()
+		filtered := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if !m.stallDetector.IsNudgeEcho(s.ID, line) {
+				filtered = append(filtered, line)
+			}
+		}
 
+		// Always reset the stall timer — even nudge echoes prove the tool
+		// is alive and responding.
 		m.stallDetector.ResetTimer(s.ID, true)
 
-		result := pipeline.Consume(s, chunk)
+		if len(filtered) == 0 {
+			continue
+		}
+		s.mu.Lock()
+		appendRawOutputLines(s, filtered)
+		s.mu.Unlock()
+
+		filteredText := strings.Join(filtered, "\n") + "\n"
+		result := pipeline.Consume(s, []byte(filteredText))
 
 		s.mu.Lock()
 		applyOutputResult(s, result)
@@ -1436,6 +1458,29 @@ func (m *RemoteSessionManager) runGeminiACPOutputLoop(s *RemoteSession) {
 	}
 }
 
+
+// filterNudgeEchoLines removes lines that are echoes of stall-detector nudge
+// messages. Returns the filtered text; may return "" if all lines were echoes.
+func (m *RemoteSessionManager) filterNudgeEchoLines(sessionID, text string) string {
+	if !strings.Contains(text, "\n") {
+		// Single incomplete line — check as-is.
+		if m.stallDetector.IsNudgeEcho(sessionID, text) {
+			return ""
+		}
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if !m.stallDetector.IsNudgeEcho(sessionID, line) {
+			filtered = append(filtered, line)
+		}
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+	return strings.Join(filtered, "\n")
+}
 
 func appendRecentEvents(events []ImportantEvent, event ImportantEvent, limit int) []ImportantEvent {
 	if event.EventID == "" && event.Type == "" && event.Summary == "" && event.Title == "" {

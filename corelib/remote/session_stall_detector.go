@@ -9,10 +9,10 @@ import (
 
 // StallDetectorConfig holds configuration for the StallDetector.
 type StallDetectorConfig struct {
-	StallTimeout  time.Duration
-	MaxNudgeCount int
+	StallTimeout  time.Duration     // default 90s
+	MaxNudgeCount int               // default 2
 	NudgeMessages map[string]string // per-tool nudge text; key = tool name (lowercase)
-	DefaultNudge  string
+	DefaultNudge  string            // default: concise action-oriented nudge
 }
 
 // sessionStallState tracks stall monitoring state for a single session.
@@ -41,13 +41,13 @@ type StallDetector struct {
 // NewStallDetector creates a StallDetector with the given config.
 func NewStallDetector(config StallDetectorConfig, logger func(string)) *StallDetector {
 	if config.StallTimeout <= 0 {
-		config.StallTimeout = 45 * time.Second
+		config.StallTimeout = 90 * time.Second
 	}
 	if config.MaxNudgeCount <= 0 {
-		config.MaxNudgeCount = 3
+		config.MaxNudgeCount = 2
 	}
 	if config.DefaultNudge == "" {
-		config.DefaultNudge = "continue"
+		config.DefaultNudge = "Continue working on the current task. Do not repeat or re-explain what was already stated."
 	}
 	if logger == nil {
 		logger = func(string) {}
@@ -143,6 +143,8 @@ func (d *StallDetector) GetNudgeCount(sessionID string) int {
 }
 
 // IsNudgeEcho checks whether the given line matches the last nudge text.
+// Uses substring matching because PTY output may wrap or fragment the
+// nudge text across lines.
 func (d *StallDetector) IsNudgeEcho(sessionID string, line string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -150,7 +152,12 @@ func (d *StallDetector) IsNudgeEcho(sessionID string, line string) bool {
 	if !ok || ss.lastNudgeText == "" {
 		return false
 	}
-	return strings.TrimSpace(line) == strings.TrimSpace(ss.lastNudgeText)
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	nudge := strings.TrimSpace(ss.lastNudgeText)
+	return trimmed == nudge || strings.Contains(nudge, trimmed) || strings.Contains(trimmed, nudge)
 }
 
 // Close stops all monitoring and releases resources.
