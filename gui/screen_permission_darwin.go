@@ -109,6 +109,10 @@ import (
 // process lifetime to avoid spamming the user with password dialogs.
 var staleTCCResetOnce sync.Once
 
+// requestPermOnce ensures we only call CGRequestScreenCaptureAccess once
+// per process lifetime to avoid repeatedly showing the system dialog.
+var requestPermOnce sync.Once
+
 // isMacOS26OrLater returns true if running on macOS 26 (Tahoe) or later.
 // macOS 26 = Darwin kernel 25.x.
 func isMacOS26OrLater() bool {
@@ -117,27 +121,29 @@ func isMacOS26OrLater() bool {
 
 // HasScreenRecordingPermission returns true if the app has screen
 // recording permission. It first checks the TCC API, then performs
-// a real 1x1 pixel capture probe to handle macOS 26+ where the API
-// may return true for stale TCC records.
+// a real 1x1 pixel capture probe to handle cases where the API
+// result is stale or out of sync with actual permission state.
 //
 // If the probe fails but the screen is locked, we trust the API result
 // since a locked screen also causes capture to fail.
 func HasScreenRecordingPermission() bool {
-	if !bool(C.preflightScreenCapture()) {
-		return false
-	}
-	// On macOS 26+, CGPreflightScreenCaptureAccess can return true even
-	// when the permission is effectively revoked (stale TCC entry).
-	// Verify with an actual capture probe.
+	apiGranted := bool(C.preflightScreenCapture())
+
+	// Probe is the ground truth — if it succeeds, we have permission
+	// regardless of what the API says (handles TCC cache lag).
 	if C.probeScreenCapture() == 1 {
 		return true
 	}
+
 	// Probe failed. If the screen is locked, the failure is expected —
-	// trust the API result (which said "granted").
+	// trust the API result.
 	if C.isScreenLocked() == 1 {
-		return true
+		return apiGranted
 	}
-	// Screen is not locked but probe failed → permission is stale.
+
+	// Screen is not locked and probe failed.
+	// If API says granted → stale TCC record.
+	// If API says not granted → genuinely no permission.
 	return false
 }
 
@@ -221,6 +227,9 @@ func resetStaleTCCRecord() bool {
 // fails (stale TCC record after pkg upgrade / re-signing), this function
 // will attempt a one-time tccutil reset with admin privileges (system
 // password dialog) followed by a fresh permission request.
+//
+// The system permission dialog (CGRequestScreenCaptureAccess) is called at
+// most once per process lifetime to avoid repeatedly prompting the user.
 func EnsureScreenRecordingPermission() bool {
 	if HasScreenRecordingPermission() {
 		return true
@@ -242,6 +251,10 @@ func EnsureScreenRecordingPermission() bool {
 	}
 
 	// Normal path: request permission (first-time grant).
-	RequestScreenRecordingPermission()
+	// Only show the system dialog once per process to avoid spamming.
+	requestPermOnce.Do(func() {
+		log.Println("[screen_permission] requesting screen capture access (one-time)")
+		RequestScreenRecordingPermission()
+	})
 	return HasScreenRecordingPermission()
 }

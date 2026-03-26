@@ -70,20 +70,20 @@ func IsMacOS26OrLater() bool {
 }
 
 // CheckScreenRecordingPermission returns true if the current process has
-// screen recording permission. Uses the TCC API check plus a real capture
-// probe to handle macOS 26+ stale TCC records. If the probe fails but the
-// screen is locked, trusts the API result since locked screens also cause
-// capture failure.
+// screen recording permission. Uses the actual capture probe as ground
+// truth, falling back to the TCC API only when the screen is locked
+// (since locked screens also cause capture failure).
 func CheckScreenRecordingPermission() bool {
-	if !bool(C.preflightScreenCapture()) {
-		return false
-	}
+	apiGranted := bool(C.preflightScreenCapture())
+
+	// Probe is the ground truth — if it succeeds, we have permission
+	// regardless of what the API says (handles TCC cache lag).
 	if C.probeScreenCapture() == 1 {
 		return true
 	}
 	// Probe failed — if screen is locked, trust the API.
 	if C.isScreenLocked() == 1 {
-		return true
+		return apiGranted
 	}
 	return false
 }
