@@ -58,18 +58,17 @@ func main() {
 	// lock file exists but the owning process is gone.
 	cleanStaleLock()
 
-	// On macOS 15+ (Sequoia and later), AppKit enforces stricter thread-safety
-	// and rendering checks on NSVisualEffectView.  Wails v2's frameless +
-	// translucent window combination can crash at window creation time.
-	// On macOS 26+ (Tahoe), Liquid Glass makes this even worse.
-	// Use a safe, opaque, non-frameless configuration for all macOS versions.
+	// All platforms use frameless mode; the frontend provides its own title bar
+	// with drag region and window controls.
+	// Keep WebviewIsTransparent and WindowIsTranslucent false to avoid
+	// NSVisualEffectView / Liquid Glass crashes on macOS 15+ and 26+.
 	macOpts := &mac.Options{
-		TitleBar:             mac.TitleBarHidden(),
+		TitleBar:             mac.TitleBarDefault(),
 		WebviewIsTransparent: false,
 		WindowIsTranslucent:  false,
 	}
 	bgColour := &options.RGBA{R: 255, G: 255, B: 255, A: 255}
-	frameless := false
+	frameless := true
 
 	// Create application with options
 	appOptions := &options.App{
