@@ -3588,7 +3588,7 @@ func (a *App) CheckUpdate(currentVersion string) (UpdateResult, error) {
 		a.log(a.tr("CheckUpdate: Failed to create request: %v", err))
 		return UpdateResult{LatestVersion: "检查失败", ReleaseUrl: ""}, err
 	}
-	req.Header.Set("User-Agent", "MaClaw")
+	req.Header.Set("User-Agent", brand.Current().DisplayName)
 	// Add GitHub token for authentication (helps avoid rate limiting)
 	// Priority: 1) GITHUB_TOKEN environment variable, 2) Built-in default token (base64 encoded 3 times)
 	const defaultGitHubTokenEncoded = "V2pKb2QxZ3hjREJPVmtZeVVXNXNUV0ZZVmtOaFZFSktWbXBuTWxsWVNrOVNhbWhYWTI1a1ZsRlVUbXBWZWtaUVlsWk9TR1IzUFQwPQ=="
@@ -3684,10 +3684,11 @@ func (a *App) CheckUpdate(currentVersion string) (UpdateResult, error) {
 	// Extract download URL from assets
 	var downloadUrl string
 	var targetFileName string
+	brandName := brand.Current().DisplayName
 	if goruntime.GOOS == "darwin" {
-		targetFileName = "MaClaw-Universal.pkg"
+		targetFileName = brandName + "-Universal.pkg"
 	} else {
-		targetFileName = "MaClaw-Setup.exe"
+		targetFileName = brandName + "-Setup.exe"
 	}
 	// Parse assets array from GitHub API response
 	if assets, ok := release["assets"].([]interface{}); ok && len(assets) > 0 {

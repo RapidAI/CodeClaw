@@ -1682,7 +1682,7 @@ function App() {
         SetLanguage(initialLang);
 
         // Load brand info from backend
-        GetBrandInfo().then(info => {
+        GetBrandInfo().then((info: any) => {
             setBrandInfo(info);
         }).catch(() => {});
 

@@ -354,6 +354,35 @@ export namespace main {
 	        this.os_version = source["os_version"];
 	    }
 	}
+
+	export class BrandInfo {
+	    id: string;
+	    displayName: string;
+	    displayNameCN: string;
+	    slogan: string;
+	    author: string;
+	    businessContact: string;
+	    websiteURL: string;
+	    githubURL: string;
+	    iconPath: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BrandInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.displayName = source["displayName"];
+	        this.displayNameCN = source["displayNameCN"];
+	        this.slogan = source["slogan"];
+	        this.author = source["author"];
+	        this.businessContact = source["businessContact"];
+	        this.websiteURL = source["websiteURL"];
+	        this.githubURL = source["githubURL"];
+	        this.iconPath = source["iconPath"];
+	    }
+	}
 	
 	export class ToolStatus {
 	    name: string;

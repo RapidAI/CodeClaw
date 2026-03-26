@@ -126,6 +126,10 @@ export function GetUserHomeDir() {
   return window['go']['main']['App']['GetUserHomeDir']();
 }
 
+export function GetBrandInfo() {
+  return window['go']['main']['App']['GetBrandInfo']();
+}
+
 export function InstallDefaultMarketplace() {
   return window['go']['main']['App']['InstallDefaultMarketplace']();
 }

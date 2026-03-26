@@ -39,9 +39,11 @@ jobs:
           if ($brand -ne "") {
             # Brand display name mapping
             $displayNames = @{ "qianxin" = "TigerClaw" }
+            $icoNames = @{ "qianxin" = "tigerclaw" }
             $displayName = if ($displayNames.ContainsKey($brand)) { $displayNames[$brand] } else { $brand }
+            $icoName = if ($icoNames.ContainsKey($brand)) { $icoNames[$brand] } else { $brand }
             echo "BRAND_TAG=oem_${brand}" >> $env:GITHUB_ENV
-            echo "BRAND_ICON_ICO=assets/${brand}.ico" >> $env:GITHUB_ENV
+            echo "BRAND_ICON_ICO=assets/${icoName}.ico" >> $env:GITHUB_ENV
             echo "BRAND_ICON_PNG=assets/${brand}.png" >> $env:GITHUB_ENV
             echo "BRAND_APP_NAME=${displayName}" >> $env:GITHUB_ENV
             echo "BRAND_DISPLAY_NAME=${displayName}" >> $env:GITHUB_ENV
