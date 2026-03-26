@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -29,7 +29,7 @@ import (
 const imHeartbeatMsg = "__heartbeat__"
 
 // ---------------------------------------------------------------------------
-// IMMessageHandler — handles IM messages forwarded from Hub via WebSocket
+// IMMessageHandler �?handles IM messages forwarded from Hub via WebSocket
 // ---------------------------------------------------------------------------
 
 // MessageAttachment represents a file/image/audio attachment from IM.
@@ -49,7 +49,7 @@ type IMUserMessage struct {
 	Attachments        []MessageAttachment `json:"attachments,omitempty"`          // File/image attachments from user
 	MinIterations      int                 `json:"min_iterations,omitempty"`       // floor for agent loop iterations (used by scheduled tasks)
 	IsBackground       bool                `json:"is_background,omitempty"`        // true for scheduled tasks / auto-picked tasks (uses separate HTTP client)
-	BackgroundSlotKind string              `json:"background_slot_kind,omitempty"` // "coding", "scheduled", "auto" — determines concurrency slot (default: "scheduled")
+	BackgroundSlotKind string              `json:"background_slot_kind,omitempty"` // "coding", "scheduled", "auto" �?determines concurrency slot (default: "scheduled")
 }
 
 // IMAgentResponse is the structured reply sent back to Hub.
@@ -258,7 +258,7 @@ func estimateTokens(entries []conversationEntry) int {
 //
 // For multimodal messages (content is []interface{} with image_url blocks),
 // base64 image data is excluded from the estimate since it doesn't consume
-// text tokens — vision tokens are counted separately by the API.
+// text tokens �?vision tokens are counted separately by the API.
 func estimateConversationTokens(msgs []interface{}) int {
 	total := 0
 	for _, m := range msgs {
@@ -278,17 +278,17 @@ func estimateConversationTokens(msgs []interface{}) int {
 				}
 				blockType, _ := bm["type"].(string)
 				if blockType == "image_url" {
-					// Vision image block — count a fixed ~85 tokens (low-detail)
+					// Vision image block �?count a fixed ~85 tokens (low-detail)
 					// instead of serializing the huge base64 string.
 					total += 85
 					continue
 				}
 				if blockType == "image" {
-					// Anthropic-style image block — same treatment.
+					// Anthropic-style image block �?same treatment.
 					total += 85
 					continue
 				}
-				// Text or other block — estimate normally.
+				// Text or other block �?estimate normally.
 				data, _ := json.Marshal(bm)
 				total += estimateBytesToTokens(data)
 			}
@@ -452,12 +452,12 @@ func trimConversation(msgs []interface{}, tokenLimit int, toolsTokens int, summa
 				if len(summary) > 5000 {
 					runes := []rune(summary)
 					if len(runes) > 5000 {
-						summary = string(runes[:5000]) + "…"
+						summary = string(runes[:5000]) + "�?
 					}
 				}
 				placeholder = []interface{}{
 					map[string]string{"role": "user", "content": "[对话历史摘要]\n" + summary},
-					map[string]string{"role": "assistant", "content": "好的，我已了解之前的对话上下文。"},
+					map[string]string{"role": "assistant", "content": "好的，我已了解之前的对话上下文�?},
 				}
 			}
 		}
@@ -480,7 +480,7 @@ func trimConversation(msgs []interface{}, tokenLimit int, toolsTokens int, summa
 		return result
 	}
 
-	// Even keeping only the last group doesn't fit — try secondary truncation
+	// Even keeping only the last group doesn't fit �?try secondary truncation
 	// of tool results within the last group to squeeze it in.
 	lastG := groups[len(groups)-1]
 	result := truncateLastGroup(msgs, lastG.start, lastG.end, systemMsg, fallbackPlaceholder)
@@ -488,7 +488,7 @@ func trimConversation(msgs []interface{}, tokenLimit int, toolsTokens int, summa
 		return result
 	}
 
-	// Still over budget — aggressively truncate assistant content in the result
+	// Still over budget �?aggressively truncate assistant content in the result
 	// while keeping tool-call pairs intact.
 	result = truncateAssistantContent(result, msgBudget)
 	if estimateConversationTokens(result) <= msgBudget {
@@ -516,7 +516,7 @@ func truncateLastGroup(msgs []interface{}, start, end int, systemMsg, placeholde
 					headRunes := 400
 					tailRunes := 200
 					if len(runes) > headRunes+tailRunes {
-						truncated := string(runes[:headRunes]) + "\n…(截断)…\n" + string(runes[len(runes)-tailRunes:])
+						truncated := string(runes[:headRunes]) + "\n�?截断)…\n" + string(runes[len(runes)-tailRunes:])
 						cp := make(map[string]interface{}, len(mm))
 						for k, v := range mm {
 							cp[k] = v
@@ -561,7 +561,7 @@ func truncateAssistantContent(msgs []interface{}, budget int) []interface{} {
 		if rc, _ := cp["reasoning_content"].(string); len(rc) > 200 {
 			runes := []rune(rc)
 			if len(runes) > 200 {
-				cp["reasoning_content"] = string(runes[:100]) + "\n…(reasoning truncated)…\n" + string(runes[len(runes)-50:])
+				cp["reasoning_content"] = string(runes[:100]) + "\n�?reasoning truncated)…\n" + string(runes[len(runes)-50:])
 			}
 		}
 		content, _ := cp["content"].(string)
@@ -574,7 +574,7 @@ func truncateAssistantContent(msgs []interface{}, budget int) []interface{} {
 			result[i] = cp
 			continue
 		}
-		cp["content"] = string(runes[:100]) + "\n…(截断)…\n" + string(runes[len(runes)-50:])
+		cp["content"] = string(runes[:100]) + "\n�?截断)…\n" + string(runes[len(runes)-50:])
 		result[i] = cp
 	}
 	return result
@@ -601,7 +601,7 @@ func trimHistory(entries []conversationEntry) []conversationEntry {
 	}
 	trimmed := entries[len(entries)-maxConversationTurns:]
 	// Ensure we don't start with orphaned "tool" messages that lack a
-	// preceding assistant message with tool_calls — the LLM API rejects
+	// preceding assistant message with tool_calls �?the LLM API rejects
 	// such sequences with "Messages with role 'tool' must be a response
 	// to a preceding message with 'tool_calls'".
 	for len(trimmed) > 0 && trimmed[0].Role == "tool" {
@@ -624,7 +624,7 @@ func truncateToolResult(s string) string {
 	}
 	headLen := maxToolResultLen * 2 / 3
 	tailLen := maxToolResultLen - headLen - 40 // 40 bytes for the separator
-	return s[:headLen] + "\n\n... (已截断，共 " + fmt.Sprintf("%d", len(s)) + " 字节) ...\n\n" + s[len(s)-tailLen:]
+	return s[:headLen] + "\n\n... (已截断，�?" + fmt.Sprintf("%d", len(s)) + " 字节) ...\n\n" + s[len(s)-tailLen:]
 }
 
 // truncateToolResultForTool applies tool-specific truncation strategies.
@@ -635,7 +635,7 @@ func truncateToolResult(s string) string {
 const webFetchMaxToolResult = 20480
 
 func truncateToolResultForTool(toolName, s string) string {
-	// web_fetch gets a higher budget — content is already truncated in handler
+	// web_fetch gets a higher budget �?content is already truncated in handler
 	limit := maxToolResultLen
 	if toolName == "web_fetch" {
 		limit = webFetchMaxToolResult
@@ -643,7 +643,7 @@ func truncateToolResultForTool(toolName, s string) string {
 	if len(s) <= limit {
 		return s
 	}
-	sep := "\n\n... (已截断，共 " + fmt.Sprintf("%d", len(s)) + " 字节) ...\n\n"
+	sep := "\n\n... (已截断，�?" + fmt.Sprintf("%d", len(s)) + " 字节) ...\n\n"
 	sepLen := len(sep)
 	budget := limit - sepLen
 
@@ -686,7 +686,7 @@ func stripThinkingTags(s string) string {
 const toolsCacheTTL = 5 * time.Second
 
 // ProgressCallback is called by the agent loop to send intermediate progress
-// ProgressCallback — see corelib_aliases.go
+// ProgressCallback �?see corelib_aliases.go
 
 // IMMessageHandler processes IM messages using the local LLM Agent.
 // It accesses mcpRegistry and skillExecutor via h.app at call time
@@ -732,7 +732,7 @@ type IMMessageHandler struct {
 	// Configuration manager (lazily initialized via setter).
 	configManager *ConfigManager
 
-	// Dynamic loop limit — set by the "set_max_iterations" tool during an
+	// Dynamic loop limit �?set by the "set_max_iterations" tool during an
 	// active agent loop. Reset to 0 at the start of each runAgentLoop call.
 	// A positive value overrides the configured maxIter for the current loop.
 	// NOTE: This field is kept as a legacy bridge alongside currentLoopCtx.
@@ -760,11 +760,15 @@ type IMMessageHandler struct {
 	// desktop GUI after connecting to the Hub. When nil, IM forwarding is
 	// silently skipped.
 	imFileSender func(b64Data, fileName, mimeType, message string) error
+
+	// agentActivity is a process-local shared store that lets the GUI AI
+	// assistant and IM channels see each other's active tasks.
+	agentActivity *AgentActivityStore
 }
 
 // NewIMMessageHandler creates a new handler.
 func NewIMMessageHandler(app *App, manager *RemoteSessionManager) *IMMessageHandler {
-	// Optimised transport for interactive chat — larger connection pool
+	// Optimised transport for interactive chat �?larger connection pool
 	// so concurrent requests don't queue behind each other.
 	chatTransport := &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
@@ -772,8 +776,7 @@ func NewIMMessageHandler(app *App, manager *RemoteSessionManager) *IMMessageHand
 		MaxIdleConnsPerHost: 20,
 		MaxConnsPerHost:     20,
 		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  true, // 禁止自动 gzip，避免 SSE 流式被压缩缓冲
-	}
+		DisableCompression:  true, // 禁止自动 gzip，避�?SSE 流式被压缩缓�?	}
 	// Separate transport for background tasks (scheduled tasks, auto-picked
 	// ClawNet tasks) so they never starve the chat connection pool.
 	taskTransport := &http.Transport{
@@ -794,6 +797,7 @@ func NewIMMessageHandler(app *App, manager *RemoteSessionManager) *IMMessageHand
 		memory:     newConversationMemory(),
 		client:     chatClient,
 		taskClient: taskClient,
+		agentActivity: NewAgentActivityStore(),
 	}
 	// Initialize ToolRegistry and register builtin tools.
 	h.registry = NewToolRegistry()
@@ -901,7 +905,7 @@ func (h *IMMessageHandler) getTools() []map[string]interface{} {
 	var tools []map[string]interface{}
 
 	// --- Phase 1 upgrade: prefer DynamicToolBuilder from ToolRegistry ---
-	// Note: We use BuildAll() here intentionally — context-aware filtering
+	// Note: We use BuildAll() here intentionally �?context-aware filtering
 	// is handled downstream by routeTools() / ToolRouter which uses TF-IDF.
 	// DynamicToolBuilder.Build(msg) is an alternative path for simpler setups
 	// without ToolRouter.
@@ -932,7 +936,7 @@ func (h *IMMessageHandler) getTools() []map[string]interface{} {
 		cacheTime := h.toolsCacheTime
 		h.toolsMu.RUnlock()
 
-		// Fallback: no generator configured — use hardcoded definitions.
+		// Fallback: no generator configured �?use hardcoded definitions.
 		if gen == nil {
 			tools = h.buildToolDefinitions()
 		} else if cached != nil && time.Since(cacheTime) < toolsCacheTTL {
@@ -985,12 +989,12 @@ func (h *IMMessageHandler) syncClawNetTools() {
 	if running && !hasSearch {
 		h.registry.Register(RegisteredTool{
 			Name:        "clawnet_search",
-			Description: "在虾网（ClawNet P2P 知识网络）中搜索知识条目。返回匹配的知识列表，包含标题、内容、作者等。",
+			Description: "在虾网（ClawNet P2P 知识网络）中搜索知识条目。返回匹配的知识列表，包含标题、内容、作者等�?,
 			Category:    ToolCategoryBuiltin,
 			Tags:        []string{"clawnet", "search", "knowledge", "p2p"},
 			Status:      RegToolAvailable,
 			InputSchema: map[string]interface{}{
-				"query": map[string]string{"type": "string", "description": "搜索关键词"},
+				"query": map[string]string{"type": "string", "description": "搜索关键�?},
 			},
 			Required: []string{"query"},
 			Source:   "clawnet",
@@ -998,13 +1002,13 @@ func (h *IMMessageHandler) syncClawNetTools() {
 		})
 		h.registry.Register(RegisteredTool{
 			Name:        "clawnet_publish",
-			Description: "向虾网（ClawNet P2P 知识网络）发布一条知识条目。发布后其他节点可以搜索到。",
+			Description: "向虾网（ClawNet P2P 知识网络）发布一条知识条目。发布后其他节点可以搜索到�?,
 			Category:    ToolCategoryBuiltin,
 			Tags:        []string{"clawnet", "publish", "knowledge", "p2p"},
 			Status:      RegToolAvailable,
 			InputSchema: map[string]interface{}{
 				"title": map[string]string{"type": "string", "description": "知识标题"},
-				"body":  map[string]string{"type": "string", "description": "知识内容（Markdown 格式）"},
+				"body":  map[string]string{"type": "string", "description": "知识内容（Markdown 格式�?},
 			},
 			Required: []string{"title", "body"},
 			Source:   "clawnet",
@@ -1023,8 +1027,8 @@ func (h *IMMessageHandler) HandleIMMessage(msg IMUserMessage) *IMAgentResponse {
 
 // HandleIMMessageWithProgress processes an IM message with an optional progress
 // callback. When onProgress is non-nil, the agent loop sends intermediate status
-// updates (e.g. "正在执行 bash 命令…") so the Hub can relay them to the user
-// and reset the response timeout — preventing 504 on long-running tasks.
+// updates (e.g. "正在执行 bash 命令�?) so the Hub can relay them to the user
+// and reset the response timeout �?preventing 504 on long-running tasks.
 func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProgress ProgressCallback) *IMAgentResponse {
 	return h.HandleIMMessageWithProgressAndStream(msg, onProgress, nil, nil)
 }
@@ -1037,12 +1041,12 @@ func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProg
 func (h *IMMessageHandler) HandleIMMessageWithProgressAndStream(msg IMUserMessage, onProgress ProgressCallback, onToken TokenCallback, onNewRound NewRoundCallback) *IMAgentResponse {
 	trimmed := strings.TrimSpace(msg.Text)
 
-	// Slash commands are processed before the LLM config check — they don't
+	// Slash commands are processed before the LLM config check �?they don't
 	// need LLM and must always work so users can manage state even when LLM
 	// is misconfigured.
 	if trimmed == "/new" || trimmed == "/reset" || trimmed == "/clear" {
 		h.memory.clear(msg.UserID)
-		return &IMAgentResponse{Text: "对话已重置。"}
+		return &IMAgentResponse{Text: "对话已重置�?}
 	}
 	if trimmed == "/exit" || trimmed == "/quit" {
 		return h.handleExitCommand(msg.UserID)
@@ -1052,15 +1056,15 @@ func (h *IMMessageHandler) HandleIMMessageWithProgressAndStream(msg IMUserMessag
 	}
 	if trimmed == "/help" {
 		return &IMAgentResponse{Text: "📖 可用命令:\n" +
-			"/new /reset — 重置对话\n" +
-			"/exit /quit — 终止所有会话，退出编程模式\n" +
-			"/sessions — 查看当前会话状态\n" +
-			"/help — 显示此帮助"}
+			"/new /reset �?重置对话\n" +
+			"/exit /quit �?终止所有会话，退出编程模式\n" +
+			"/sessions �?查看当前会话状态\n" +
+			"/help �?显示此帮�?}
 	}
 
 	if !h.app.isMaclawLLMConfigured() {
 		return &IMAgentResponse{
-			Error: "MaClaw LLM 未配置，无法处理请求。请在 MaClaw 客户端的设置中配置 LLM。",
+			Error: "MaClaw LLM 未配置，无法处理请求。请�?MaClaw 客户端的设置中配�?LLM�?,
 		}
 	}
 
@@ -1081,11 +1085,11 @@ func (h *IMMessageHandler) HandleIMMessageWithProgressAndStream(msg IMUserMessag
 
 		loopCtx, waitC := h.bgManager.SpawnOrQueue(slotKind, msg.UserID, msg.Text, maxIter)
 		if loopCtx == nil && waitC != nil {
-			// Slot full — block until a slot opens.
+			// Slot full �?block until a slot opens.
 			loopCtx = <-waitC
 		}
 		if loopCtx == nil {
-			return &IMAgentResponse{Error: "后台任务启动失败：无法获取执行槽位"}
+			return &IMAgentResponse{Error: "后台任务启动失败：无法获取执行槽�?}
 		}
 		loopCtx.HTTPClient = httpClient
 
@@ -1153,46 +1157,46 @@ func (h *IMMessageHandler) handleExitCommand(userID string) *IMAgentResponse {
 
 	var b strings.Builder
 	if len(killed) > 0 {
-		b.WriteString(fmt.Sprintf("已退出编程模式。终止了 %d 个会话: %s", len(killed), strings.Join(killed, ", ")))
+		b.WriteString(fmt.Sprintf("已退出编程模式。终止了 %d 个会�? %s", len(killed), strings.Join(killed, ", ")))
 	} else {
-		b.WriteString("已退出编程模式。")
+		b.WriteString("已退出编程模式�?)
 	}
 	if failCount > 0 {
-		b.WriteString(fmt.Sprintf("\n⚠️ %d 个会话终止失败，可能需要手动处理。", failCount))
+		b.WriteString(fmt.Sprintf("\n⚠️ %d 个会话终止失败，可能需要手动处理�?, failCount))
 	}
-	b.WriteString("\n对话已重置，后续消息将正常对话。")
+	b.WriteString("\n对话已重置，后续消息将正常对话�?)
 	return &IMAgentResponse{Text: b.String()}
 }
 
 // handleSessionsCommand returns a quick status summary of active sessions.
 func (h *IMMessageHandler) handleSessionsCommand() *IMAgentResponse {
 	if h.manager == nil {
-		return &IMAgentResponse{Text: "会话管理器未初始化。"}
+		return &IMAgentResponse{Text: "会话管理器未初始化�?}
 	}
 	sessions := h.manager.List()
 	if len(sessions) == 0 {
 		return &IMAgentResponse{
-			Text: "当前没有活跃会话。\n\n💡 提示: 发送 /exit 可退出编程模式回到普通对话。",
+			Text: "当前没有活跃会话。\n\n💡 提示: 发�?/exit 可退出编程模式回到普通对话�?,
 		}
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("📋 当前 %d 个会话:\n", len(sessions)))
+	b.WriteString(fmt.Sprintf("📋 当前 %d 个会�?\n", len(sessions)))
 	for _, s := range sessions {
 		s.mu.RLock()
 		status := string(s.Status)
 		task := s.Summary.CurrentTask
 		waiting := s.Summary.WaitingForUser
 		s.mu.RUnlock()
-		b.WriteString(fmt.Sprintf("• [%s] %s — %s", s.ID, s.Tool, status))
+		b.WriteString(fmt.Sprintf("�?[%s] %s �?%s", s.ID, s.Tool, status))
 		if task != "" {
 			b.WriteString(fmt.Sprintf(" | %s", task))
 		}
 		if waiting {
-			b.WriteString(" ⏳等待输入")
+			b.WriteString(" ⏳等待输�?)
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n💡 发送 /exit 可终止所有会话并退出编程模式。")
+	b.WriteString("\n💡 发�?/exit 可终止所有会话并退出编程模式�?)
 	return &IMAgentResponse{Text: b.String()}
 }
 
@@ -1209,7 +1213,7 @@ func (h *IMMessageHandler) compactHistory(entries []conversationEntry, httpClien
 		split++
 	}
 	if split >= len(entries) {
-		// Degenerate case: everything is tool messages — just return as-is.
+		// Degenerate case: everything is tool messages �?just return as-is.
 		return entries
 	}
 	recent := entries[split:]
@@ -1240,7 +1244,7 @@ func (h *IMMessageHandler) compactHistory(entries []conversationEntry, httpClien
 
 	compacted := []conversationEntry{
 		{Role: "user", Content: "[对话历史摘要]\n" + resp.Choices[0].Message.Content},
-		{Role: "assistant", Content: "好的，我已了解之前的对话上下文。"},
+		{Role: "assistant", Content: "好的，我已了解之前的对话上下文�?},
 	}
 	return append(compacted, recent...)
 }
@@ -1465,7 +1469,7 @@ func drainStatusEvents(ctx *LoopContext, conversation *[]interface{}, sendProgre
 }
 
 func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt string, history []conversationEntry, userText string, attachments []MessageAttachment, onProgress ProgressCallback, onToken TokenCallback, onNewRound NewRoundCallback, minIterations int, platform string) (result *IMAgentResponse) {
-	// panic recovery — 防止工具执行异常导致 goroutine 崩溃
+	// panic recovery �?防止工具执行异常导致 goroutine 崩溃
 	defer func() {
 		if r := recover(); r != nil {
 			result = &IMAgentResponse{Error: fmt.Sprintf("Agent 内部错误: %v", r)}
@@ -1486,7 +1490,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 	}
 
 	// isDebug reads the debug toggle live from config so changes take effect
-	// immediately — even mid-loop when the user flips the switch.
+	// immediately �?even mid-loop when the user flips the switch.
 	// Cached for up to 2 seconds to avoid excessive disk reads in the hot loop.
 	var cachedDebug bool
 	var cachedDebugTime time.Time
@@ -1512,8 +1516,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 
 	// Delayed acknowledgment: when debug is off and streaming is not active,
 	// schedule a brief receipt after a short grace period. If the agent loop
-	// finishes quickly (e.g. simple greetings), the receipt is suppressed —
-	// the user sees only the final card, avoiding the redundant "收到，正在处理中" message.
+	// finishes quickly (e.g. simple greetings), the receipt is suppressed �?	// the user sees only the final card, avoiding the redundant "收到，正在处理中" message.
 	// When streaming (onToken != nil), the user already sees real-time output,
 	// so the acknowledgment is unnecessary.
 	const ackDelay = 3 * time.Second
@@ -1523,7 +1526,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 		go func() {
 			select {
 			case <-ackTimer.C:
-				sendProgress("📨 收到，正在处理中，稍后发你结果…")
+				sendProgress("📨 收到，正在处理中，稍后发你结果�?)
 			case <-ackDone:
 				ackTimer.Stop()
 			}
@@ -1564,13 +1567,43 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 	toolsTokenBudget := estimateToolsTokens(tools)
 	httpClient := ctx.HTTPClient
 
+	// Cross-channel activity awareness: report this loop to the shared store
+	// so the other channel (GUI <-> IM) can see what we're doing.
+	activitySource := "im"
+	if platform == "desktop" {
+		activitySource = "gui"
+	}
+	reportActivity := func(iter, maxI int, summary string) {
+		task := userText
+		if len(task) > 100 {
+			task = task[:100] + "..."
+		}
+		if len(summary) > 120 {
+			summary = summary[:120] + "..."
+		}
+		h.agentActivity.Update(&AgentActivity{
+			Source:      activitySource,
+			Task:        task,
+			Iteration:   iter,
+			MaxIter:     maxI,
+			LastSummary: summary,
+		})
+	}
+	reportActivity(0, maxIter, "")
+	defer h.agentActivity.Clear(activitySource)
+
+	// Inject cross-channel activity awareness into the system prompt.
+	if extra := h.agentActivity.FormatForPrompt(activitySource); extra != "" {
+		systemPrompt += extra
+	}
+
 	var conversation []interface{}
 	conversation = append(conversation, map[string]string{"role": "system", "content": systemPrompt})
 	for _, entry := range history {
 		conversation = append(conversation, entry.toMessage())
 	}
 
-	// Build user message — multimodal if attachments contain images.
+	// Build user message �?multimodal if attachments contain images.
 	userContent := buildUserContent(userText, attachments, cfg.Protocol, cfg.SupportsVision)
 	conversation = append(conversation, map[string]interface{}{"role": "user", "content": userContent})
 
@@ -1628,7 +1661,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 					Type:      StatusEventApproachingLimit,
 					LoopID:    ctx.ID,
 					SessionID: ctx.SessionID,
-					Message:   fmt.Sprintf("后台任务 %s 即将达到最大轮数 (%d/%d)", ctx.ID, iteration, effectiveMax),
+					Message:   fmt.Sprintf("后台任务 %s 即将达到最大轮�?(%d/%d)", ctx.ID, iteration, effectiveMax),
 					Remaining: effectiveMax - iteration,
 				}:
 				default:
@@ -1642,10 +1675,10 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 				ctx.SetState("running")
 			case <-ctx.CancelC:
 				ctx.SetState("stopped")
-				return &IMAgentResponse{Text: fmt.Sprintf("后台任务 %s 已被停止。", ctx.ID)}
+				return &IMAgentResponse{Text: fmt.Sprintf("后台任务 %s 已被停止�?, ctx.ID)}
 			case <-time.After(5 * time.Minute):
 				ctx.SetState("timeout")
-				return &IMAgentResponse{Text: fmt.Sprintf("后台任务 %s 等待续命超时，已自动结束。", ctx.ID)}
+				return &IMAgentResponse{Text: fmt.Sprintf("后台任务 %s 等待续命超时，已自动结束�?, ctx.ID)}
 			}
 		}
 
@@ -1668,19 +1701,19 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 		if iteration > 0 {
 			if isDebug() {
 				if maxIter > 0 || h.loopMaxOverride > 0 {
-					sendProgress(fmt.Sprintf("🔄 Agent 推理中（第 %d/%d 轮）…", iteration+1, effectiveMax))
+					sendProgress(fmt.Sprintf("🔄 Agent 推理中（�?%d/%d 轮）�?, iteration+1, effectiveMax))
 				} else {
-					sendProgress(fmt.Sprintf("🔄 Agent 推理中（第 %d 轮）…", iteration+1))
+					sendProgress(fmt.Sprintf("🔄 Agent 推理中（�?%d 轮）�?, iteration+1))
 				}
 			} else if onToken == nil && (iteration == 3 || (iteration > 3 && iteration%5 == 0)) {
 				// Non-debug, non-streaming mode: send a patience hint at iteration 4,
 				// then every 5 rounds so the user knows a long task is still alive.
 				// When streaming, the user already sees real-time output.
-				sendProgress("⏳ 任务较复杂，正在耐心处理中，稍后发你结果…")
+				sendProgress("�?任务较复杂，正在耐心处理中，稍后发你结果�?)
 			}
 		}
 		conversation = trimConversation(conversation, cfg.EffectiveContextTokens(), toolsTokenBudget, makeSummarizer(cfg, httpClient))
-		// Notify frontend of new round (for streaming UI) — skip first iteration
+		// Notify frontend of new round (for streaming UI) �?skip first iteration
 		// since the frontend already created a placeholder message.
 		if onNewRound != nil && iteration > 0 {
 			onNewRound()
@@ -1690,7 +1723,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 			return &IMAgentResponse{Error: fmt.Sprintf("LLM 调用失败: %s", err.Error())}
 		}
 		if len(resp.Choices) == 0 {
-			return &IMAgentResponse{Error: "LLM 未返回有效回复"}
+			return &IMAgentResponse{Error: "LLM 未返回有效回�?}
 		}
 
 		choice := resp.Choices[0]
@@ -1715,13 +1748,18 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 		}
 		conversation = append(conversation, assistantMsg)
 
+		// Update cross-channel activity every 5 iterations.
+		if iteration%5 == 0 {
+			reportActivity(iteration, effectiveMax, msgContent)
+		}
+
 		historyEntry := conversationEntry{Role: "assistant", Content: msgContent, ReasoningContent: msgReasoning}
 		if len(choice.Message.ToolCalls) > 0 {
 			historyEntry.ToolCalls = choice.Message.ToolCalls
 		}
 		history = append(history, historyEntry)
 
-		// No tool calls → final response.
+		// No tool calls �?final response.
 		// NOTE: Some LLM providers (e.g. DeepSeek, Qwen) return finish_reason="stop"
 		// even when tool_calls are present. We must check tool_calls first and only
 		// treat the response as final when there are genuinely no tool calls.
@@ -1735,7 +1773,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 					},
 				)
 				if skillName != "" && err == nil {
-					finalText := fmt.Sprintf("✅ 已自动安装并执行 Skill「%s」\n%s", skillName, result)
+					finalText := fmt.Sprintf("�?已自动安装并执行 Skill�?s」\n%s", skillName, result)
 					h.memory.save(userID, trimHistory(history))
 					return &IMAgentResponse{Text: stripThinkingTags(finalText)}
 				}
@@ -1766,15 +1804,15 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 			toolContent := result
 			if strings.HasPrefix(result, "[screenshot_base64]") {
 				pendingImageKey = strings.TrimPrefix(result, "[screenshot_base64]")
-				toolContent = "截图已成功捕获，将作为图片发送给用户。"
+				toolContent = "截图已成功捕获，将作为图片发送给用户�?
 			}
 
 			// Intercept session-based screenshot: image was already pushed
 			// via session.image WebSocket channel, so we just need to stop
-			// the agent loop — no image data to carry in the response.
+			// the agent loop �?no image data to carry in the response.
 			if result == "[screenshot_sent]" {
 				screenshotAlreadySent = true
-				toolContent = "截图已成功捕获并发送给用户。"
+				toolContent = "截图已成功捕获并发送给用户�?
 			}
 
 			// Intercept file send results: collect ALL files (not just the last one).
@@ -1791,7 +1829,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 						if len(parts) == 3 && parts[2] == "im" {
 							fwd = true
 						} else if len(parts) == 3 {
-							// parts[1] contained a | — shouldn't happen with current
+							// parts[1] contained a | �?shouldn't happen with current
 							// MIME types, but be safe: treat extra segment as part of mime.
 							mType = parts[1] + "|" + parts[2]
 						}
@@ -1802,9 +1840,9 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 							forwardIM: fwd,
 						})
 						if fwd {
-							toolContent = fmt.Sprintf("文件 %s 已准备好，将通过 IM 通道发送给用户。", parts[0])
+							toolContent = fmt.Sprintf("文件 %s 已准备好，将通过 IM 通道发送给用户�?, parts[0])
 						} else {
-							toolContent = fmt.Sprintf("文件 %s 已准备好，将发送给用户。", parts[0])
+							toolContent = fmt.Sprintf("文件 %s 已准备好，将发送给用户�?, parts[0])
 						}
 					}
 				}
@@ -1828,7 +1866,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 			if platform == "desktop" {
 				filePath, err := h.saveScreenshotToFile(pendingImageKey)
 				if err != nil {
-					return &IMAgentResponse{Text: fmt.Sprintf("📷 截图已捕获，但保存文件失败: %s", err.Error())}
+					return &IMAgentResponse{Text: fmt.Sprintf("📷 截图已捕获，但保存文件失�? %s", err.Error())}
 				}
 				// Generate a small thumbnail (reuse the base64 data, frontend will size it)
 				thumb := pendingImageKey
@@ -1839,7 +1877,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 					}
 				}
 				return &IMAgentResponse{
-					Text:            "📷 截图已保存",
+					Text:            "📷 截图已保�?,
 					LocalFilePath:   filePath,
 					ThumbnailBase64: thumb,
 				}
@@ -1851,10 +1889,10 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 		}
 
 		// If screenshot was already delivered via session.image channel,
-		// stop the loop immediately — no further agent reasoning needed.
+		// stop the loop immediately �?no further agent reasoning needed.
 		if screenshotAlreadySent {
 			h.memory.save(userID, trimHistory(history))
-			return &IMAgentResponse{Text: "📷 截图已发送"}
+			return &IMAgentResponse{Text: "📷 截图已发�?}
 		}
 
 		// If file(s) were prepared, return them for delivery.
@@ -1921,7 +1959,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 	// auto-continue one extra round so the agent can check session status,
 	// then ask the user whether to keep watching.
 	if h.manager != nil && h.manager.HasActiveSessions() {
-		sendProgress("⏳ 推理轮次已用完，但编程会话仍在运行，正在检查状态…")
+		sendProgress("�?推理轮次已用完，但编程会话仍在运行，正在检查状态�?)
 
 		// Run one bonus iteration to let the agent observe current session state.
 		conversation = trimConversation(conversation, cfg.EffectiveContextTokens(), toolsTokenBudget, makeSummarizer(cfg, httpClient))
@@ -1971,7 +2009,7 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 		}
 
 		h.memory.save(userID, trimHistory(history))
-		return &IMAgentResponse{Text: "🔔 编程会话还在运行中。回复「继续」可以继续看护，回复其它内容正常对话。"}
+		return &IMAgentResponse{Text: "🔔 编程会话还在运行中。回复「继续」可以继续看护，回复其它内容正常对话�?}
 	}
 
 	h.memory.save(userID, trimHistory(history))
@@ -2032,7 +2070,7 @@ func (h *IMMessageHandler) saveFileDataToLocal(name, base64Data string) (string,
 }
 
 // ---------------------------------------------------------------------------
-// Attachment → LLM Content Builder
+// Attachment �?LLM Content Builder
 // ---------------------------------------------------------------------------
 
 // buildUserContent constructs the user message content for the LLM.
@@ -2054,7 +2092,7 @@ func buildUserContent(userText string, attachments []MessageAttachment, protocol
 			if supportsVision {
 				imageAttachments = append(imageAttachments, *att)
 			} else {
-				// Vision not supported — save image to local file instead.
+				// Vision not supported �?save image to local file instead.
 				displayName := att.FileName
 				if displayName == "" {
 					displayName = "image"
@@ -2062,9 +2100,9 @@ func buildUserContent(userText string, attachments []MessageAttachment, protocol
 				path, err := saveAttachmentToLocal(att)
 				if err != nil {
 					log.Printf("[IM] save image %q failed: %v", att.FileName, err)
-					fileDescriptions = append(fileDescriptions, fmt.Sprintf("[用户发送了图片 %s，保存失败: %v，当前模型不支持图片理解]", displayName, err))
+					fileDescriptions = append(fileDescriptions, fmt.Sprintf("[用户发送了图片 %s，保存失�? %v，当前模型不支持图片理解]", displayName, err))
 				} else {
-					fileDescriptions = append(fileDescriptions, fmt.Sprintf("[用户发送了图片 %s，已保存到 %s，当前模型不支持图片理解]", displayName, path))
+					fileDescriptions = append(fileDescriptions, fmt.Sprintf("[用户发送了图片 %s，已保存�?%s，当前模型不支持图片理解]", displayName, path))
 				}
 			}
 		} else {
@@ -2074,7 +2112,7 @@ func buildUserContent(userText string, attachments []MessageAttachment, protocol
 				log.Printf("[IM] save attachment %q failed: %v", att.FileName, err)
 				fileDescriptions = append(fileDescriptions, fmt.Sprintf("[附件: %s (保存失败: %v)]", att.FileName, err))
 			} else {
-				fileDescriptions = append(fileDescriptions, fmt.Sprintf("[附件: %s → 已保存到 %s]", att.FileName, path))
+				fileDescriptions = append(fileDescriptions, fmt.Sprintf("[附件: %s �?已保存到 %s]", att.FileName, path))
 			}
 		}
 	}
@@ -2204,7 +2242,7 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 	// Priority: memory self_identity > config > hardcoded defaults.
 	// Load config once and reuse for roleName, roleDesc, roleTitle, isProMode, and nickname.
 	roleName := "MaClaw"
-	roleDesc := "一个尽心尽责无所不能的软件开发管家"
+	roleDesc := "一个尽心尽责无所不能的软件开发管�?
 	roleTitle := "AI个人助手"
 	isProMode := false
 	currentNickname := ""
@@ -2229,214 +2267,133 @@ func (h *IMMessageHandler) buildSystemPrompt() string {
 	}
 
 	if selfIdentityOverride != "" {
-		b.WriteString(fmt.Sprintf(`你的自我认知（来自记忆）：%s
-你的底层系统名为 %s。你基于以上自我认知与用户交互。用户通过 IM（飞书/QBot）向你发送消息，你可以自主使用工具完成任务。
-注意：如果用户在对话中要求你扮演其他角色或重新定义你的身份，请按照用户的要求调整，并用 memory(action: save, category: "self_identity") 更新你的自我认知记忆。`, selfIdentityOverride, roleName))
+		b.WriteString(fmt.Sprintf(`你的自我认知（来自记忆）�?s
+你的底层系统名为 %s。你基于以上自我认知与用户交互。用户通过 IM（飞�?QBot）向你发送消息，你可以自主使用工具完成任务�?注意：如果用户在对话中要求你扮演其他角色或重新定义你的身份，请按照用户的要求调整，并�?memory(action: save, category: "self_identity") 更新你的自我认知记忆。`, selfIdentityOverride, roleName))
 	} else {
-		b.WriteString(fmt.Sprintf(`你是 %s %s，%s。
-用户通过 IM（飞书/QBot）向你发送消息，你可以自主使用工具完成任务。
-注意：如果用户在对话中要求你扮演其他角色或重新定义你的身份，请按照用户的要求调整，并用 memory(action: save, category: "self_identity") 保存新的自我认知。`, roleName, roleTitle, roleDesc))
+		b.WriteString(fmt.Sprintf(`你是 %s %s�?s�?用户通过 IM（飞�?QBot）向你发送消息，你可以自主使用工具完成任务�?注意：如果用户在对话中要求你扮演其他角色或重新定义你的身份，请按照用户的要求调整，并�?memory(action: save, category: "self_identity") 保存新的自我认知。`, roleName, roleTitle, roleDesc))
 	}
 
-	// Core principles — always included, but session-related hints only in pro mode.
+	// Core principles �?always included, but session-related hints only in pro mode.
 	b.WriteString(`
 ## 核心原则
-- 主动使用工具：不要只是描述步骤，直接执行。收到请求后立即调用对应工具。
-- 永远不要说"我没有某某工具"或"我无法执行"——先检查你的工具列表，大部分操作都有对应工具。
-- 多步推理：复杂任务可以连续调用多个工具，逐步完成。
-- 记忆上下文：你拥有对话记忆，可以引用之前的对话内容。
-`)
+- 主动使用工具：不要只是描述步骤，直接执行。收到请求后立即调用对应工具�?- 永远不要�?我没有某某工�?�?我无法执�?——先检查你的工具列表，大部分操作都有对应工具�?- 多步推理：复杂任务可以连续调用多个工具，逐步完成�?- 记忆上下文：你拥有对话记忆，可以引用之前的对话内容�?`)
 
 	if isProMode {
 		// Pro mode: full coding workflow with session management.
-		b.WriteString(`- 智能推断参数：如果用户没有指定 session_id 等参数，查看当前会话列表自动选择。
-
-## ⚠️ 编程任务工作流（极其重要）
-
+		b.WriteString(`- 智能推断参数：如果用户没有指�?session_id 等参数，查看当前会话列表自动选择�?
+## ⚠️ 编程任务工作流（极其重要�?
 ### 第一步：识别任务类型
-- 编程任务（Coding_Task）：需要调用 create_session 启动远程编程工具的需求（写代码、重构、修 bug、添加功能等）
-- 非编程任务：简单问答、文件操作（bash/read_file/write_file）、配置管理、截屏等 → 直接执行，不需要确认
-
-⚠️ 以下类型的任务绝对不要调用 create_session，必须用现有工具直接完成：
-- 信息检索类：搜索论文、查资料、查天气、查新闻、查快递
-- 翻译类：翻译文章、翻译论文、全文翻译
-- 文档生成类：生成 PDF、生成报告、写文档、做总结
+- 编程任务（Coding_Task）：需要调�?create_session 启动远程编程工具的需求（写代码、重构、修 bug、添加功能等�?- 非编程任务：简单问答、文件操作（bash/read_file/write_file）、配置管理、截屏等 �?直接执行，不需要确�?
+⚠️ 以下类型的任务绝对不要调�?create_session，必须用现有工具直接完成�?- 信息检索类：搜索论文、查资料、查天气、查新闻、查快�?- 翻译类：翻译文章、翻译论文、全文翻�?- 文档生成类：生成 PDF、生成报告、写文档、做总结
 - 文件操作类：下载文件、发送文件、打开文件
 - 通信类：发邮件、发消息
-- 日常助手类：设提醒、查日程、播放音乐
-
-这些任务应该用 bash（执行命令）、craft_tool（生成脚本）、read_file/write_file（读写文件）、send_file（发送文件）、open（打开文件/网址）等工具直接完成。
-只有真正需要启动 IDE/编程工具来修改项目代码的任务才是编程任务。
-
-### 第二步：检查跳过信号（Skip_Signal）
-如果用户消息中包含以下表达，跳过所有确认阶段，直接进入内部规划后执行：
+- 日常助手类：设提醒、查日程、播放音�?
+这些任务应该�?bash（执行命令）、craft_tool（生成脚本）、read_file/write_file（读写文件）、send_file（发送文件）、open（打开文件/网址）等工具直接完成�?只有真正需要启�?IDE/编程工具来修改项目代码的任务才是编程任务�?
+### 第二步：检查跳过信号（Skip_Signal�?如果用户消息中包含以下表达，跳过所有确认阶段，直接进入内部规划后执行：
 - 中文：直接做、不用问了、按你的想法来、直接开始、不用确认、马上做、赶紧做
 - English：just do it、skip confirmation、go ahead、do it now
-- 在任何确认阶段中收到跳过信号，跳过剩余确认阶段直接进入执行
-- 跳过时仍在内部生成需求理解和设计方案，但不生成 PDF、不等待用户确认
+- 在任何确认阶段中收到跳过信号，跳过剩余确认阶段直接进入执�?- 跳过时仍在内部生成需求理解和设计方案，但不生�?PDF、不等待用户确认
 
-### 第三步：需求确认（Requirements Phase）
-对于编程任务且无跳过信号时，进入 Spec 驱动工作流：
+### 第三步：需求确认（Requirements Phase�?对于编程任务且无跳过信号时，进入 Spec 驱动工作流：
 
-**文档内容要求：**
-生成需求文档，包含：
-a) 需求背景与目标
+**文档内容要求�?*
+生成需求文档，包含�?a) 需求背景与目标
 b) 功能需求列表（每条需求有编号和验收标准）
-c) 非功能需求（如有）
-d) 约束与假设
-
+c) 非功能需求（如有�?d) 约束与假�?
 **文档生成与发送：**
-1. 用 Markdown 格式编写需求文档内容
-2. 生成 PDF 文件（⚠️ 必须是 .pdf 格式，严禁发送 .html 文件到 IM 通道）：
-   - 优先方案：用 craft_tool 生成 Python 脚本，使用 markdown + pdfkit 或 reportlab 将 Markdown 转为 PDF
-   - 备选方案：用 bash 调用 pandoc（pandoc input.md -o output.pdf）或 wkhtmltopdf
-   - ⚠️ 禁止将 HTML 文件直接作为文档发送到 IM——HTML 在飞书/微信/QQ 中显示效果极差
-3. 用 send_file（forward_to_im=true）将 PDF 发送给用户
+1. �?Markdown 格式编写需求文档内�?2. 生成 PDF 文件（⚠�?必须�?.pdf 格式，严禁发�?.html 文件�?IM 通道）：
+   - 优先方案：用 craft_tool 生成 Python 脚本，使�?markdown + pdfkit �?reportlab �?Markdown 转为 PDF
+   - 备选方案：�?bash 调用 pandoc（pandoc input.md -o output.pdf）或 wkhtmltopdf
+   - ⚠️ 禁止�?HTML 文件直接作为文档发送到 IM——HTML 在飞�?微信/QQ 中显示效果极�?3. �?send_file（forward_to_im=true）将 PDF 发送给用户
 4. PDF 文件命名：需求文档_<feature_name>.pdf
-5. ⚠️ 发送 PDF 后必须同时发送明确的行动提示，告知用户需要查看并确认或提出修改意见。格式："📄 已生成需求文档的 PDF 版本，请查看并确认需求是否准确，或提出修改意见。" 禁止只发 PDF 不说话——用户需要明确知道这个文档需要他看、需要他反馈。
+5. ⚠️ 发�?PDF 后必须同时发送明确的行动提示，告知用户需要查看并确认或提出修改意见。格式："📄 已生成需求文档的 PDF 版本，请查看并确认需求是否准确，或提出修改意见�? 禁止只发 PDF 不说话——用户需要明确知道这个文档需要他看、需要他反馈�?
+**确认规则�?*
+- 等待用户明确确认（如"确认"�?没问�?�?通过"）后才进入下一阶段
+- 用户提出修改意见时，更新文档内容，重新生�?PDF 并发�?- 修订后使用最新版本作为后续阶段输�?- 用户发出跳过信号时，跳过剩余确认阶段直接进入执行
 
-**确认规则：**
-- 等待用户明确确认（如"确认"、"没问题"、"通过"）后才进入下一阶段
-- 用户提出修改意见时，更新文档内容，重新生成 PDF 并发送
-- 修订后使用最新版本作为后续阶段输入
-- 用户发出跳过信号时，跳过剩余确认阶段直接进入执行
-
-**PDF 生成失败回退：**
+**PDF 生成失败回退�?*
 - 如果 PDF 生成失败，将文档内容作为 Markdown 纯文本直接发送到 IM，并告知用户 PDF 生成失败
-- ⚠️ 回退时严禁发送 HTML 格式——只能发送 Markdown 纯文本或 PDF，绝不发送 .html 文件
+- ⚠️ 回退时严禁发�?HTML 格式——只能发�?Markdown 纯文本或 PDF，绝不发�?.html 文件
 
-### 第四步：技术设计（Design Phase）
-用户确认需求文档后，进入技术设计阶段：
+### 第四步：技术设计（Design Phase�?用户确认需求文档后，进入技术设计阶段：
 
-**文档内容要求：**
-基于确认的需求文档，生成技术设计文档，包含：
-a) 架构设计（涉及的模块和文件）
-b) 接口设计（关键函数/方法签名）
-c) 数据模型变更（如有）
+**文档内容要求�?*
+基于确认的需求文档，生成技术设计文档，包含�?a) 架构设计（涉及的模块和文件）
+b) 接口设计（关键函�?方法签名�?c) 数据模型变更（如有）
 d) 实现方案概述
 
-**文档生成与发送：**（同第三步的 PDF 生成流程，⚠️ 必须生成 .pdf 文件，严禁发送 .html）
-- PDF 文件命名：设计文档_<feature_name>.pdf
-- ⚠️ 发送 PDF 后必须同时发送明确的行动提示："📄 已生成技术设计文档的 PDF 版本，请查看设计方案并确认，或提出修改意见。"
+**文档生成与发送：**（同第三步的 PDF 生成流程，⚠�?必须生成 .pdf 文件，严禁发�?.html�?- PDF 文件命名：设计文档_<feature_name>.pdf
+- ⚠️ 发�?PDF 后必须同时发送明确的行动提示�?📄 已生成技术设计文档的 PDF 版本，请查看设计方案并确认，或提出修改意见�?
 
-**确认规则：**（同第三步）
-- 用户可要求回退到需求阶段修改（如"需求文档需要改一下"、"回到需求阶段"）
-- 回退后重新生成所有后续阶段文档
-- 告知用户回退信息
+**确认规则�?*（同第三步）
+- 用户可要求回退到需求阶段修改（�?需求文档需要改一�?�?回到需求阶�?�?- 回退后重新生成所有后续阶段文�?- 告知用户回退信息
 
-### 第五步：任务分解（TaskBreakdown Phase）
-用户确认设计文档后，进入任务分解阶段：
+### 第五步：任务分解（TaskBreakdown Phase�?用户确认设计文档后，进入任务分解阶段�?
+**文档内容要求�?*
+基于确认的需求和设计文档，生成任务列表文档，包含�?a) 编号的任务列表（按执行顺序排列）
+b) 每个任务的描述和涉及的文�?c) 每个任务�?TDD 验收测试用例（测试名称、测试步骤、预期结果）
 
-**文档内容要求：**
-基于确认的需求和设计文档，生成任务列表文档，包含：
-a) 编号的任务列表（按执行顺序排列）
-b) 每个任务的描述和涉及的文件
-c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期结果）
+**文档生成与发送：**（同第三步的 PDF 生成流程，⚠�?必须生成 .pdf 文件，严禁发�?.html�?- PDF 文件命名：任务列表_<feature_name>.pdf
+- ⚠️ 发�?PDF 后必须同时发送明确的行动提示�?📄 已生成任务列表的 PDF 版本，请查看任务拆分是否合理，确认后开始执行，或提出修改意见�?
 
-**文档生成与发送：**（同第三步的 PDF 生成流程，⚠️ 必须生成 .pdf 文件，严禁发送 .html）
-- PDF 文件命名：任务列表_<feature_name>.pdf
-- ⚠️ 发送 PDF 后必须同时发送明确的行动提示："📄 已生成任务列表的 PDF 版本，请查看任务拆分是否合理，确认后开始执行，或提出修改意见。"
-
-**确认规则：**（同第三步）
+**确认规则�?*（同第三步）
 - 用户可要求回退到需求或设计阶段修改
-- 回退后重新生成所有后续阶段文档
-- 告知用户回退信息
+- 回退后重新生成所有后续阶段文�?- 告知用户回退信息
 
-### 第六步：任务执行（Execution Phase）
-用户确认任务列表后（或跳过确认后），自动执行所有任务：
+### 第六步：任务执行（Execution Phase�?用户确认任务列表后（或跳过确认后），自动执行所有任务：
 
-**执行规则：**
-1. 按任务列表顺序逐个执行，不再需要用户交互
-2. 每个任务：调用 create_session 启动编程工具，通过 send_and_observe 发送任务描述（附带确认的需求和设计上下文）
-3. 任务编码完成后，指示编程工具运行对应的 TDD 测试用例验证
-4. 测试失败时，指示编程工具修复并重试，最多 3 次
-5. 3 次重试仍失败，记录失败，跳到下一个任务
-6. 每个任务完成后发送进度消息给用户（如"任务 3/8 完成 ✅"或"任务 4/8 失败 ❌"）
+**执行规则�?*
+1. 按任务列表顺序逐个执行，不再需要用户交�?2. 每个任务：调�?create_session 启动编程工具，通过 send_and_observe 发送任务描述（附带确认的需求和设计上下文）
+3. 任务编码完成后，指示编程工具运行对应�?TDD 测试用例验证
+4. 测试失败时，指示编程工具修复并重试，最�?3 �?5. 3 次重试仍失败，记录失败，跳到下一个任�?6. 每个任务完成后发送进度消息给用户（如"任务 3/8 完成 �?�?任务 4/8 失败 �?�?
+⚠️ 严禁自己写代码：编程任务必须通过 create_session 启动专业编程工具完成�?⚠️ 严禁�?create_session 之后、send_and_observe 之前插入其他工具调用�?⚠️ 绝对不要终止状态为 busy 的编程会话——编程工具正在工作中�?
+### 第七步：完成验收（Verification Phase�?所有任务执行完毕后，自动进入验收阶段：
 
-⚠️ 严禁自己写代码：编程任务必须通过 create_session 启动专业编程工具完成。
-⚠️ 严禁在 create_session 之后、send_and_observe 之前插入其他工具调用。
-⚠️ 绝对不要终止状态为 busy 的编程会话——编程工具正在工作中。
-
-### 第七步：完成验收（Verification Phase）
-所有任务执行完毕后，自动进入验收阶段：
-
-**验收流程：**
-1. 指示编程工具运行所有 TDD 测试用例作为全量回归测试
+**验收流程�?*
+1. 指示编程工具运行所�?TDD 测试用例作为全量回归测试
 2. 生成完成报告，包含：
-   a) 总任务数和成功/失败数
-   b) 每个任务的执行结果
-   c) 全量测试运行结果
-   d) 失败任务的错误摘要（如有）
-3. 将完成报告作为文本消息发送给用户
-4. 全部通过：报告功能成功完成
-5. 有失败：列出失败项并建议下一步操作
-
-### 第八步：自动续接（Auto-Resume）
-当编程工具因 token 耗尽正常退出（exit_code=0 或 1，且 get_session_output 返回续接指令）时：
-
-**自动续接规则：**
+   a) 总任务数和成�?失败�?   b) 每个任务的执行结�?   c) 全量测试运行结果
+   d) 失败任务的错误摘要（如有�?3. 将完成报告作为文本消息发送给用户
+4. 全部通过：报告功能成功完�?5. 有失败：列出失败项并建议下一步操�?
+### 第八步：自动续接（Auto-Resume�?当编程工具因 token 耗尽正常退出（exit_code=0 �?1，且 get_session_output 返回续接指令）时�?
+**自动续接规则�?*
 - 不要询问用户是否继续——直接创建新会话续接
-- 调用 create_session（使用相同的 tool 和 project_path）
-- 用 send_and_observe 发送续接指令：「请检查项目当前状态，继续完成之前未完成的任务。查看已有文件，补全缺失的部分，确保项目可以正常运行。」
-- 最多自动续接 10 次（token 耗尽场景）
-- 超过 10 次后，告知用户当前进度并询问是否继续
-- ⚠️ 绝对不要自己用 write_file 写代码替代编程工具——续接必须通过新会话完成
-
-**API 错误自动重试：**
-- 当编程工具因 API 错误退出（exit_code > 1）时，自动重试 1-2 次
-- 上游 API 可能不稳定，短暂等待后重试通常能恢复
-- 超过 2 次仍失败，告知用户错误信息
-
+- 调用 create_session（使用相同的 tool �?project_path�?- �?send_and_observe 发送续接指令：「请检查项目当前状态，继续完成之前未完成的任务。查看已有文件，补全缺失的部分，确保项目可以正常运行。�?- 最多自动续�?10 次（token 耗尽场景�?- 超过 10 次后，告知用户当前进度并询问是否继续
+- ⚠️ 绝对不要自己�?write_file 写代码替代编程工具——续接必须通过新会话完�?
+**API 错误自动重试�?*
+- 当编程工具因 API 错误退出（exit_code > 1）时，自动重�?1-2 �?- 上游 API 可能不稳定，短暂等待后重试通常能恢�?- 超过 2 次仍失败，告知用户错误信�?
 ## ⚠️ 执行验证原则
-每次执行操作后，必须验证是否真正成功，绝不能仅凭工具返回"已发送"就告诉用户执行成功。
-- 优先使用 send_and_observe（发送并等待输出），它会自动等待结果返回
-- 验证失败如实告知用户并尝试修复
-
+每次执行操作后，必须验证是否真正成功，绝不能仅凭工具返回"已发�?就告诉用户执行成功�?- 优先使用 send_and_observe（发送并等待输出），它会自动等待结果返回
+- 验证失败如实告知用户并尝试修�?
 ## 🛑 会话失败止损原则（极其重要）
-当会话状态为 exited 且退出码非 0 时，说明编程工具启动失败或异常退出：
+当会话状态为 exited 且退出码�?0 时，说明编程工具启动失败或异常退出：
 - 不要反复重试创建新会话——同样的环境问题会导致同样的失败
-- 不要反复调用 get_session_output 轮询已退出的会话——状态不会改变
-- 立即停止工具调用，将错误信息和修复建议直接告知用户
-- 常见原因：工具未安装、API Key 未配置、项目路径不存在、网络问题
-- 如果输出中有具体错误信息，提取关键信息告诉用户如何修复
-- 最多重试 1 次（换工具或换服务商），仍然失败则直接告知用户
-
+- 不要反复调用 get_session_output 轮询已退出的会话——状态不会改�?- 立即停止工具调用，将错误信息和修复建议直接告知用�?- 常见原因：工具未安装、API Key 未配置、项目路径不存在、网络问�?- 如果输出中有具体错误信息，提取关键信息告诉用户如何修�?- 最多重�?1 次（换工具或换服务商），仍然失败则直接告知用�?
 ## 工具使用要点
-- 向会话发送指令优先用 send_and_observe（自动等待输出），避免分别调用 send_input + get_session_output
-- 中断或终止会话用 control_session（action: interrupt/kill）
-- 配置管理用 manage_config（action: get/update/batch_update/list_schema/export/import）
-- 简单文件/命令操作直接用 bash/read_file/write_file/list_directory，不要绕道创建会话
-- 截屏直接调用 screenshot，无需活跃会话也能截取本机桌面
-- 用 send_file 通过 IM 通道直接发送文件给用户（支持图片、文档等任意文件类型）。在桌面端默认只保存到本地；如果用户要求发到飞书/微信/QQ，需设置 forward_to_im=true
-- ⚠️ 发送本地磁盘上的文件/图片给用户时，必须用 send_file 工具——会话内的工具无法直接投递文件到 IM。SDK 会话中产生的截图会自动推送给用户，无需额外操作。
-- ⚠️ 桌面端用户说"发到飞书"、"发到微信"、"发到QQ"、"发到 IM"时，必须在 send_file 中设置 forward_to_im=true，否则文件只会保存到本地而不会发送到 IM 平台。
-- 用 open 打开文件或网址（PDF、Excel、URL 等）
-- 创建会话时可用 project_id 参数指定预设项目，或用 project_manage(action="list") 查看可用项目列表
+- 向会话发送指令优先用 send_and_observe（自动等待输出），避免分别调�?send_input + get_session_output
+- 中断或终止会话用 control_session（action: interrupt/kill�?- 配置管理�?manage_config（action: get/update/batch_update/list_schema/export/import�?- 简单文�?命令操作直接�?bash/read_file/write_file/list_directory，不要绕道创建会�?- 截屏直接调用 screenshot，无需活跃会话也能截取本机桌面
+- �?send_file 通过 IM 通道直接发送文件给用户（支持图片、文档等任意文件类型）。在桌面端默认只保存到本地；如果用户要求发到飞书/微信/QQ，需设置 forward_to_im=true
+- ⚠️ 发送本地磁盘上的文�?图片给用户时，必须用 send_file 工具——会话内的工具无法直接投递文件到 IM。SDK 会话中产生的截图会自动推送给用户，无需额外操作�?- ⚠️ 桌面端用户说"发到飞书"�?发到微信"�?发到QQ"�?发到 IM"时，必须�?send_file 中设�?forward_to_im=true，否则文件只会保存到本地而不会发送到 IM 平台�?- �?open 打开文件或网址（PDF、Excel、URL 等）
+- 创建会话时可�?project_id 参数指定预设项目，或�?project_manage(action="list") 查看可用项目列表
 
 `)	} else {
 		// Lite/simple mode: no coding session tools available.
 		b.WriteString(`
 ## 当前模式
-你当前运行在简洁模式，编程会话工具不可用（未配置编程 LLM provider）。
-如果用户请求编程任务（写代码、修 bug、重构等），请友好提示：
-"当前为简洁模式，编程会话功能未启用。如需使用编程工具，请在设置中切换到专业模式并配置编程 provider。"
+你当前运行在简洁模式，编程会话工具不可用（未配置编�?LLM provider）�?如果用户请求编程任务（写代码、修 bug、重构等），请友好提示：
+"当前为简洁模式，编程会话功能未启用。如需使用编程工具，请在设置中切换到专业模式并配置编程 provider�?
 
 你仍然可以使用以下工具帮助用户：
-- bash：执行 shell 命令
-- read_file / write_file / list_directory：文件操作
-- craft_tool：生成并执行脚本
-- web_search / web_fetch：网络搜索
-- memory：长期记忆管理
-- screenshot：截屏
-- send_file / open：发送文件、打开文件或网址
-- MCP 工具和 Skill（如已配置）
+- bash：执�?shell 命令
+- read_file / write_file / list_directory：文件操�?- craft_tool：生成并执行脚本
+- web_search / web_fetch：网络搜�?- memory：长期记忆管�?- screenshot：截�?- send_file / open：发送文件、打开文件或网址
+- MCP 工具�?Skill（如已配置）
 
 ## 工具使用要点
-- 配置管理用 manage_config（action: get/update/batch_update/list_schema/export/import）
-- 简单文件/命令操作直接用 bash/read_file/write_file/list_directory
+- 配置管理�?manage_config（action: get/update/batch_update/list_schema/export/import�?- 简单文�?命令操作直接�?bash/read_file/write_file/list_directory
 - 截屏直接调用 screenshot
-- 用 send_file 通过 IM 通道直接发送文件给用户。如果用户要求发到飞书/微信/QQ，需设置 forward_to_im=true
-- 用 open 打开文件或网址（PDF、Excel、URL 等）
+- �?send_file 通过 IM 通道直接发送文件给用户。如果用户要求发到飞�?微信/QQ，需设置 forward_to_im=true
+- �?open 打开文件或网址（PDF、Excel、URL 等）
 
 `)
 	}
@@ -2445,11 +2402,11 @@ c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期
 	if hostname == "" {
 		hostname = "MaClaw Desktop"
 	}
-	b.WriteString(fmt.Sprintf("- 设备名: %s\n", hostname))
+	b.WriteString(fmt.Sprintf("- 设备�? %s\n", hostname))
 	b.WriteString(fmt.Sprintf("- 平台: %s\n", normalizedRemotePlatform()))
 	b.WriteString(fmt.Sprintf("- App 版本: %s\n", remoteAppVersion()))
 	now := time.Now()
-	b.WriteString(fmt.Sprintf("- 当前时间: %s（%s）\n", now.Format("2006-01-02 15:04"), now.Weekday()))
+	b.WriteString(fmt.Sprintf("- 当前时间: %s�?s）\n", now.Format("2006-01-02 15:04"), now.Weekday()))
 
 	// Nickname reporting: tell the agent its current nickname so it can
 	// proactively report it via set_nickname on first turn.
@@ -2470,12 +2427,12 @@ c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期
 				task := s.Summary.CurrentTask
 				lastResult := s.Summary.LastResult
 				s.mu.RUnlock()
-				b.WriteString(fmt.Sprintf("- [%s] 工具=%s 标题=%s 状态=%s", s.ID, s.Tool, s.Title, status))
+				b.WriteString(fmt.Sprintf("- [%s] 工具=%s 标题=%s 状�?%s", s.ID, s.Tool, s.Title, status))
 				if task != "" {
 					b.WriteString(fmt.Sprintf(" 当前任务=%s", task))
 				}
 				if lastResult != "" {
-					b.WriteString(fmt.Sprintf(" 最近结果=%s", lastResult))
+					b.WriteString(fmt.Sprintf(" 最近结�?%s", lastResult))
 				}
 				b.WriteString("\n")
 			}
@@ -2485,9 +2442,9 @@ c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期
 	if h.app.mcpRegistry != nil {
 		servers := h.app.mcpRegistry.ListServers()
 		if len(servers) > 0 {
-			b.WriteString("\n## 已注册 MCP Server\n")
+			b.WriteString("\n## 已注�?MCP Server\n")
 			for _, s := range servers {
-				b.WriteString(fmt.Sprintf("- [%s] %s 状态=%s\n", s.ID, s.Name, s.HealthStatus))
+				b.WriteString(fmt.Sprintf("- [%s] %s 状�?%s\n", s.ID, s.Name, s.HealthStatus))
 			}
 		}
 	}
@@ -2498,7 +2455,7 @@ c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期
 		if len(bgLoops) > 0 {
 			b.WriteString("\n## 后台任务\n")
 			for _, lctx := range bgLoops {
-				b.WriteString(fmt.Sprintf("- [%s] 类型=%s 状态=%s 轮次=%d/%d",
+				b.WriteString(fmt.Sprintf("- [%s] 类型=%s 状�?%s 轮次=%d/%d",
 					lctx.ID, lctx.SlotKind.String(), lctx.State(),
 					lctx.Iteration(), lctx.MaxIterations()))
 				if lctx.Description != "" {
@@ -2513,12 +2470,12 @@ c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期
 	if h.app.skillExecutor != nil {
 		skills := h.app.skillExecutor.List()
 		if len(skills) > 0 {
-			b.WriteString("\n## 已注册 Skill\n")
+			b.WriteString("\n## 已注�?Skill\n")
 			for _, s := range skills {
 				if s.Status == "active" {
 					b.WriteString(fmt.Sprintf("- %s: %s", s.Name, s.Description))
 					if s.UsageCount > 0 {
-						b.WriteString(fmt.Sprintf(" (用过%d次, 成功率%.0f%%)", s.UsageCount, s.SuccessRate*100))
+						b.WriteString(fmt.Sprintf(" (用过%d�? 成功�?.0f%%)", s.UsageCount, s.SuccessRate*100))
 					}
 					b.WriteString("\n")
 				}
@@ -2532,12 +2489,12 @@ c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期
 		mcpTools := h.registry.ListByCategory(ToolCategoryMCP)
 		nonCodeTools := h.registry.ListByCategory(ToolCategoryNonCode)
 		if len(mcpTools) > 0 || len(nonCodeTools) > 0 {
-			b.WriteString(fmt.Sprintf("\n## 动态工具（共 %d 个可用）\n", len(allTools)))
+			b.WriteString(fmt.Sprintf("\n## 动态工具（�?%d 个可用）\n", len(allTools)))
 			if len(mcpTools) > 0 {
 				b.WriteString(fmt.Sprintf("- MCP 工具: %d 个（来自已注册的 MCP Server）\n", len(mcpTools)))
 			}
 			if len(nonCodeTools) > 0 {
-				b.WriteString(fmt.Sprintf("- 非编程工具: %d 个（git_status, git_diff, git_commit, search_files 等）\n", len(nonCodeTools)))
+				b.WriteString(fmt.Sprintf("- 非编程工�? %d 个（git_status, git_diff, git_commit, search_files 等）\n", len(nonCodeTools)))
 			}
 			b.WriteString("- 工具列表根据消息内容动态筛选，可用「使用XX工具」激活特定分组\n")
 		}
@@ -2551,7 +2508,7 @@ c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期
 		b.WriteString("- 可用 query_audit_log 工具查看安全审计日志\n")
 	}
 
-	// Task orchestration info (pro mode only — references coding sessions).
+	// Task orchestration info (pro mode only �?references coding sessions).
 	if isProMode {
 		b.WriteString("\n## 高级能力\n")
 		b.WriteString("- tool=auto: 创建会话时自动选择最适合的编程工具\n")
@@ -2561,15 +2518,16 @@ c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期
 
 	b.WriteString("\n## 对话管理\n")
 	if isProMode {
-		b.WriteString("- /new 或 /reset 重置对话 | /exit 或 /quit 终止所有会话 | /sessions 查看状态 | /help 帮助\n")
-		b.WriteString("- 用户表达退出意图时，提醒发送 /exit\n")
+		b.WriteString("- /new �?/reset 重置对话 | /exit �?/quit 终止所有会�?| /sessions 查看状�?| /help 帮助\n")
+		b.WriteString("- 用户表达退出意图时，提醒发�?/exit\n")
 	} else {
-		b.WriteString("- /new 或 /reset 重置对话 | /help 帮助\n")
+		b.WriteString("- /new �?/reset 重置对话 | /help 帮助\n")
 	}
-	b.WriteString("\n请用中文回复，关键技术术语保留英文。回复要简洁实用。")
+	b.WriteString("\n请用中文回复，关键技术术语保留英文。回复要简洁实用�?)
 
 	// Inject lightweight memory section: user_fact summary + tool hint.
 	h.appendMemorySection(&b, false)
+
 
 	return b.String()
 }
@@ -2609,10 +2567,10 @@ func (h *IMMessageHandler) buildNicknameInstruction() string {
 	}
 	if currentNickname != "" {
 		return fmt.Sprintf("\n## ⚠️ 上线昵称报告（仅首次对话执行一次）\n"+
-			"你刚上线，请在回复用户之前先调用 set_nickname 工具报告你的昵称「%s」，确保 Hub 知道你是谁。\n", currentNickname)
+			"你刚上线，请在回复用户之前先调用 set_nickname 工具报告你的昵称�?s」，确保 Hub 知道你是谁。\n", currentNickname)
 	}
 	return "\n## ⚠️ 上线昵称报告（仅首次对话执行一次）\n" +
-		"你还没有昵称。请根据你的自我认知（角色名/身份），在回复用户之前先调用 set_nickname 工具给自己起一个昵称并上报给 Hub。如果没有特别的自我认知，可以用一个你喜欢的中文名字。\n"
+		"你还没有昵称。请根据你的自我认知（角色名/身份），在回复用户之前先调用 set_nickname 工具给自己起一个昵称并上报�?Hub。如果没有特别的自我认知，可以用一个你喜欢的中文名字。\n"
 }
 
 // appendMemorySection appends a lightweight "## 用户记忆" section containing:
@@ -2638,7 +2596,7 @@ func (h *IMMessageHandler) appendMemorySection(b *strings.Builder, isFirstTurn b
 	if isFirstTurn {
 		b.WriteString("\n## 记忆管理指引\n")
 		b.WriteString("识别到有价值的信息时，主动调用 memory(action: save) 保存：\n")
-		b.WriteString("- 用户信息 → user_fact | 偏好 → preference | 项目知识 → project_knowledge | 指令 → instruction\n")
+		b.WriteString("- 用户信息 �?user_fact | 偏好 �?preference | 项目知识 �?project_knowledge | 指令 �?instruction\n")
 	}
 }
 
@@ -2648,41 +2606,41 @@ func (h *IMMessageHandler) appendMemorySection(b *strings.Builder, isFirstTurn b
 
 func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 	defs := []map[string]interface{}{
-		toolDef("list_sessions", "列出当前所有远程会话及其状态", nil, nil),
-		toolDef("create_session", "创建新的远程会话。可指定 provider 选择服务商。创建后建议用 get_session_output 观察启动状态。",
+		toolDef("list_sessions", "列出当前所有远程会话及其状�?, nil, nil),
+		toolDef("create_session", "创建新的远程会话。可指定 provider 选择服务商。创建后建议�?get_session_output 观察启动状态�?,
 			map[string]interface{}{
 				"tool":         map[string]string{"type": "string", "description": "工具名称，如 claude, codex, cursor, gemini, opencode"},
 				"project_path": map[string]string{"type": "string", "description": "项目路径（可选）"},
-				"project_id":   map[string]string{"type": "string", "description": "预设项目 ID（可选，与 project_path 二选一）"},
-				"provider":            map[string]string{"type": "string", "description": "服务商名称（可选，如 Original, DeepSeek, 百度千帆）。不指定则使用桌面端当前选中的服务商"},
-				"resume_session_id": map[string]string{"type": "string", "description": "续接会话 ID（可选）。自动续接时由 get_session_output 返回，传入后使用 --resume 模式恢复完整对话历史"},
+				"project_id":   map[string]string{"type": "string", "description": "预设项目 ID（可选，�?project_path 二选一�?},
+				"provider":            map[string]string{"type": "string", "description": "服务商名称（可选，�?Original, DeepSeek, 百度千帆）。不指定则使用桌面端当前选中的服务商"},
+				"resume_session_id": map[string]string{"type": "string", "description": "续接会话 ID（可选）。自动续接时�?get_session_output 返回，传入后使用 --resume 模式恢复完整对话历史"},
 			}, []string{"tool"}),
-		toolDef("list_providers", "列出指定编程工具的所有可用服务商（已过滤未配置的空服务商）",
+		toolDef("list_providers", "列出指定编程工具的所有可用服务商（已过滤未配置的空服务商�?,
 			map[string]interface{}{
 				"tool": map[string]string{"type": "string", "description": "工具名称，如 claude, codex, gemini"},
 			}, []string{"tool"}),
-		toolDef("project_manage", "项目管理（创建/列出/删除/切换项目）",
+		toolDef("project_manage", "项目管理（创�?列出/删除/切换项目�?,
 			map[string]interface{}{
 				"action": map[string]string{"type": "string", "description": "操作: create/list/delete/switch"},
-				"name":   map[string]string{"type": "string", "description": "项目名称（create 必填）"},
-				"path":   map[string]string{"type": "string", "description": "项目路径（create 必填）"},
-				"target": map[string]string{"type": "string", "description": "项目名称或 ID（delete/switch 必填）"},
+				"name":   map[string]string{"type": "string", "description": "项目名称（create 必填�?},
+				"path":   map[string]string{"type": "string", "description": "项目路径（create 必填�?},
+				"target": map[string]string{"type": "string", "description": "项目名称�?ID（delete/switch 必填�?},
 			}, []string{"action"}),
-		toolDef("send_input", "向指定会话发送文本输入。发送后可用 get_session_output 观察结果。",
+		toolDef("send_input", "向指定会话发送文本输入。发送后可用 get_session_output 观察结果�?,
 			map[string]interface{}{
 				"session_id": map[string]string{"type": "string", "description": "会话 ID"},
 				"text":       map[string]string{"type": "string", "description": "要发送的文本"},
 			}, []string{"session_id", "text"}),
-		toolDef("get_session_output", "获取指定会话的最近输出内容和状态摘要。",
+		toolDef("get_session_output", "获取指定会话的最近输出内容和状态摘要�?,
 			map[string]interface{}{
 				"session_id": map[string]string{"type": "string", "description": "会话 ID"},
-				"lines":      map[string]string{"type": "integer", "description": "返回最近 N 行输出（默认 30，最大 100）"},
+				"lines":      map[string]string{"type": "integer", "description": "返回最�?N 行输出（默认 30，最�?100�?},
 			}, []string{"session_id"}),
-		toolDef("get_session_events", "获取指定会话的重要事件列表（文件修改、命令执行、错误等）",
+		toolDef("get_session_events", "获取指定会话的重要事件列表（文件修改、命令执行、错误等�?,
 			map[string]interface{}{
 				"session_id": map[string]string{"type": "string", "description": "会话 ID"},
 			}, []string{"session_id"}),
-		toolDef("interrupt_session", "中断指定会话（发送 Ctrl+C 信号）",
+		toolDef("interrupt_session", "中断指定会话（发�?Ctrl+C 信号�?,
 			map[string]interface{}{
 				"session_id": map[string]string{"type": "string", "description": "会话 ID"},
 			}, []string{"session_id"}),
@@ -2690,37 +2648,37 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 			map[string]interface{}{
 				"session_id": map[string]string{"type": "string", "description": "会话 ID"},
 			}, []string{"session_id"}),
-		toolDef("screenshot", "截取屏幕截图并发送给用户。如果有活跃会话可指定 session_id，没有活跃会话时会直接截取本机桌面屏幕（不需要创建会话）。",
+		toolDef("screenshot", "截取屏幕截图并发送给用户。如果有活跃会话可指�?session_id，没有活跃会话时会直接截取本机桌面屏幕（不需要创建会话）�?,
 			map[string]interface{}{
-				"session_id": map[string]string{"type": "string", "description": "会话 ID（可选，只有一个会话时自动选择）"},
+				"session_id": map[string]string{"type": "string", "description": "会话 ID（可选，只有一个会话时自动选择�?},
 			}, nil),
 		toolDef("list_mcp_tools", "列出已注册的 MCP Server 及其工具", nil, nil),
 		toolDef("call_mcp_tool", "调用指定 MCP Server 上的工具",
 			map[string]interface{}{
 				"server_id": map[string]string{"type": "string", "description": "MCP Server ID"},
 				"tool_name": map[string]string{"type": "string", "description": "工具名称"},
-				"arguments": map[string]string{"type": "object", "description": "工具参数（JSON 对象）"},
+				"arguments": map[string]string{"type": "object", "description": "工具参数（JSON 对象�?},
 			}, []string{"server_id", "tool_name"}),
-		toolDef("list_skills", "列出已注册的本地 Skill。如果本地没有 Skill，会同时展示 SkillHub 上的推荐 Skill 供安装。", nil, nil),
-		toolDef("search_skill_hub", "在已配置的 SkillHub（如 openclaw、tencent 等）上搜索可用的 Skill",
+		toolDef("list_skills", "列出已注册的本地 Skill。如果本地没�?Skill，会同时展示 SkillHub 上的推荐 Skill 供安装�?, nil, nil),
+		toolDef("search_skill_hub", "在已配置�?SkillHub（如 openclaw、tencent 等）上搜索可用的 Skill",
 			map[string]interface{}{
-				"query": map[string]string{"type": "string", "description": "搜索关键词（如 'git commit'、'代码审查'、'部署'）"},
+				"query": map[string]string{"type": "string", "description": "搜索关键词（�?'git commit'�?代码审查'�?部署'�?},
 			}, []string{"query"}),
-		toolDef("install_skill_hub", "从 SkillHub 安装指定的 Skill 到本地。设置 auto_run=true 可安装后立即执行。",
+		toolDef("install_skill_hub", "�?SkillHub 安装指定�?Skill 到本地。设�?auto_run=true 可安装后立即执行�?,
 			map[string]interface{}{
 				"skill_id": map[string]string{"type": "string", "description": "Skill ID（从 search_skill_hub 结果中获取）"},
 				"hub_url":  map[string]string{"type": "string", "description": "来源 Hub URL（从 search_skill_hub 结果中获取）"},
-				"auto_run": map[string]string{"type": "boolean", "description": "安装成功后是否立即执行（默认 true）"},
+				"auto_run": map[string]string{"type": "boolean", "description": "安装成功后是否立即执行（默认 true�?},
 			}, []string{"skill_id", "hub_url"}),
-		toolDef("run_skill", "执行指定的 Skill",
+		toolDef("run_skill", "执行指定�?Skill",
 			map[string]interface{}{
 				"name": map[string]string{"type": "string", "description": "Skill 名称"},
 			}, []string{"name"}),
-		toolDef("parallel_execute", "并行执行多个编程任务，每个任务在独立会话中运行（最多5个）",
+		toolDef("parallel_execute", "并行执行多个编程任务，每个任务在独立会话中运行（最�?个）",
 			map[string]interface{}{
 				"tasks": map[string]interface{}{
 					"type":        "array",
-					"description": "任务列表，每个任务包含 tool（工具名）、description（任务描述）、project_path（项目路径）",
+					"description": "任务列表，每个任务包�?tool（工具名）、description（任务描述）、project_path（项目路径）",
 					"items": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
@@ -2735,25 +2693,25 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 			map[string]interface{}{
 				"task_description": map[string]string{"type": "string", "description": "任务描述"},
 			}, []string{"task_description"}),
-		toolDef("craft_tool", "当现有工具都无法完成任务时，自动研究问题并生成脚本来解决。会用 LLM 生成代码、执行、并注册为可复用的 Skill。适用于数据处理、API 调用、文件转换、系统管理等需要编程才能完成的任务。",
+		toolDef("craft_tool", "当现有工具都无法完成任务时，自动研究问题并生成脚本来解决。会�?LLM 生成代码、执行、并注册为可复用�?Skill。适用于数据处理、API 调用、文件转换、系统管理等需要编程才能完成的任务�?,
 			map[string]interface{}{
-				"task":          map[string]string{"type": "string", "description": "需要完成的任务描述（越详细越好）"},
+				"task":          map[string]string{"type": "string", "description": "需要完成的任务描述（越详细越好�?},
 				"language":      map[string]string{"type": "string", "description": "脚本语言: python/bash/powershell/node（可选，自动检测）"},
-				"save_as_skill": map[string]string{"type": "boolean", "description": "执行成功后是否注册为 Skill 供下次复用（默认 true）"},
-				"skill_name":    map[string]string{"type": "string", "description": "Skill 名称（可选，自动生成）"},
-				"timeout":       map[string]string{"type": "integer", "description": "执行超时秒数（默认 60，最大 300）"},
+				"save_as_skill": map[string]string{"type": "boolean", "description": "执行成功后是否注册为 Skill 供下次复用（默认 true�?},
+				"skill_name":    map[string]string{"type": "string", "description": "Skill 名称（可选，自动生成�?},
+				"timeout":       map[string]string{"type": "integer", "description": "执行超时秒数（默�?60，最�?300�?},
 			}, []string{"task"}),
 		// --- 本机直接操作工具 ---
-		toolDef("bash", "在本机直接执行 shell 命令（如创建目录、移动文件、运行脚本等）。命令在 MaClaw 所在设备上执行，不需要会话。",
+		toolDef("bash", "在本机直接执�?shell 命令（如创建目录、移动文件、运行脚本等）。命令在 MaClaw 所在设备上执行，不需要会话�?,
 			map[string]interface{}{
 				"command":     map[string]string{"type": "string", "description": "要执行的 shell 命令"},
-				"working_dir": map[string]string{"type": "string", "description": "工作目录（可选，默认为用户主目录）"},
-				"timeout":     map[string]string{"type": "integer", "description": "超时秒数（可选，默认 30，最大 120）"},
+				"working_dir": map[string]string{"type": "string", "description": "工作目录（可选，默认为用户主目录�?},
+				"timeout":     map[string]string{"type": "integer", "description": "超时秒数（可选，默认 30，最�?120�?},
 			}, []string{"command"}),
 		toolDef("read_file", "读取本机文件内容",
 			map[string]interface{}{
 				"path":  map[string]string{"type": "string", "description": "文件路径（绝对路径或相对于主目录的路径）"},
-				"lines": map[string]string{"type": "integer", "description": "最多读取行数（可选，默认 200）"},
+				"lines": map[string]string{"type": "integer", "description": "最多读取行数（可选，默认 200�?},
 			}, []string{"path"}),
 		toolDef("write_file", "写入内容到本机文件（会创建不存在的目录）",
 			map[string]interface{}{
@@ -2762,23 +2720,23 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 			}, []string{"path", "content"}),
 		toolDef("list_directory", "列出本机目录内容",
 			map[string]interface{}{
-				"path": map[string]string{"type": "string", "description": "目录路径（可选，默认为用户主目录）"},
+				"path": map[string]string{"type": "string", "description": "目录路径（可选，默认为用户主目录�?},
 			}, nil),
-		toolDef("send_file", "读取本机文件并发送给用户（通过 IM 通道直接发送文件）。设置 forward_to_im=true 可将文件同时转发到用户的飞书/微信/QQ等 IM 平台。",
+		toolDef("send_file", "读取本机文件并发送给用户（通过 IM 通道直接发送文件）。设�?forward_to_im=true 可将文件同时转发到用户的飞书/微信/QQ�?IM 平台�?,
 			map[string]interface{}{
-				"path":          map[string]string{"type": "string", "description": "文件的绝对路径或相对于主目录的路径"},
-				"file_name":     map[string]string{"type": "string", "description": "发送时显示的文件名（可选，默认使用原文件名）"},
-				"forward_to_im": map[string]string{"type": "boolean", "description": "是否同时转发到用户的 IM 平台（飞书/微信/QQ等）。仅在用户明确要求发送到飞书、微信、QQ等 IM 时设为 true，默认 false"},
+				"path":          map[string]string{"type": "string", "description": "文件的绝对路径或相对于主目录的路�?},
+				"file_name":     map[string]string{"type": "string", "description": "发送时显示的文件名（可选，默认使用原文件名�?},
+				"forward_to_im": map[string]string{"type": "boolean", "description": "是否同时转发到用户的 IM 平台（飞�?微信/QQ等）。仅在用户明确要求发送到飞书、微信、QQ�?IM 时设�?true，默�?false"},
 			}, []string{"path"}),
-		toolDef("open", "用操作系统默认程序打开文件或网址。例如：打开 PDF 用默认阅读器、打开 .xlsx 用 Excel、打开 URL 用默认浏览器、打开文件夹用资源管理器。也支持 mailto: 链接。",
+		toolDef("open", "用操作系统默认程序打开文件或网址。例如：打开 PDF 用默认阅读器、打开 .xlsx �?Excel、打开 URL 用默认浏览器、打开文件夹用资源管理器。也支持 mailto: 链接�?,
 			map[string]interface{}{
-				"target": map[string]string{"type": "string", "description": "要打开的文件路径、目录路径或 URL（如 C:\\Users\\test\\doc.pdf、https://example.com、mailto:test@example.com）"},
+				"target": map[string]string{"type": "string", "description": "要打开的文件路径、目录路径或 URL（如 C:\\Users\\test\\doc.pdf、https://example.com、mailto:test@example.com�?},
 			}, []string{"target"}),
 		// --- 长期记忆工具（合并） ---
-		toolDef("memory", "管理长期记忆（action: recall/save/list/delete）。recall 按需检索相关记忆，save 保存新记忆。",
+		toolDef("memory", "管理长期记忆（action: recall/save/list/delete）。recall 按需检索相关记忆，save 保存新记忆�?,
 			map[string]interface{}{
-				"action":   map[string]string{"type": "string", "description": "操作: recall(按需召回)/save(保存)/list(列出或搜索)/delete(删除)"},
-				"query":    map[string]string{"type": "string", "description": "检索关键词（recall 时必填，由你提炼的精准检索词，非用户原始消息）"},
+				"action":   map[string]string{"type": "string", "description": "操作: recall(按需召回)/save(保存)/list(列出或搜�?/delete(删除)"},
+				"query":    map[string]string{"type": "string", "description": "检索关键词（recall 时必填，由你提炼的精准检索词，非用户原始消息�?},
 				"content":  map[string]string{"type": "string", "description": "记忆内容（save 时必填）"},
 				"category": map[string]string{"type": "string", "description": "类别: user_fact/preference/project_knowledge/instruction（save 时必填，recall/list 时可选过滤）"},
 				"tags": map[string]interface{}{
@@ -2796,57 +2754,57 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 				"tool":         map[string]string{"type": "string", "description": "工具名称"},
 				"project_path": map[string]string{"type": "string", "description": "项目路径"},
 				"model_config": map[string]string{"type": "string", "description": "模型配置"},
-				"yolo_mode":    map[string]string{"type": "boolean", "description": "是否开启 Yolo 模式"},
+				"yolo_mode":    map[string]string{"type": "boolean", "description": "是否开�?Yolo 模式"},
 			}, []string{"name", "tool"}),
-		toolDef("list_templates", "列出所有会话模板", nil, nil),
+		toolDef("list_templates", "列出所有会话模�?, nil, nil),
 		toolDef("launch_template", "使用模板启动会话",
 			map[string]interface{}{
 				"template_name": map[string]string{"type": "string", "description": "模板名称"},
 			}, []string{"template_name"}),
 		// --- 配置管理工具 ---
-		toolDef("get_config", "获取指定配置区域的当前值",
+		toolDef("get_config", "获取指定配置区域的当前�?,
 			map[string]interface{}{
-				"section": map[string]string{"type": "string", "description": "配置区域名称（如 claude/gemini/remote/projects/maclaw_llm/proxy/general），为空或 all 返回概览"},
+				"section": map[string]string{"type": "string", "description": "配置区域名称（如 claude/gemini/remote/projects/maclaw_llm/proxy/general），为空�?all 返回概览"},
 			}, []string{"section"}),
-		toolDef("update_config", "修改单个配置项",
+		toolDef("update_config", "修改单个配置�?,
 			map[string]interface{}{
 				"section": map[string]string{"type": "string", "description": "配置区域名称"},
-				"key":     map[string]string{"type": "string", "description": "配置项名称"},
-				"value":   map[string]string{"type": "string", "description": "新值"},
+				"key":     map[string]string{"type": "string", "description": "配置项名�?},
+				"value":   map[string]string{"type": "string", "description": "新�?},
 			}, []string{"section", "key", "value"}),
-		toolDef("batch_update_config", "批量修改配置（原子性，任一项失败则全部回滚）",
+		toolDef("batch_update_config", "批量修改配置（原子性，任一项失败则全部回滚�?,
 			map[string]interface{}{
-				"changes": map[string]string{"type": "string", "description": "JSON 数组，每项包含 section/key/value，例如 [{\"section\":\"general\",\"key\":\"language\",\"value\":\"en\"}]"},
+				"changes": map[string]string{"type": "string", "description": "JSON 数组，每项包�?section/key/value，例�?[{\"section\":\"general\",\"key\":\"language\",\"value\":\"en\"}]"},
 			}, []string{"changes"}),
 		toolDef("list_config_schema", "列出所有可配置项的 schema 信息", nil, nil),
-		toolDef("export_config", "导出当前配置（敏感字段已脱敏）", nil, nil),
+		toolDef("export_config", "导出当前配置（敏感字段已脱敏�?, nil, nil),
 		toolDef("import_config", "导入配置（JSON 格式，保留本机特有字段）",
 			map[string]interface{}{
-				"json_data": map[string]string{"type": "string", "description": "要导入的配置 JSON 字符串"},
+				"json_data": map[string]string{"type": "string", "description": "要导入的配置 JSON 字符�?},
 			}, []string{"json_data"}),
-		// --- Agent 自管理工具 ---
-		toolDef("set_max_iterations", fmt.Sprintf("调整最大推理轮数。设置后会持久化保存，后续对话也会生效。当你判断任务复杂需要更多轮次时调用此工具扩展上限，任务简单时可缩减。范围 %d-%d。", minAgentIterations, maxAgentIterationsCap),
+		// --- Agent 自管理工�?---
+		toolDef("set_max_iterations", fmt.Sprintf("调整最大推理轮数。设置后会持久化保存，后续对话也会生效。当你判断任务复杂需要更多轮次时调用此工具扩展上限，任务简单时可缩减。范�?%d-%d�?, minAgentIterations, maxAgentIterationsCap),
 			map[string]interface{}{
-				"max_iterations": map[string]string{"type": "integer", "description": fmt.Sprintf("新的最大轮数（%d-%d）", minAgentIterations, maxAgentIterationsCap)},
+				"max_iterations": map[string]string{"type": "integer", "description": fmt.Sprintf("新的最大轮数（%d-%d�?, minAgentIterations, maxAgentIterationsCap)},
 				"reason":         map[string]string{"type": "string", "description": "调整原因（用于日志记录）"},
 			}, []string{"max_iterations"}),
 		// --- 定时任务工具 ---
-		toolDef("create_scheduled_task", "创建定时任务。用户说 每天9点做XX、每周一下午3点做YY、从3月1号到15号每天上午10点做ZZ 时，解析出时间参数并调用此工具。day_of_week: -1=每天, 0=周日, 1=周一...6=周六。day_of_month: -1=不限, 1-31=每月几号。重要：如果用户说的是一次性任务（如'今天中午提醒我'、'明天下午3点做XX'），必须将 start_date 和 end_date 都设为目标日期，确保只执行一次。",
+		toolDef("create_scheduled_task", "创建定时任务。用户说 每天9点做XX、每周一下午3点做YY、从3�?号到15号每天上�?0点做ZZ 时，解析出时间参数并调用此工具。day_of_week: -1=每天, 0=周日, 1=周一...6=周六。day_of_month: -1=不限, 1-31=每月几号。重要：如果用户说的是一次性任务（�?今天中午提醒�?�?明天下午3点做XX'），必须�?start_date �?end_date 都设为目标日期，确保只执行一次�?,
 			map[string]interface{}{
 				"name":         map[string]string{"type": "string", "description": "任务名称（简短描述）"},
-				"action":       map[string]string{"type": "string", "description": "到时要执行的操作（自然语言描述，会发送给 agent 执行）"},
-				"hour":         map[string]string{"type": "integer", "description": "执行时间-小时（0-23）"},
-				"minute":       map[string]string{"type": "integer", "description": "执行时间-分钟（0-59，默认0）"},
-				"day_of_week":  map[string]string{"type": "integer", "description": "星期几（-1=每天, 0=周日, 1=周一...6=周六，默认-1）"},
-				"day_of_month": map[string]string{"type": "integer", "description": "每月几号（-1=不限, 1-31，默认-1）"},
+				"action":       map[string]string{"type": "string", "description": "到时要执行的操作（自然语言描述，会发送给 agent 执行�?},
+				"hour":         map[string]string{"type": "integer", "description": "执行时间-小时�?-23�?},
+				"minute":       map[string]string{"type": "integer", "description": "执行时间-分钟�?-59，默�?�?},
+				"day_of_week":  map[string]string{"type": "integer", "description": "星期几（-1=每天, 0=周日, 1=周一...6=周六，默�?1�?},
+				"day_of_month": map[string]string{"type": "integer", "description": "每月几号�?1=不限, 1-31，默�?1�?},
 				"start_date":   map[string]string{"type": "string", "description": "生效开始日期（格式 2006-01-02，可选）"},
-				"end_date":     map[string]string{"type": "string", "description": "生效结束日期（格式 2006-01-02，可选）"},
+				"end_date":     map[string]string{"type": "string", "description": "生效结束日期（格�?2006-01-02，可选）"},
 			}, []string{"name", "action", "hour"}),
-		toolDef("list_scheduled_tasks", "列出所有定时任务及其状态、下次执行时间", nil, nil),
+		toolDef("list_scheduled_tasks", "列出所有定时任务及其状态、下次执行时�?, nil, nil),
 		toolDef("delete_scheduled_task", "删除定时任务（按 ID 或名称）",
 			map[string]interface{}{
 				"id":   map[string]string{"type": "string", "description": "任务 ID（优先）"},
-				"name": map[string]string{"type": "string", "description": "任务名称（ID 为空时按名称匹配）"},
+				"name": map[string]string{"type": "string", "description": "任务名称（ID 为空时按名称匹配�?},
 			}, nil),
 		toolDef("update_scheduled_task", "修改定时任务的时间或内容",
 			map[string]interface{}{
@@ -2862,34 +2820,34 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 			}, []string{"id"}),
 	}
 
-	// ---------- ClawNet tools (dynamic — only when daemon is running) ----------
+	// ---------- ClawNet tools (dynamic �?only when daemon is running) ----------
 	if h.app != nil && h.app.clawNetClient != nil && h.app.clawNetClient.IsRunning() {
 		defs = append(defs,
-			toolDef("clawnet_search", "在虾网（ClawNet P2P 知识网络）中搜索知识条目。返回匹配的知识列表，包含标题、内容、作者等。",
+			toolDef("clawnet_search", "在虾网（ClawNet P2P 知识网络）中搜索知识条目。返回匹配的知识列表，包含标题、内容、作者等�?,
 				map[string]interface{}{
-					"query": map[string]string{"type": "string", "description": "搜索关键词"},
+					"query": map[string]string{"type": "string", "description": "搜索关键�?},
 				}, []string{"query"}),
-			toolDef("clawnet_publish", "向虾网（ClawNet P2P 知识网络）发布一条知识条目。发布后其他节点可以搜索到。",
+			toolDef("clawnet_publish", "向虾网（ClawNet P2P 知识网络）发布一条知识条目。发布后其他节点可以搜索到�?,
 				map[string]interface{}{
 					"title": map[string]string{"type": "string", "description": "知识标题"},
-					"body":  map[string]string{"type": "string", "description": "知识内容（Markdown 格式）"},
+					"body":  map[string]string{"type": "string", "description": "知识内容（Markdown 格式�?},
 				}, []string{"title", "body"}),
 		)
 	}
 
 	// ---------- Web search & fetch tools ----------
 	defs = append(defs,
-		toolDef("web_search", "搜索互联网内容。返回搜索结果列表（标题、URL、摘要）。适用于查找资料、技术文档、最新信息等。",
+		toolDef("web_search", "搜索互联网内容。返回搜索结果列表（标题、URL、摘要）。适用于查找资料、技术文档、最新信息等�?,
 			map[string]interface{}{
-				"query":       map[string]string{"type": "string", "description": "搜索关键词"},
-				"max_results": map[string]string{"type": "integer", "description": "最大结果数（默认 8，最大 20）"},
+				"query":       map[string]string{"type": "string", "description": "搜索关键�?},
+				"max_results": map[string]string{"type": "integer", "description": "最大结果数（默�?8，最�?20�?},
 			}, []string{"query"}),
-		toolDef("web_fetch", "抓取指定 URL 的网页内容并提取正文文本。支持 HTTP/HTTPS/FTP 协议，自动编码检测（GBK/UTF-8 等）、HTML 正文提取。可选 JS 渲染（需本机安装 Chrome）。也可用 save_path 下载文件到本地。",
+		toolDef("web_fetch", "抓取指定 URL 的网页内容并提取正文文本。支�?HTTP/HTTPS/FTP 协议，自动编码检测（GBK/UTF-8 等）、HTML 正文提取。可�?JS 渲染（需本机安装 Chrome）。也可用 save_path 下载文件到本地�?,
 			map[string]interface{}{
-				"url":       map[string]string{"type": "string", "description": "要抓取的 URL（支持 http/https/ftp 协议）"},
-				"render_js": map[string]string{"type": "boolean", "description": "是否使用 Chrome 渲染 JS（可选，默认 false。适用于 SPA 等 JS 渲染页面）"},
+				"url":       map[string]string{"type": "string", "description": "要抓取的 URL（支�?http/https/ftp 协议�?},
+				"render_js": map[string]string{"type": "boolean", "description": "是否使用 Chrome 渲染 JS（可选，默认 false。适用�?SPA �?JS 渲染页面�?},
 				"save_path": map[string]string{"type": "string", "description": "保存文件路径（可选。指定后将原始内容保存到文件而非返回文本，适用于下载文件）"},
-				"timeout":   map[string]string{"type": "integer", "description": "超时秒数（可选，默认 30，最大 120）"},
+				"timeout":   map[string]string{"type": "integer", "description": "超时秒数（可选，默认 30，最�?120�?},
 			}, []string{"url"}),
 	)
 
@@ -2963,11 +2921,11 @@ func (h *IMMessageHandler) executeTool(name, argsJSON string, onProgress Progres
 
 func (h *IMMessageHandler) toolListSessions() string {
 	if h.manager == nil {
-		return "会话管理器未初始化"
+		return "会话管理器未初始�?
 	}
 	sessions := h.manager.List()
 	if len(sessions) == 0 {
-		return "当前没有活跃会话。"
+		return "当前没有活跃会话�?
 	}
 	var b strings.Builder
 	for _, s := range sessions {
@@ -2976,7 +2934,7 @@ func (h *IMMessageHandler) toolListSessions() string {
 		task := s.Summary.CurrentTask
 		waiting := s.Summary.WaitingForUser
 		s.mu.RUnlock()
-		b.WriteString(fmt.Sprintf("- [%s] 工具=%s 标题=%s 状态=%s", s.ID, s.Tool, s.Title, status))
+		b.WriteString(fmt.Sprintf("- [%s] 工具=%s 标题=%s 状�?%s", s.ID, s.Tool, s.Title, status))
 		if task != "" {
 			b.WriteString(fmt.Sprintf(" 任务=%s", task))
 		}
@@ -2989,7 +2947,7 @@ func (h *IMMessageHandler) toolListSessions() string {
 }
 
 // ---------------------------------------------------------------------------
-// Non-coding task guard — prevents create_session for non-coding requests
+// Non-coding task guard �?prevents create_session for non-coding requests
 // ---------------------------------------------------------------------------
 
 // nonCodingKeywords are phrases that strongly indicate a non-coding task.
@@ -2997,16 +2955,16 @@ func (h *IMMessageHandler) toolListSessions() string {
 // we block session creation and guide the LLM to use direct tools instead.
 // All entries MUST be lowercase (matched against lowercased user text).
 var nonCodingKeywords = []string{
-	"搜索论文", "搜论文", "找论文", "查论文", "下载论文",
-	"翻译", "全文翻译", "翻译成中文", "翻译成英文",
+	"搜索论文", "搜论�?, "找论�?, "查论�?, "下载论文",
+	"翻译", "全文翻译", "翻译成中�?, "翻译成英�?,
 	"生成pdf", "生成 pdf", "导出pdf", "导出 pdf",
-	"查天气", "天气预报", "今天天气",
-	"查快递", "快递单号", "物流查询",
-	"搜索新闻", "查新闻", "最新新闻",
+	"查天�?, "天气预报", "今天天气",
+	"查快�?, "快递单�?, "物流查询",
+	"搜索新闻", "查新�?, "最新新�?,
 	"总结文章", "总结论文", "摘要",
-	"发邮件", "写邮件", "发送邮件",
-	"提醒我", "设个闹钟",
-	"播放音乐", "放首歌",
+	"发邮�?, "写邮�?, "发送邮�?,
+	"提醒�?, "设个闹钟",
+	"播放音乐", "放首�?,
 	"arxiv",
 }
 
@@ -3014,11 +2972,11 @@ var nonCodingKeywords = []string{
 // If any of these appear, the guard does NOT block session creation.
 // All entries MUST be lowercase (matched against lowercased user text).
 var codingKeywords = []string{
-	"写代码", "编程", "开发", "修bug", "修 bug", "修复bug", "修复 bug",
+	"写代�?, "编程", "开�?, "修bug", "�?bug", "修复bug", "修复 bug",
 	"重构", "refactor", "实现", "添加功能", "新增功能",
-	"写脚本", "写一个脚本", "写个脚本",
-	"写函数", "写方法", "写接口", "写api", "写 api",
-	"代码", "源码", "源代码",
+	"写脚�?, "写一个脚�?, "写个脚本",
+	"写函�?, "写方�?, "写接�?, "写api", "�?api",
+	"代码", "源码", "源代�?,
 	"编译", "构建", "build", "compile",
 	"测试", "单元测试", "test",
 	"部署", "deploy",
@@ -3054,17 +3012,14 @@ func (h *IMMessageHandler) checkNonCodingTaskGuard() string {
 		return "" // no non-coding signal, allow
 	}
 
-	return fmt.Sprintf(`⚠️ 任务类型检测：当前请求看起来不是编程任务（检测到关键词：%q），不需要创建编程会话。
-
+	return fmt.Sprintf(`⚠️ 任务类型检测：当前请求看起来不是编程任务（检测到关键词：%q），不需要创建编程会话�?
 请直接使用以下工具完成任务：
 - bash：执行命令行操作（如 curl 下载、脚本执行）
 - craft_tool：自动生成并执行脚本（适合数据处理、API 调用、文件转换）
-- read_file / write_file：读写本地文件
-- send_file：将文件发送给用户
+- read_file / write_file：读写本地文�?- send_file：将文件发送给用户
 - open：打开文件或网址
-- memory：保存/检索信息
-
-如果确实需要编程会话，请在下一轮重新调用 create_session。`, matched)
+- memory：保�?检索信�?
+如果确实需要编程会话，请在下一轮重新调�?create_session。`, matched)
 }
 
 func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string {
@@ -3087,7 +3042,7 @@ func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string
 		recommended, reason := h.contextResolver.ResolveTool(projectPath, "")
 		if recommended != "" {
 			tool = recommended
-			hints = append(hints, fmt.Sprintf("🔧 自动推荐工具: %s（%s）", tool, reason))
+			hints = append(hints, fmt.Sprintf("🔧 自动推荐工具: %s�?s�?, tool, reason))
 		}
 	}
 	if tool == "" {
@@ -3105,7 +3060,7 @@ func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string
 			if p.Id == projectID {
 				projectPath = p.Path
 				found = true
-				hints = append(hints, fmt.Sprintf("📁 通过项目 ID 解析: %s → %s", projectID, p.Path))
+				hints = append(hints, fmt.Sprintf("📁 通过项目 ID 解析: %s �?%s", projectID, p.Path))
 				break
 			}
 		}
@@ -3126,7 +3081,7 @@ func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string
 		detected, reason := h.contextResolver.ResolveProject()
 		if detected != "" {
 			projectPath = detected
-			hints = append(hints, fmt.Sprintf("📁 自动检测项目: %s（%s）", projectPath, reason))
+			hints = append(hints, fmt.Sprintf("📁 自动检测项�? %s�?s�?, projectPath, reason))
 		}
 	}
 
@@ -3143,13 +3098,13 @@ func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string
 			hints = append(hints, fmt.Sprintf("⚠️ 模型预检未通过: %s", result.ModelHint))
 		}
 		if result.AllPassed {
-			hints = append(hints, "✅ 环境预检全部通过")
+			hints = append(hints, "�?环境预检全部通过")
 		}
-		// Block session creation when the tool binary is missing — launching
+		// Block session creation when the tool binary is missing �?launching
 		// a process that doesn't exist always exits immediately with code 1,
 		// wasting a session slot and confusing the user with a cryptic error.
 		if !result.ToolReady {
-			return strings.Join(hints, "\n") + "\n❌ 工具未安装，无法创建会话。请先在桌面端安装 " + tool + " 后重试。"
+			return strings.Join(hints, "\n") + "\n�?工具未安装，无法创建会话。请先在桌面端安�?" + tool + " 后重试�?
 		}
 	}
 
@@ -3162,11 +3117,11 @@ func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string
 	resolver := &ProviderResolver{}
 	resolveResult, resolveErr := resolver.Resolve(toolCfg, provider)
 	if resolveErr != nil {
-		errMsg := fmt.Sprintf("❌ 无法创建会话：%s\n请在桌面端为 %s 配置至少一个有效的服务商。", resolveErr.Error(), tool)
+		errMsg := fmt.Sprintf("�?无法创建会话�?s\n请在桌面端为 %s 配置至少一个有效的服务商�?, resolveErr.Error(), tool)
 		return errMsg
 	}
 	if resolveResult.Fallback {
-		hints = append(hints, fmt.Sprintf("⚡ 服务商已降级: %s → %s", resolveResult.OriginalName, resolveResult.Provider.ModelName))
+		hints = append(hints, fmt.Sprintf("�?服务商已降级: %s �?%s", resolveResult.OriginalName, resolveResult.Provider.ModelName))
 	}
 	resolvedProvider := resolveResult.Provider.ModelName
 
@@ -3178,8 +3133,8 @@ func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string
 		ResumeSessionID: resumeSessionID,
 	})
 	if err != nil {
-		errMsg := fmt.Sprintf("❌ 创建会话失败: %s", err.Error())
-		errMsg += fmt.Sprintf("\n💡 修复建议:\n- 检查 %s 是否已安装并可正常运行\n- 确认项目路径 %s 存在且可访问\n- 使用 list_providers 查看可用服务商配置", tool, projectPath)
+		errMsg := fmt.Sprintf("�?创建会话失败: %s", err.Error())
+		errMsg += fmt.Sprintf("\n💡 修复建议:\n- 检�?%s 是否已安装并可正常运行\n- 确认项目路径 %s 存在且可访问\n- 使用 list_providers 查看可用服务商配�?, tool, projectPath)
 		return errMsg
 	}
 
@@ -3197,13 +3152,13 @@ func (h *IMMessageHandler) toolCreateSession(args map[string]interface{}) string
 		b.WriteString(hint)
 		b.WriteString("\n")
 	}
-	b.WriteString(fmt.Sprintf("✅ 会话已创建 [%s]\n", view.ID))
-	b.WriteString(fmt.Sprintf("🔧 工具: %s | 📦 服务商: %s | 📁 项目: %s\n", view.Tool, resolvedProvider, projectPath))
+	b.WriteString(fmt.Sprintf("�?会话已创�?[%s]\n", view.ID))
+	b.WriteString(fmt.Sprintf("🔧 工具: %s | 📦 服务�? %s | 📁 项目: %s\n", view.Tool, resolvedProvider, projectPath))
 	b.WriteString(fmt.Sprintf("\n📋 下一步操作："))
-	b.WriteString(fmt.Sprintf("\n1. 调用 get_session_output(session_id=%q) 确认会话已启动（状态为 running）", view.ID))
+	b.WriteString(fmt.Sprintf("\n1. 调用 get_session_output(session_id=%q) 确认会话已启动（状态为 running�?, view.ID))
 	b.WriteString(fmt.Sprintf("\n2. 立即调用 send_and_observe(session_id=%q, text=\"编程指令\") 将需求发送给编程工具", view.ID))
-	b.WriteString("\n⚠️ 编程工具启动后等待输入，不发送指令不会开始工作。最多检查 2 次 get_session_output，确认 running 后立即发送。")
-	b.WriteString("\n🛑 如果会话已退出（exited）且退出码非 0，不要重试，直接告知用户错误信息。")
+	b.WriteString("\n⚠️ 编程工具启动后等待输入，不发送指令不会开始工作。最多检�?2 �?get_session_output，确�?running 后立即发送�?)
+	b.WriteString("\n🛑 如果会话已退出（exited）且退出码�?0，不要重试，直接告知用户错误信息�?)
 	return b.String()
 }
 
@@ -3259,7 +3214,7 @@ func (h *IMMessageHandler) toolProjectManage(args map[string]interface{}) string
 			return fmt.Sprintf("加载配置失败: %v", err)
 		}
 		if len(items) == 0 {
-			return "当前没有已配置的项目。请在桌面端添加项目。"
+			return "当前没有已配置的项目。请在桌面端添加项目�?
 		}
 		data, _ := json.Marshal(items)
 		return string(data)
@@ -3280,7 +3235,7 @@ func (h *IMMessageHandler) toolProjectManage(args map[string]interface{}) string
 		data, _ := json.Marshal(map[string]string{"id": res.Id, "name": res.Name, "path": res.Path, "status": "switched"})
 		return string(data)
 	default:
-		return fmt.Sprintf("未知 action: %s（支持 create/list/delete/switch）", action)
+		return fmt.Sprintf("未知 action: %s（支�?create/list/delete/switch�?, action)
 	}
 }
 
@@ -3288,15 +3243,15 @@ func (h *IMMessageHandler) toolSendInput(args map[string]interface{}) string {
 	sessionID, _ := args["session_id"].(string)
 	text, _ := args["text"].(string)
 	if sessionID == "" || text == "" {
-		return "缺少 session_id 或 text 参数"
+		return "缺少 session_id �?text 参数"
 	}
 	if h.manager == nil {
-		return "会话管理器未初始化"
+		return "会话管理器未初始�?
 	}
 	if err := h.manager.WriteInput(sessionID, text); err != nil {
-		return fmt.Sprintf("发送失败: %s", err.Error())
+		return fmt.Sprintf("发送失�? %s", err.Error())
 	}
-	return fmt.Sprintf("已发送到会话 %s。⚠️ 你必须立即调用 get_session_output(session_id=%q) 验证命令是否执行成功，不要直接告诉用户已完成。", sessionID, sessionID)
+	return fmt.Sprintf("已发送到会话 %s。⚠�?你必须立即调�?get_session_output(session_id=%q) 验证命令是否执行成功，不要直接告诉用户已完成�?, sessionID, sessionID)
 }
 
 // writeAutoResumeHint appends auto-resume instructions to the output buffer
@@ -3304,29 +3259,29 @@ func (h *IMMessageHandler) toolSendInput(args map[string]interface{}) string {
 // provides a context-specific description of why the session exited.
 func writeAutoResumeHint(b *strings.Builder, rc *SessionResumeContext, reason string) {
 	if rc == nil {
-		b.WriteString("\n✅ 编程工具已正常退出。如需继续，请创建新会话。")
+		b.WriteString("\n�?编程工具已正常退出。如需继续，请创建新会话�?)
 		return
 	}
 	if rc.ResumeCount >= 10 {
-		b.WriteString("\n✅ 编程工具已退出。已自动续接 10 次，建议告知用户当前进度并询问是否继续。")
+		b.WriteString("\n�?编程工具已退出。已自动续接 10 次，建议告知用户当前进度并询问是否继续�?)
 		return
 	}
 	b.WriteString(fmt.Sprintf("\n🔄 %s", reason))
-	b.WriteString(fmt.Sprintf("\n📌 自动续接指令（第 %d 次续接）：", rc.ResumeCount+1))
-	b.WriteString("\n1. 立即调用 create_session 创建新会话（使用相同的 tool 和 project_path）")
-	b.WriteString("\n2. 用 send_and_observe 发送续接指令：")
-	b.WriteString("\n   「请检查项目当前状态，继续完成之前未完成的任务。")
+	b.WriteString(fmt.Sprintf("\n📌 自动续接指令（第 %d 次续接）�?, rc.ResumeCount+1))
+	b.WriteString("\n1. 立即调用 create_session 创建新会话（使用相同�?tool �?project_path�?)
+	b.WriteString("\n2. �?send_and_observe 发送续接指令：")
+	b.WriteString("\n   「请检查项目当前状态，继续完成之前未完成的任务�?)
 	if rc.OriginalTask != "" {
-		b.WriteString(fmt.Sprintf("原始任务：%s。", rc.OriginalTask))
+		b.WriteString(fmt.Sprintf("原始任务�?s�?, rc.OriginalTask))
 	}
 	if rc.LastProgress != "" {
-		b.WriteString(fmt.Sprintf("上次进度：%s。", rc.LastProgress))
+		b.WriteString(fmt.Sprintf("上次进度�?s�?, rc.LastProgress))
 	}
 	if len(rc.CompletedFiles) > 0 {
-		b.WriteString(fmt.Sprintf("已完成的文件：%s。", strings.Join(rc.CompletedFiles, ", ")))
+		b.WriteString(fmt.Sprintf("已完成的文件�?s�?, strings.Join(rc.CompletedFiles, ", ")))
 	}
-	b.WriteString("查看已有文件，补全缺失的部分，确保项目可以正常运行。」")
-	b.WriteString("\n⚠️ 不要询问用户是否继续——直接创建新会话续接。不要自己用 write_file 写代码。")
+	b.WriteString("查看已有文件，补全缺失的部分，确保项目可以正常运行。�?)
+	b.WriteString("\n⚠️ 不要询问用户是否继续——直接创建新会话续接。不要自己用 write_file 写代码�?)
 }
 
 func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) string {
@@ -3335,11 +3290,11 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 		return "缺少 session_id 参数"
 	}
 	if h.manager == nil {
-		return "会话管理器未初始化"
+		return "会话管理器未初始�?
 	}
 	session, ok := h.manager.Get(sessionID)
 	if !ok {
-		return fmt.Sprintf("会话 %s 不存在", sessionID)
+		return fmt.Sprintf("会话 %s 不存�?, sessionID)
 	}
 
 	maxLines := 30
@@ -3379,7 +3334,7 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 	session.mu.RUnlock()
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("会话 %s 状态: %s\n", sessionID, status))
+	b.WriteString(fmt.Sprintf("会话 %s 状�? %s\n", sessionID, status))
 	if summary.CurrentTask != "" {
 		b.WriteString(fmt.Sprintf("当前任务: %s\n", summary.CurrentTask))
 	}
@@ -3387,10 +3342,10 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 		b.WriteString(fmt.Sprintf("进度: %s\n", summary.ProgressSummary))
 	}
 	if summary.LastResult != "" {
-		b.WriteString(fmt.Sprintf("最近结果: %s\n", summary.LastResult))
+		b.WriteString(fmt.Sprintf("最近结�? %s\n", summary.LastResult))
 	}
 	if summary.LastCommand != "" {
-		b.WriteString(fmt.Sprintf("最近命令: %s\n", summary.LastCommand))
+		b.WriteString(fmt.Sprintf("最近命�? %s\n", summary.LastCommand))
 	}
 	if summary.WaitingForUser {
 		b.WriteString("⚠️ 会话正在等待用户输入\n")
@@ -3403,7 +3358,7 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 		if len(rawLines) > maxLines {
 			start = len(rawLines) - maxLines
 		}
-		b.WriteString(fmt.Sprintf("\n--- 最近 %d 行输出 ---\n", len(rawLines)-start))
+		b.WriteString(fmt.Sprintf("\n--- 最�?%d 行输�?---\n", len(rawLines)-start))
 		for _, line := range rawLines[start:] {
 			b.WriteString(line)
 			b.WriteString("\n")
@@ -3414,9 +3369,9 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 		// for the first user message (SDK mode tools like Claude Code wait
 		// for input after init). Hint the AI to send the task.
 		if status == string(SessionRunning) {
-			b.WriteString(fmt.Sprintf("\n📌 会话已就绪但暂无输出——编程工具在等待输入。请立即调用 send_and_observe(session_id=%q, text=\"编程指令\") 发送任务。", sessionID))
+			b.WriteString(fmt.Sprintf("\n📌 会话已就绪但暂无输出——编程工具在等待输入。请立即调用 send_and_observe(session_id=%q, text=\"编程指令\") 发送任务�?, sessionID))
 		} else if status == string(SessionStarting) {
-			b.WriteString("\n⏳ 会话正在启动中，请稍后再次调用 get_session_output 检查状态（最多再检查 1 次）。")
+			b.WriteString("\n�?会话正在启动中，请稍后再次调�?get_session_output 检查状态（最多再检�?1 次）�?)
 		}
 	}
 
@@ -3429,11 +3384,11 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 
 		switch stallState {
 		case StallStateSuspected:
-			b.WriteString("\n⏳ 编程工具输出暂停，系统正在尝试恢复，请稍后再检查")
+			b.WriteString("\n�?编程工具输出暂停，系统正在尝试恢复，请稍后再检�?)
 		case StallStateStuck:
 			b.WriteString("\n⚠️ 编程工具可能已卡住，建议发送具体指令或终止会话")
 		default: // StallStateNormal
-			b.WriteString("\n⏳ 编程工具正在工作中，请等待后再检查进度")
+			b.WriteString("\n�?编程工具正在工作中，请等待后再检查进�?)
 		}
 	}
 
@@ -3446,11 +3401,10 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 
 		switch completionLevel {
 		case CompletionCompleted:
-			b.WriteString("\n✅ 任务似乎已完成，可以查看结果")
+			b.WriteString("\n�?任务似乎已完成，可以查看结果")
 		case CompletionIncomplete:
 			b.WriteString("\n⚠️ 任务似乎未完成，建议发送「继续」让编程工具继续工作")
-			// CompletionUncertain: 保持现有默认提示（"⚠️ 会话正在等待用户输入"）
-		}
+			// CompletionUncertain: 保持现有默认提示�?⚠️ 会话正在等待用户输入"�?		}
 	}
 
 	// When the session has exited with a non-zero code, append a strong
@@ -3468,33 +3422,33 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 
 	if (sessionStatus == SessionExited || sessionStatus == SessionError) && exitCodeVal != nil && *exitCodeVal != 0 {
 		// Structured sessions (Claude Code SDK, Gemini ACP, Codex, iFlow)
-		// normally exit with code 1 — this is NOT a failure.
+		// normally exit with code 1 �?this is NOT a failure.
 		if session.isStructuredSession() && *exitCodeVal == 1 {
 			// Check if there's a resume context indicating unfinished work.
 			session.mu.RLock()
 			rc := session.ResumeContext
 			session.mu.RUnlock()
 
-			writeAutoResumeHint(&b, rc, "编程工具因 token 耗尽正常退出，但任务可能未完成。")
+			writeAutoResumeHint(&b, rc, "编程工具�?token 耗尽正常退出，但任务可能未完成�?)
 		} else if session.isStructuredSession() && *exitCodeVal > 1 {
-			// API error or unexpected crash — allow retry.
+			// API error or unexpected crash �?allow retry.
 			session.mu.RLock()
 			rc := session.ResumeContext
 			session.mu.RUnlock()
 
 			if rc != nil && rc.ExitReason == "api_error" && rc.ResumeCount < 2 {
-				b.WriteString(fmt.Sprintf("\n⚠️ 编程工具异常退出（退出码 %d），可能是上游 API 不稳定。", *exitCodeVal))
-				b.WriteString(fmt.Sprintf("\n📌 自动重试（第 %d 次）：立即创建新会话重试，使用相同参数。", rc.ResumeCount+1))
-				b.WriteString("\n不要询问用户——直接重试。")
+				b.WriteString(fmt.Sprintf("\n⚠️ 编程工具异常退出（退出码 %d），可能是上�?API 不稳定�?, *exitCodeVal))
+				b.WriteString(fmt.Sprintf("\n📌 自动重试（第 %d 次）：立即创建新会话重试，使用相同参数�?, rc.ResumeCount+1))
+				b.WriteString("\n不要询问用户——直接重试�?)
 			} else {
-				b.WriteString(fmt.Sprintf("\n🛑 会话已失败退出（退出码 %d）。不要再对此会话调用任何工具。", *exitCodeVal))
-				b.WriteString(fmt.Sprintf("\n请立即将错误信息告知用户，并建议检查 %s 的安装和配置。", sessionTool))
-				b.WriteString("\n不要重复创建新会话重试——同样的环境问题会导致同样的失败。")
+				b.WriteString(fmt.Sprintf("\n🛑 会话已失败退出（退出码 %d）。不要再对此会话调用任何工具�?, *exitCodeVal))
+				b.WriteString(fmt.Sprintf("\n请立即将错误信息告知用户，并建议检�?%s 的安装和配置�?, sessionTool))
+				b.WriteString("\n不要重复创建新会话重试——同样的环境问题会导致同样的失败�?)
 			}
 		} else {
-			b.WriteString(fmt.Sprintf("\n🛑 会话已失败退出（退出码 %d）。不要再对此会话调用任何工具。", *exitCodeVal))
-			b.WriteString(fmt.Sprintf("\n请立即将错误信息告知用户，并建议检查 %s 的安装和配置。", sessionTool))
-			b.WriteString("\n不要重复创建新会话重试——同样的环境问题会导致同样的失败。")
+			b.WriteString(fmt.Sprintf("\n🛑 会话已失败退出（退出码 %d）。不要再对此会话调用任何工具�?, *exitCodeVal))
+			b.WriteString(fmt.Sprintf("\n请立即将错误信息告知用户，并建议检�?%s 的安装和配置�?, sessionTool))
+			b.WriteString("\n不要重复创建新会话重试——同样的环境问题会导致同样的失败�?)
 		}
 	}
 
@@ -3506,7 +3460,7 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 		rc := session.ResumeContext
 		session.mu.RUnlock()
 
-		writeAutoResumeHint(&b, rc, "编程工具已正常退出（可能达到 max-turns 限制），任务可能未完成。")
+		writeAutoResumeHint(&b, rc, "编程工具已正常退出（可能达到 max-turns 限制），任务可能未完成�?)
 	}
 
 	return b.String()
@@ -3518,24 +3472,24 @@ func (h *IMMessageHandler) toolGetSessionEvents(args map[string]interface{}) str
 		return "缺少 session_id 参数"
 	}
 	if h.manager == nil {
-		return "会话管理器未初始化"
+		return "会话管理器未初始�?
 	}
 	session, ok := h.manager.Get(sessionID)
 	if !ok {
-		return fmt.Sprintf("会话 %s 不存在", sessionID)
+		return fmt.Sprintf("会话 %s 不存�?, sessionID)
 	}
 	session.mu.RLock()
 	events := make([]ImportantEvent, len(session.Events))
 	copy(events, session.Events)
 	session.mu.RUnlock()
 	if len(events) == 0 {
-		return fmt.Sprintf("会话 %s 暂无重要事件。", sessionID)
+		return fmt.Sprintf("会话 %s 暂无重要事件�?, sessionID)
 	}
 	var b strings.Builder
 	for _, ev := range events {
 		b.WriteString(fmt.Sprintf("- [%s] %s: %s", ev.Severity, ev.Type, ev.Title))
 		if ev.Summary != "" {
-			b.WriteString(fmt.Sprintf(" — %s", ev.Summary))
+			b.WriteString(fmt.Sprintf(" �?%s", ev.Summary))
 		}
 		if ev.RelatedFile != "" {
 			b.WriteString(fmt.Sprintf(" (文件: %s)", ev.RelatedFile))
@@ -3551,12 +3505,12 @@ func (h *IMMessageHandler) toolInterruptSession(args map[string]interface{}) str
 		return "缺少 session_id 参数"
 	}
 	if h.manager == nil {
-		return "会话管理器未初始化"
+		return "会话管理器未初始�?
 	}
 	if err := h.manager.Interrupt(sessionID); err != nil {
 		return fmt.Sprintf("中断失败: %s", err.Error())
 	}
-	return fmt.Sprintf("已向会话 %s 发送中断信号", sessionID)
+	return fmt.Sprintf("已向会话 %s 发送中断信�?, sessionID)
 }
 
 func (h *IMMessageHandler) toolKillSession(args map[string]interface{}) string {
@@ -3565,31 +3519,31 @@ func (h *IMMessageHandler) toolKillSession(args map[string]interface{}) string {
 		return "缺少 session_id 参数"
 	}
 	if h.manager == nil {
-		return "会话管理器未初始化"
+		return "会话管理器未初始�?
 	}
 	if err := h.manager.Kill(sessionID); err != nil {
 		return fmt.Sprintf("终止失败: %s", err.Error())
 	}
-	return fmt.Sprintf("已终止会话 %s", sessionID)
+	return fmt.Sprintf("已终止会�?%s", sessionID)
 }
 
 // toolSendAndObserve combines send_input + get_session_output into a single
 // tool call. It sends text to a session, waits briefly for output to
-// accumulate, then returns the session output — saving one LLM round-trip.
+// accumulate, then returns the session output �?saving one LLM round-trip.
 func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) string {
 	sessionID, _ := args["session_id"].(string)
 	text, _ := args["text"].(string)
 	if sessionID == "" || text == "" {
-		return "缺少 session_id 或 text 参数"
+		return "缺少 session_id �?text 参数"
 	}
 	if h.manager == nil {
-		return "会话管理器未初始化"
+		return "会话管理器未初始�?
 	}
 
 	// Snapshot line count and image count BEFORE sending so we can detect new output/images.
 	session, ok := h.manager.Get(sessionID)
 	if !ok {
-		return fmt.Sprintf("会话 %s 不存在", sessionID)
+		return fmt.Sprintf("会话 %s 不存�?, sessionID)
 	}
 	session.mu.RLock()
 	baseLineCount := len(session.RawOutputLines)
@@ -3597,7 +3551,7 @@ func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) strin
 	session.mu.RUnlock()
 
 	if err := h.manager.WriteInput(sessionID, text); err != nil {
-		return fmt.Sprintf("发送失败: %s", err.Error())
+		return fmt.Sprintf("发送失�? %s", err.Error())
 	}
 
 	// Poll up to ~30s with increasing intervals, waiting for meaningful output.
@@ -3640,7 +3594,7 @@ func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) strin
 		}
 	}
 
-	// Check if session is still busy after polling — read stall state for precise hint.
+	// Check if session is still busy after polling �?read stall state for precise hint.
 	session.mu.RLock()
 	stillBusy := session.Status == SessionBusy
 	stallState := session.StallState
@@ -3648,7 +3602,7 @@ func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) strin
 
 	// Check if new images were produced during the command execution.
 	// Images from SDK sessions are already delivered to the user via the
-	// session.image WebSocket channel (Hub → Feishu notifier), so we do NOT
+	// session.image WebSocket channel (Hub �?Feishu notifier), so we do NOT
 	// return [screenshot_base64] here (that would cause duplicate delivery).
 	// Instead, append a note to the text output so the AI knows an image
 	// was sent and can reference it in its response.
@@ -3668,7 +3622,7 @@ func (h *IMMessageHandler) toolSendAndObserve(args map[string]interface{}) strin
 	_ = stallState
 
 	if newImageCount > 0 {
-		output += fmt.Sprintf("\n\n📷 会话产生了 %d 张图片，已自动通过 IM 发送给用户。", newImageCount)
+		output += fmt.Sprintf("\n\n📷 会话产生�?%d 张图片，已自动通过 IM 发送给用户�?, newImageCount)
 	}
 
 	return output
@@ -3682,21 +3636,21 @@ func (h *IMMessageHandler) toolControlSession(args map[string]interface{}) strin
 		return "缺少 session_id 参数"
 	}
 	if h.manager == nil {
-		return "会话管理器未初始化"
+		return "会话管理器未初始�?
 	}
 	switch action {
 	case "interrupt":
 		if err := h.manager.Interrupt(sessionID); err != nil {
 			return fmt.Sprintf("中断失败: %s", err.Error())
 		}
-		return fmt.Sprintf("已向会话 %s 发送中断信号", sessionID)
+		return fmt.Sprintf("已向会话 %s 发送中断信�?, sessionID)
 	case "kill":
 		if err := h.manager.Kill(sessionID); err != nil {
 			return fmt.Sprintf("终止失败: %s", err.Error())
 		}
-		return fmt.Sprintf("已终止会话 %s", sessionID)
+		return fmt.Sprintf("已终止会�?%s", sessionID)
 	default:
-		return "action 参数无效，可选值: interrupt, kill"
+		return "action 参数无效，可选�? interrupt, kill"
 	}
 }
 
@@ -3717,31 +3671,30 @@ func (h *IMMessageHandler) toolManageConfig(args map[string]interface{}) string 
 	case "import":
 		return h.toolImportConfig(args)
 	default:
-		return "action 参数无效，可选值: get, update, batch_update, list_schema, export, import"
+		return "action 参数无效，可选�? get, update, batch_update, list_schema, export, import"
 	}
 }
 
 func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {
 	sessionID, _ := args["session_id"].(string)
 
-	// 如果未指定 session_id，自动选择唯一活跃会话
+	// 如果未指�?session_id，自动选择唯一活跃会话
 	if sessionID == "" && h.manager != nil {
 		sessions := h.manager.List()
 		if len(sessions) == 1 {
 			sessionID = sessions[0].ID
 		} else if len(sessions) > 1 {
 			var lines []string
-			lines = append(lines, "有多个活跃会话，请指定 session_id：")
+			lines = append(lines, "有多个活跃会话，请指�?session_id�?)
 			for _, s := range sessions {
 				s.mu.RLock()
 				status := string(s.Status)
 				s.mu.RUnlock()
-				lines = append(lines, fmt.Sprintf("- %s (工具=%s, 状态=%s)", s.ID, s.Tool, status))
+				lines = append(lines, fmt.Sprintf("- %s (工具=%s, 状�?%s)", s.ID, s.Tool, status))
 			}
 			return strings.Join(lines, "\n")
 		} else {
-			// 没有活跃会话时，直接截屏本机屏幕（不依赖 session）
-			base64Data, err := h.manager.CaptureScreenshotDirect()
+			// 没有活跃会话时，直接截屏本机屏幕（不依赖 session�?			base64Data, err := h.manager.CaptureScreenshotDirect()
 			if err != nil {
 				return fmt.Sprintf("截图失败: %s", err.Error())
 			}
@@ -3753,7 +3706,7 @@ func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {
 		return "缺少 session_id 参数，且无法自动选择会话"
 	}
 	if h.manager == nil {
-		return "会话管理器未初始化"
+		return "会话管理器未初始�?
 	}
 
 	// Non-desktop platforms (WeChat, QQ, etc.) cannot receive session.image
@@ -3773,9 +3726,7 @@ func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {
 	if err := h.manager.CaptureScreenshot(sessionID); err != nil {
 		return fmt.Sprintf("截图失败: %s", err.Error())
 	}
-	// 截图已通过 session.image 通道直接发送给用户，
-	// 返回特殊标记让 runAgentLoop 立即终止，避免 Agent 继续推理导致重复发图。
-	return "[screenshot_sent]"
+	// 截图已通过 session.image 通道直接发送给用户�?	// 返回特殊标记�?runAgentLoop 立即终止，避�?Agent 继续推理导致重复发图�?	return "[screenshot_sent]"
 }
 
 func (h *IMMessageHandler) toolListMCPTools() string {
@@ -3799,7 +3750,7 @@ func (h *IMMessageHandler) toolListMCPTools() string {
 		servers := registry.ListServers()
 		for _, s := range servers {
 			hasAny = true
-			b.WriteString(fmt.Sprintf("## %s (%s) [远程/HTTP] 状态=%s\n", s.Name, s.ID, s.HealthStatus))
+			b.WriteString(fmt.Sprintf("## %s (%s) [远程/HTTP] 状�?%s\n", s.Name, s.ID, s.HealthStatus))
 			tools := registry.GetServerTools(s.ID)
 			if len(tools) == 0 {
 				b.WriteString("  (无工具或无法获取)\n")
@@ -3821,7 +3772,7 @@ func (h *IMMessageHandler) toolCallMCPTool(args map[string]interface{}) string {
 	serverID, _ := args["server_id"].(string)
 	toolName, _ := args["tool_name"].(string)
 	if serverID == "" || toolName == "" {
-		return "缺少 server_id 或 tool_name 参数"
+		return "缺少 server_id �?tool_name 参数"
 	}
 	toolArgs, _ := args["arguments"].(map[string]interface{})
 
@@ -3857,7 +3808,7 @@ func (h *IMMessageHandler) toolListSkills() string {
 
 	// Show local skills
 	if len(skills) > 0 {
-		b.WriteString("=== 本地已注册 Skill ===\n")
+		b.WriteString("=== 本地已注�?Skill ===\n")
 		for _, s := range skills {
 			line := fmt.Sprintf("- %s [%s]: %s", s.Name, s.Status, s.Description)
 			if s.Source == "hub" {
@@ -3866,7 +3817,7 @@ func (h *IMMessageHandler) toolListSkills() string {
 				line += " (来源: 本地文件)"
 			}
 			if s.UsageCount > 0 {
-				line += fmt.Sprintf(" (用过%d次, 成功率%.0f%%)", s.UsageCount, s.SuccessRate*100)
+				line += fmt.Sprintf(" (用过%d�? 成功�?.0f%%)", s.UsageCount, s.SuccessRate*100)
 			}
 			b.WriteString(line + "\n")
 		}
@@ -3878,13 +3829,13 @@ func (h *IMMessageHandler) toolListSkills() string {
 	if len(skills) < 3 && h.app.skillHubClient != nil {
 		recs := h.app.skillHubClient.GetRecommendations()
 		if len(recs) > 0 {
-			b.WriteString("\n=== SkillHub 推荐 Skill（可用 install_skill_hub 安装）===\n")
+			b.WriteString("\n=== SkillHub 推荐 Skill（可�?install_skill_hub 安装�?==\n")
 			for _, r := range recs {
 				b.WriteString(fmt.Sprintf("- [%s] %s: %s (trust: %s, downloads: %d, hub: %s)\n",
 					r.ID, r.Name, r.Description, r.TrustLevel, r.Downloads, r.HubURL))
 			}
 		} else {
-			b.WriteString("\n提示：可以使用 search_skill_hub 工具在 SkillHub 上搜索更多 Skill。\n")
+			b.WriteString("\n提示：可以使�?search_skill_hub 工具�?SkillHub 上搜索更�?Skill。\n")
 		}
 	}
 
@@ -3901,7 +3852,7 @@ func (h *IMMessageHandler) toolSearchSkillHub(args map[string]interface{}) strin
 		h.app.ensureRemoteInfra()
 	}
 	if h.app.skillHubClient == nil {
-		return "SkillHub 客户端未初始化，请检查配置中的 skill_hub_urls"
+		return "SkillHub 客户端未初始化，请检查配置中�?skill_hub_urls"
 	}
 
 	results, err := h.app.skillHubClient.Search(context.Background(), query)
@@ -3909,11 +3860,11 @@ func (h *IMMessageHandler) toolSearchSkillHub(args map[string]interface{}) strin
 		return fmt.Sprintf("搜索失败: %s", err.Error())
 	}
 	if len(results) == 0 {
-		return fmt.Sprintf("在 SkillHub 上未找到与 %q 相关的 Skill", query)
+		return fmt.Sprintf("�?SkillHub 上未找到�?%q 相关�?Skill", query)
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("找到 %d 个 Skill：\n", len(results)))
+	b.WriteString(fmt.Sprintf("找到 %d �?Skill：\n", len(results)))
 	for _, r := range results {
 		tags := ""
 		if len(r.Tags) > 0 {
@@ -3922,7 +3873,7 @@ func (h *IMMessageHandler) toolSearchSkillHub(args map[string]interface{}) strin
 		b.WriteString(fmt.Sprintf("- ID: %s | %s: %s%s (trust: %s, downloads: %d, hub: %s)\n",
 			r.ID, r.Name, r.Description, tags, r.TrustLevel, r.Downloads, r.HubURL))
 	}
-	b.WriteString("\n使用 install_skill_hub 工具安装，需提供 skill_id 和 hub_url 参数。")
+	b.WriteString("\n使用 install_skill_hub 工具安装，需提供 skill_id �?hub_url 参数�?)
 	return b.String()
 }
 
@@ -3940,7 +3891,7 @@ func (h *IMMessageHandler) toolInstallSkillHub(args map[string]interface{}) stri
 		h.app.ensureRemoteInfra()
 	}
 	if h.app.skillHubClient == nil {
-		return "SkillHub 客户端未初始化"
+		return "SkillHub 客户端未初始�?
 	}
 	if h.app.skillExecutor == nil {
 		return "Skill Executor 未初始化"
@@ -3966,7 +3917,7 @@ func (h *IMMessageHandler) toolInstallSkillHub(args map[string]interface{}) stri
 					Result:       fmt.Sprintf("rejected skill %s from %s: critical risk", skillID, hubURL),
 				})
 			}
-			return fmt.Sprintf("⚠️ Skill %q 包含高风险操作，已拒绝自动安装。风险因素: %s",
+			return fmt.Sprintf("⚠️ Skill %q 包含高风险操作，已拒绝自动安装。风险因�? %s",
 				entry.Name, strings.Join(assessment.Factors, ", "))
 		}
 	}
@@ -4000,11 +3951,11 @@ func (h *IMMessageHandler) toolInstallSkillHub(args map[string]interface{}) stri
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("✅ 已成功安装 Skill「%s」\n描述: %s\n来源: %s\n信任等级: %s\n",
+	b.WriteString(fmt.Sprintf("�?已成功安�?Skill�?s」\n描述: %s\n来源: %s\n信任等级: %s\n",
 		entry.Name, entry.Description, hubURL, entry.TrustLevel))
 
 	if autoRun {
-		b.WriteString(fmt.Sprintf("\n正在立即执行 Skill「%s」...\n", entry.Name))
+		b.WriteString(fmt.Sprintf("\n正在立即执行 Skill�?s�?..\n", entry.Name))
 		result, err := h.app.skillExecutor.Execute(entry.Name)
 		if err != nil {
 			b.WriteString(fmt.Sprintf("执行失败: %s\n%s", err.Error(), result))
@@ -4067,7 +4018,7 @@ func (h *IMMessageHandler) toolParallelExecute(args map[string]interface{}) stri
 		tasks = append(tasks, tr)
 	}
 	if len(tasks) == 0 {
-		return "没有有效的任务"
+		return "没有有效的任�?
 	}
 	result, err := orch.ExecuteParallel(tasks)
 	if err != nil {
@@ -4196,10 +4147,10 @@ func (h *IMMessageHandler) toolBash(args map[string]interface{}, onProgress Prog
 				// Truncate command for display.
 				displayCmd := command
 				if len(displayCmd) > 60 {
-					displayCmd = displayCmd[:60] + "…"
+					displayCmd = displayCmd[:60] + "�?
 				}
 				if onProgress != nil {
-					onProgress(fmt.Sprintf("⏳ 命令仍在执行中（已 %ds）: %s", elapsed, displayCmd))
+					onProgress(fmt.Sprintf("�?命令仍在执行中（�?%ds�? %s", elapsed, displayCmd))
 				}
 			case <-done:
 				return
@@ -4214,14 +4165,14 @@ func (h *IMMessageHandler) toolBash(args map[string]interface{}, onProgress Prog
 	if stdout.Len() > 0 {
 		out := stdout.String()
 		if len(out) > 8192 {
-			out = out[:8192] + "\n... (输出已截断)"
+			out = out[:8192] + "\n... (输出已截�?"
 		}
 		b.WriteString(out)
 	}
 	if stderr.Len() > 0 {
 		errOut := stderr.String()
 		if len(errOut) > 4096 {
-			errOut = errOut[:4096] + "\n... (错误输出已截断)"
+			errOut = errOut[:4096] + "\n... (错误输出已截�?"
 		}
 		if b.Len() > 0 {
 			b.WriteString("\n")
@@ -4232,7 +4183,7 @@ func (h *IMMessageHandler) toolBash(args map[string]interface{}, onProgress Prog
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			b.WriteString(fmt.Sprintf("\n[错误] 命令超时（%d 秒）", timeout))
+			b.WriteString(fmt.Sprintf("\n[错误] 命令超时�?d 秒）", timeout))
 		} else {
 			b.WriteString(fmt.Sprintf("\n[错误] 退出码: %v", err))
 		}
@@ -4256,7 +4207,7 @@ func (h *IMMessageHandler) toolReadFile(args map[string]interface{}) string {
 		return fmt.Sprintf("文件不存在或无法访问: %s", err.Error())
 	}
 	if info.IsDir() {
-		return fmt.Sprintf("%s 是目录，请使用 list_directory 工具", absPath)
+		return fmt.Sprintf("%s 是目录，请使�?list_directory 工具", absPath)
 	}
 
 	maxLines := readFileMaxLines
@@ -4272,7 +4223,7 @@ func (h *IMMessageHandler) toolReadFile(args map[string]interface{}) string {
 	lines := strings.SplitAfter(string(data), "\n")
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
-		return strings.Join(lines, "") + fmt.Sprintf("\n... (已截断，共 %d 行，显示前 %d 行)", len(strings.SplitAfter(string(data), "\n")), maxLines)
+		return strings.Join(lines, "") + fmt.Sprintf("\n... (已截断，�?%d 行，显示�?%d �?", len(strings.SplitAfter(string(data), "\n")), maxLines)
 	}
 	return string(data)
 }
@@ -4281,16 +4232,15 @@ func (h *IMMessageHandler) toolWriteFile(args map[string]interface{}) string {
 	p, _ := args["path"].(string)
 	content, _ := args["content"].(string)
 	if p == "" || content == "" {
-		return "缺少 path 或 content 参数"
+		return "缺少 path �?content 参数"
 	}
 	if len(content) > writeFileMaxSize {
-		return fmt.Sprintf("内容过大（%d 字节），最大允许 %d 字节", len(content), writeFileMaxSize)
+		return fmt.Sprintf("内容过大�?d 字节），最大允�?%d 字节", len(content), writeFileMaxSize)
 	}
 
 	absPath := resolvePath(p)
 
-	// 自动创建父目录
-	dir := filepath.Dir(absPath)
+	// 自动创建父目�?	dir := filepath.Dir(absPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Sprintf("创建目录失败: %s", err.Error())
 	}
@@ -4302,9 +4252,9 @@ func (h *IMMessageHandler) toolWriteFile(args map[string]interface{}) string {
 	// 验证写入
 	info, err := os.Stat(absPath)
 	if err != nil {
-		return fmt.Sprintf("写入后验证失败: %s", err.Error())
+		return fmt.Sprintf("写入后验证失�? %s", err.Error())
 	}
-	return fmt.Sprintf("已写入 %s（%d 字节）", absPath, info.Size())
+	return fmt.Sprintf("已写�?%s�?d 字节�?, absPath, info.Size())
 }
 
 func (h *IMMessageHandler) toolListDirectory(args map[string]interface{}) string {
@@ -4345,7 +4295,7 @@ func (h *IMMessageHandler) toolListDirectory(args map[string]interface{}) string
 	return b.String()
 }
 
-const sendFileMaxSize = 200 << 20 // 200 MB — large files are handled by plugin-level fallback (temp URL)
+const sendFileMaxSize = 200 << 20 // 200 MB �?large files are handled by plugin-level fallback (temp URL)
 
 func (h *IMMessageHandler) toolSendFile(args map[string]interface{}) string {
 	p, _ := args["path"].(string)
@@ -4359,10 +4309,10 @@ func (h *IMMessageHandler) toolSendFile(args map[string]interface{}) string {
 		return fmt.Sprintf("文件不存在或无法访问: %s", err.Error())
 	}
 	if info.IsDir() {
-		return fmt.Sprintf("%s 是目录，不能作为文件发送", absPath)
+		return fmt.Sprintf("%s 是目录，不能作为文件发�?, absPath)
 	}
 	if info.Size() > sendFileMaxSize {
-		return fmt.Sprintf("文件过大（%d 字节），最大允许 %d 字节", info.Size(), sendFileMaxSize)
+		return fmt.Sprintf("文件过大�?d 字节），最大允�?%d 字节", info.Size(), sendFileMaxSize)
 	}
 
 	data, err := os.ReadFile(absPath)
@@ -4411,7 +4361,7 @@ func (h *IMMessageHandler) toolOpen(args map[string]interface{}) string {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		// Use rundll32 url.dll,FileProtocolHandler — opens files/URLs with
+		// Use rundll32 url.dll,FileProtocolHandler �?opens files/URLs with
 		// the default handler without spawning a visible console window.
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
 	case "darwin":
@@ -4424,7 +4374,7 @@ func (h *IMMessageHandler) toolOpen(args map[string]interface{}) string {
 		return fmt.Sprintf("打开失败: %s", err.Error())
 	}
 
-	// Don't wait for the process — it's a GUI application.
+	// Don't wait for the process �?it's a GUI application.
 	go cmd.Wait()
 
 	if isURL {
@@ -4458,10 +4408,10 @@ func (h *IMMessageHandler) toolMemory(args map[string]interface{}) string {
 		}
 		entries := h.memoryStore.RecallDynamic(query, category, projectPath)
 		if len(entries) == 0 {
-			return "没有找到相关记忆。"
+			return "没有找到相关记忆�?
 		}
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("召回 %d 条相关记忆:\n", len(entries)))
+		b.WriteString(fmt.Sprintf("召回 %d 条相关记�?\n", len(entries)))
 		for _, e := range entries {
 			b.WriteString(fmt.Sprintf("- [%s] %s\n", string(e.Category), e.Content))
 		}
@@ -4504,17 +4454,17 @@ func (h *IMMessageHandler) toolMemory(args map[string]interface{}) string {
 		if len(summary) > 50 {
 			summary = summary[:50] + "..."
 		}
-		return fmt.Sprintf("已保存记忆: %s", summary)
+		return fmt.Sprintf("已保存记�? %s", summary)
 
 	case "list":
 		category := MemoryCategory(stringVal(args, "category"))
 		keyword := stringVal(args, "keyword")
 		entries := h.memoryStore.List(category, keyword)
 		if len(entries) == 0 {
-			return "没有找到匹配的记忆条目。"
+			return "没有找到匹配的记忆条目�?
 		}
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("找到 %d 条记忆:\n", len(entries)))
+		b.WriteString(fmt.Sprintf("找到 %d 条记�?\n", len(entries)))
 		for _, e := range entries {
 			b.WriteString(fmt.Sprintf("- [%s] (%s) %s", e.ID, e.Category, e.Content))
 			if len(e.Tags) > 0 {
@@ -4532,10 +4482,10 @@ func (h *IMMessageHandler) toolMemory(args map[string]interface{}) string {
 		if err := h.memoryStore.Delete(id); err != nil {
 			return fmt.Sprintf("删除记忆失败: %s", err.Error())
 		}
-		return fmt.Sprintf("已删除记忆: %s", id)
+		return fmt.Sprintf("已删除记�? %s", id)
 
 	default:
-		return "action 参数无效，可选值: recall, save, list, delete"
+		return "action 参数无效，可选�? recall, save, list, delete"
 	}
 }
 
@@ -4545,13 +4495,13 @@ func (h *IMMessageHandler) toolMemory(args map[string]interface{}) string {
 
 func (h *IMMessageHandler) toolCreateTemplate(args map[string]interface{}) string {
 	if h.templateManager == nil {
-		return "模板管理器未初始化"
+		return "模板管理器未初始�?
 	}
 
 	name := stringVal(args, "name")
 	tool := stringVal(args, "tool")
 	if name == "" || tool == "" {
-		return "缺少 name 或 tool 参数"
+		return "缺少 name �?tool 参数"
 	}
 
 	tpl := SessionTemplate{
@@ -4571,21 +4521,21 @@ func (h *IMMessageHandler) toolCreateTemplate(args map[string]interface{}) strin
 	if err := h.templateManager.Create(tpl); err != nil {
 		return fmt.Sprintf("创建模板失败: %s", err.Error())
 	}
-	return fmt.Sprintf("模板已创建: %s（工具=%s, 项目=%s）", name, tool, tpl.ProjectPath)
+	return fmt.Sprintf("模板已创�? %s（工�?%s, 项目=%s�?, name, tool, tpl.ProjectPath)
 }
 
 func (h *IMMessageHandler) toolListTemplates() string {
 	if h.templateManager == nil {
-		return "模板管理器未初始化"
+		return "模板管理器未初始�?
 	}
 
 	templates := h.templateManager.List()
 	if len(templates) == 0 {
-		return "当前没有会话模板。"
+		return "当前没有会话模板�?
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("共 %d 个模板:\n", len(templates)))
+	b.WriteString(fmt.Sprintf("�?%d 个模�?\n", len(templates)))
 	for _, t := range templates {
 		b.WriteString(fmt.Sprintf("- %s: 工具=%s 项目=%s", t.Name, t.Tool, t.ProjectPath))
 		if t.ModelConfig != "" {
@@ -4601,7 +4551,7 @@ func (h *IMMessageHandler) toolListTemplates() string {
 
 func (h *IMMessageHandler) toolLaunchTemplate(args map[string]interface{}) string {
 	if h.templateManager == nil {
-		return "模板管理器未初始化"
+		return "模板管理器未初始�?
 	}
 
 	name := stringVal(args, "template_name")
@@ -4628,7 +4578,7 @@ func (h *IMMessageHandler) toolLaunchTemplate(args map[string]interface{}) strin
 
 func (h *IMMessageHandler) toolGetConfig(args map[string]interface{}) string {
 	if h.configManager == nil {
-		return "配置管理器未初始化"
+		return "配置管理器未初始�?
 	}
 
 	section := stringVal(args, "section")
@@ -4641,26 +4591,26 @@ func (h *IMMessageHandler) toolGetConfig(args map[string]interface{}) string {
 
 func (h *IMMessageHandler) toolUpdateConfig(args map[string]interface{}) string {
 	if h.configManager == nil {
-		return "配置管理器未初始化"
+		return "配置管理器未初始�?
 	}
 
 	section := stringVal(args, "section")
 	key := stringVal(args, "key")
 	value := stringVal(args, "value")
 	if section == "" || key == "" {
-		return "缺少 section 或 key 参数"
+		return "缺少 section �?key 参数"
 	}
 
 	oldValue, err := h.configManager.UpdateConfig(section, key, value)
 	if err != nil {
 		return fmt.Sprintf("修改配置失败: %s", err.Error())
 	}
-	return fmt.Sprintf("配置已更新: %s.%s\n旧值: %s\n新值: %s", section, key, oldValue, value)
+	return fmt.Sprintf("配置已更�? %s.%s\n旧�? %s\n新�? %s", section, key, oldValue, value)
 }
 
 func (h *IMMessageHandler) toolBatchUpdateConfig(args map[string]interface{}) string {
 	if h.configManager == nil {
-		return "配置管理器未初始化"
+		return "配置管理器未初始�?
 	}
 
 	changesStr := stringVal(args, "changes")
@@ -4679,12 +4629,12 @@ func (h *IMMessageHandler) toolBatchUpdateConfig(args map[string]interface{}) st
 	if err := h.configManager.BatchUpdate(changes); err != nil {
 		return fmt.Sprintf("批量更新配置失败: %s", err.Error())
 	}
-	return fmt.Sprintf("批量更新成功，共应用 %d 项变更", len(changes))
+	return fmt.Sprintf("批量更新成功，共应用 %d 项变�?, len(changes))
 }
 
 func (h *IMMessageHandler) toolListConfigSchema() string {
 	if h.configManager == nil {
-		return "配置管理器未初始化"
+		return "配置管理器未初始�?
 	}
 
 	result, err := h.configManager.SchemaJSON()
@@ -4696,7 +4646,7 @@ func (h *IMMessageHandler) toolListConfigSchema() string {
 
 func (h *IMMessageHandler) toolExportConfig() string {
 	if h.configManager == nil {
-		return "配置管理器未初始化"
+		return "配置管理器未初始�?
 	}
 
 	result, err := h.configManager.ExportConfig()
@@ -4708,7 +4658,7 @@ func (h *IMMessageHandler) toolExportConfig() string {
 
 func (h *IMMessageHandler) toolImportConfig(args map[string]interface{}) string {
 	if h.configManager == nil {
-		return "配置管理器未初始化"
+		return "配置管理器未初始�?
 	}
 
 	jsonData := stringVal(args, "json_data")
@@ -4722,7 +4672,7 @@ func (h *IMMessageHandler) toolImportConfig(args map[string]interface{}) string 
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("配置导入完成: 应用 %d 项, 跳过 %d 项", report.Applied, report.Skipped))
+	b.WriteString(fmt.Sprintf("配置导入完成: 应用 %d �? 跳过 %d �?, report.Applied, report.Skipped))
 	if len(report.Warnings) > 0 {
 		b.WriteString("\n警告:")
 		for _, w := range report.Warnings {
@@ -4734,11 +4684,11 @@ func (h *IMMessageHandler) toolImportConfig(args map[string]interface{}) string 
 
 // toolSetMaxIterations allows the agent to dynamically adjust the max
 // iterations for the current conversation loop. This does NOT change the
-// persisted config — it only affects the in-flight loop.
+// persisted config �?it only affects the in-flight loop.
 func (h *IMMessageHandler) toolSetMaxIterations(args map[string]interface{}) string {
 	n, ok := args["max_iterations"].(float64)
 	if !ok || n < 1 {
-		return fmt.Sprintf("缺少或无效的 max_iterations 参数（需要 %d-%d 的整数）", minAgentIterations, maxAgentIterationsCap)
+		return fmt.Sprintf("缺少或无效的 max_iterations 参数（需�?%d-%d 的整数）", minAgentIterations, maxAgentIterationsCap)
 	}
 	limit := int(n)
 	if limit < minAgentIterations {
@@ -4761,9 +4711,9 @@ func (h *IMMessageHandler) toolSetMaxIterations(args map[string]interface{}) str
 	}
 
 	if reason != "" {
-		return fmt.Sprintf("✅ 已将最大轮数调整为 %d（已持久化，原因: %s）", limit, reason)
+		return fmt.Sprintf("�?已将最大轮数调整为 %d（已持久化，原因: %s�?, limit, reason)
 	}
-	return fmt.Sprintf("✅ 已将最大轮数调整为 %d（已持久化）", limit)
+	return fmt.Sprintf("�?已将最大轮数调整为 %d（已持久化）", limit)
 }
 
 // ---------------------------------------------------------------------------
@@ -4773,7 +4723,7 @@ func (h *IMMessageHandler) toolSetMaxIterations(args map[string]interface{}) str
 func (h *IMMessageHandler) toolSetNickname(args map[string]interface{}) string {
 	nickname := strings.TrimSpace(stringVal(args, "nickname"))
 	if nickname == "" {
-		return "❌ nickname 不能为空"
+		return "�?nickname 不能为空"
 	}
 	// Persist to local config.
 	cfg, err := h.app.LoadConfig()
@@ -4785,10 +4735,10 @@ func (h *IMMessageHandler) toolSetNickname(args map[string]interface{}) string {
 	if hc := h.app.hubClient(); hc != nil {
 		if err := hc.SendNicknameUpdate(nickname); err != nil {
 			log.Printf("[set_nickname] SendNicknameUpdate error: %v", err)
-			return fmt.Sprintf("⚠️ 昵称已保存到本地（%s），但上报 Hub 失败：%v", nickname, err)
+			return fmt.Sprintf("⚠️ 昵称已保存到本地�?s），但上�?Hub 失败�?v", nickname, err)
 		}
 	}
-	return fmt.Sprintf("✅ 昵称已更新为「%s」，Hub 已同步。", nickname)
+	return fmt.Sprintf("�?昵称已更新为�?s」，Hub 已同步�?, nickname)
 }
 
 // ---------------------------------------------------------------------------
@@ -4798,10 +4748,10 @@ func (h *IMMessageHandler) toolSetNickname(args map[string]interface{}) string {
 func (h *IMMessageHandler) toolSwitchLLMProvider(args map[string]interface{}) string {
 	providerName := stringVal(args, "provider")
 	if providerName == "" {
-		// No provider specified — list available providers and current selection.
+		// No provider specified �?list available providers and current selection.
 		info := h.app.GetMaclawLLMProviders()
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("当前 LLM 服务商: %s\n可用服务商:\n", info.Current))
+		b.WriteString(fmt.Sprintf("当前 LLM 服务�? %s\n可用服务�?\n", info.Current))
 		for _, p := range info.Providers {
 			if p.URL == "" && p.Key == "" && p.Model == "" {
 				continue // skip unconfigured custom slots
@@ -4851,17 +4801,17 @@ func (h *IMMessageHandler) toolSwitchLLMProvider(args map[string]interface{}) st
 		for _, p := range configured {
 			names = append(names, p.Name)
 		}
-		return fmt.Sprintf("未找到服务商 %q，可用: %s", providerName, strings.Join(names, ", "))
+		return fmt.Sprintf("未找到服务商 %q，可�? %s", providerName, strings.Join(names, ", "))
 	}
 
 	if match.Name == info.Current {
-		return fmt.Sprintf("当前已经是 %s，无需切换", match.Name)
+		return fmt.Sprintf("当前已经�?%s，无需切换", match.Name)
 	}
 
 	if err := h.app.SaveMaclawLLMProviders(info.Providers, match.Name); err != nil {
 		return fmt.Sprintf("切换失败: %s", err.Error())
 	}
-	return fmt.Sprintf("✅ 已将 LLM 服务商切换为 %s (model=%s)", match.Name, match.Model)
+	return fmt.Sprintf("�?已将 LLM 服务商切换为 %s (model=%s)", match.Name, match.Model)
 }
 
 // ---------------------------------------------------------------------------
@@ -4870,19 +4820,19 @@ func (h *IMMessageHandler) toolSwitchLLMProvider(args map[string]interface{}) st
 
 func (h *IMMessageHandler) toolCreateScheduledTask(args map[string]interface{}) string {
 	if h.scheduledTaskManager == nil {
-		return "定时任务管理器未初始化"
+		return "定时任务管理器未初始�?
 	}
 	name := stringVal(args, "name")
 	action := stringVal(args, "action")
 	if name == "" || action == "" {
-		return "缺少 name 或 action 参数"
+		return "缺少 name �?action 参数"
 	}
 	hour := -1
 	if v, ok := args["hour"].(float64); ok {
 		hour = int(v)
 	}
 	if hour < 0 || hour > 23 {
-		return "hour 必须在 0-23 之间"
+		return "hour 必须�?0-23 之间"
 	}
 	minute := 0
 	if v, ok := args["minute"].(float64); ok {
@@ -4928,23 +4878,23 @@ func (h *IMMessageHandler) toolCreateScheduledTask(args map[string]interface{}) 
 
 	// Format next run time for display.
 	if task := h.scheduledTaskManager.Get(id); task != nil && task.NextRunAt != nil {
-		return fmt.Sprintf("✅ 定时任务已创建\nID: %s\n名称: %s\n操作: %s\n下次执行: %s", id, name, action, task.NextRunAt.Format("2006-01-02 15:04"))
+		return fmt.Sprintf("�?定时任务已创建\nID: %s\n名称: %s\n操作: %s\n下次执行: %s", id, name, action, task.NextRunAt.Format("2006-01-02 15:04"))
 	}
-	return fmt.Sprintf("✅ 定时任务已创建（ID: %s）", id)
+	return fmt.Sprintf("�?定时任务已创建（ID: %s�?, id)
 }
 
 func (h *IMMessageHandler) toolListScheduledTasks() string {
 	if h.scheduledTaskManager == nil {
-		return "定时任务管理器未初始化"
+		return "定时任务管理器未初始�?
 	}
 	tasks := h.scheduledTaskManager.List()
 	if len(tasks) == 0 {
-		return "当前没有定时任务。"
+		return "当前没有定时任务�?
 	}
 
 	weekdays := []string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("共 %d 个定时任务：\n\n", len(tasks)))
+	b.WriteString(fmt.Sprintf("�?%d 个定时任务：\n\n", len(tasks)))
 	for _, t := range tasks {
 		b.WriteString(fmt.Sprintf("📋 [%s] %s\n", t.ID, t.Name))
 		b.WriteString(fmt.Sprintf("   操作: %s\n", t.Action))
@@ -4952,21 +4902,21 @@ func (h *IMMessageHandler) toolListScheduledTasks() string {
 		// Schedule description
 		sched := fmt.Sprintf("每天 %02d:%02d", t.Hour, t.Minute)
 		if t.DayOfWeek >= 0 && t.DayOfWeek <= 6 {
-			sched = fmt.Sprintf("每%s %02d:%02d", weekdays[t.DayOfWeek], t.Hour, t.Minute)
+			sched = fmt.Sprintf("�?s %02d:%02d", weekdays[t.DayOfWeek], t.Hour, t.Minute)
 		}
 		if t.DayOfMonth > 0 {
-			sched = fmt.Sprintf("每月%d号 %02d:%02d", t.DayOfMonth, t.Hour, t.Minute)
+			sched = fmt.Sprintf("每月%d�?%02d:%02d", t.DayOfMonth, t.Hour, t.Minute)
 		}
 		if t.StartDate != "" || t.EndDate != "" {
-			sched += fmt.Sprintf("（%s ~ %s）", t.StartDate, t.EndDate)
+			sched += fmt.Sprintf("�?s ~ %s�?, t.StartDate, t.EndDate)
 		}
 		b.WriteString(fmt.Sprintf("   时间: %s\n", sched))
-		b.WriteString(fmt.Sprintf("   状态: %s", t.Status))
+		b.WriteString(fmt.Sprintf("   状�? %s", t.Status))
 		if t.NextRunAt != nil {
 			b.WriteString(fmt.Sprintf(" | 下次执行: %s", t.NextRunAt.Format("2006-01-02 15:04")))
 		}
 		if t.RunCount > 0 {
-			b.WriteString(fmt.Sprintf(" | 已执行 %d 次", t.RunCount))
+			b.WriteString(fmt.Sprintf(" | 已执�?%d �?, t.RunCount))
 		}
 		b.WriteString("\n\n")
 	}
@@ -4975,12 +4925,12 @@ func (h *IMMessageHandler) toolListScheduledTasks() string {
 
 func (h *IMMessageHandler) toolDeleteScheduledTask(args map[string]interface{}) string {
 	if h.scheduledTaskManager == nil {
-		return "定时任务管理器未初始化"
+		return "定时任务管理器未初始�?
 	}
 	id := stringVal(args, "id")
 	name := stringVal(args, "name")
 	if id == "" && name == "" {
-		return "请提供 id 或 name 参数"
+		return "请提�?id �?name 参数"
 	}
 	var err error
 	if id != "" {
@@ -4992,12 +4942,12 @@ func (h *IMMessageHandler) toolDeleteScheduledTask(args map[string]interface{}) 
 		return fmt.Sprintf("删除失败: %s", err.Error())
 	}
 	h.app.emitEvent("scheduled-tasks-changed")
-	return "✅ 定时任务已删除"
+	return "�?定时任务已删�?
 }
 
 func (h *IMMessageHandler) toolUpdateScheduledTask(args map[string]interface{}) string {
 	if h.scheduledTaskManager == nil {
-		return "定时任务管理器未初始化"
+		return "定时任务管理器未初始�?
 	}
 	id := stringVal(args, "id")
 	if id == "" {
@@ -5014,9 +4964,9 @@ func (h *IMMessageHandler) toolUpdateScheduledTask(args map[string]interface{}) 
 		if t.NextRunAt != nil {
 			next = t.NextRunAt.Format("2006-01-02 15:04")
 		}
-		return fmt.Sprintf("✅ 定时任务已更新\nID: %s\n名称: %s\n操作: %s\n时间: %02d:%02d\n下次执行: %s", t.ID, t.Name, t.Action, t.Hour, t.Minute, next)
+		return fmt.Sprintf("�?定时任务已更新\nID: %s\n名称: %s\n操作: %s\n时间: %02d:%02d\n下次执行: %s", t.ID, t.Name, t.Action, t.Hour, t.Minute, next)
 	}
-	return "✅ 定时任务已更新"
+	return "�?定时任务已更�?
 }
 
 // ---------- ClawNet Knowledge Tools ----------
@@ -5034,10 +4984,10 @@ func (h *IMMessageHandler) toolClawNetSearch(args map[string]interface{}) string
 		return fmt.Sprintf("搜索失败: %s", err.Error())
 	}
 	if len(entries) == 0 {
-		return fmt.Sprintf("未找到与「%s」相关的知识条目", query)
+		return fmt.Sprintf("未找到与�?s」相关的知识条目", query)
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("🔍 虾网知识搜索「%s」— 找到 %d 条:\n\n", query, len(entries)))
+	b.WriteString(fmt.Sprintf("🔍 虾网知识搜索�?s」�?找到 %d �?\n\n", query, len(entries)))
 	for i, e := range entries {
 		if i >= 10 {
 			b.WriteString(fmt.Sprintf("... 还有 %d 条结果\n", len(entries)-10))
@@ -5047,12 +4997,12 @@ func (h *IMMessageHandler) toolClawNetSearch(args map[string]interface{}) string
 		if e.Body != "" {
 			body := e.Body
 			if len(body) > 200 {
-				body = body[:200] + "…"
+				body = body[:200] + "�?
 			}
 			b.WriteString(fmt.Sprintf("   %s\n", body))
 		}
 		if e.Author != "" {
-			b.WriteString(fmt.Sprintf("   — %s", e.Author))
+			b.WriteString(fmt.Sprintf("   �?%s", e.Author))
 		}
 		if e.Domain != "" {
 			b.WriteString(fmt.Sprintf(" [%s]", e.Domain))
@@ -5078,7 +5028,7 @@ func (h *IMMessageHandler) toolClawNetPublish(args map[string]interface{}) strin
 	if err != nil {
 		return fmt.Sprintf("发布失败: %s", err.Error())
 	}
-	return fmt.Sprintf("✅ 知识已发布到虾网\nID: %s\n标题: %s", entry.ID, entry.Title)
+	return fmt.Sprintf("�?知识已发布到虾网\nID: %s\n标题: %s", entry.ID, entry.Title)
 }
 
 func (h *IMMessageHandler) toolQueryAuditLog(args map[string]interface{}) string {
@@ -5120,11 +5070,11 @@ func (h *IMMessageHandler) toolQueryAuditLog(args map[string]interface{}) string
 	}
 
 	if len(entries) == 0 {
-		return "没有找到匹配的审计记录"
+		return "没有找到匹配的审计记�?
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("找到 %d 条审计记录:\n\n", len(entries)))
+	b.WriteString(fmt.Sprintf("找到 %d 条审计记�?\n\n", len(entries)))
 	for i, e := range entries {
 		b.WriteString(fmt.Sprintf("%d. [%s] %s | 风险: %s | 决策: %s | 结果: %s\n",
 			i+1, e.Timestamp.Format("01-02 15:04"), e.ToolName, e.RiskLevel, e.PolicyAction, e.Result))
@@ -5151,11 +5101,11 @@ func (h *IMMessageHandler) toolWebSearch(args map[string]interface{}) string {
 		return fmt.Sprintf("搜索失败: %s", err.Error())
 	}
 	if len(results) == 0 {
-		return "未找到相关结果"
+		return "未找到相关结�?
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("搜索 \"%s\" 找到 %d 条结果:\n\n", query, len(results)))
+	sb.WriteString(fmt.Sprintf("搜索 \"%s\" 找到 %d 条结�?\n\n", query, len(results)))
 	for i, r := range results {
 		sb.WriteString(fmt.Sprintf("%d. %s\n   %s\n", i+1, r.Title, r.URL))
 		if r.Snippet != "" {
@@ -5210,7 +5160,7 @@ func (h *IMMessageHandler) toolWebFetch(args map[string]interface{}) string {
 	if len(content) > webFetchMaxContent {
 		headLen := webFetchMaxContent * 2 / 3
 		tailLen := webFetchMaxContent - headLen - 60
-		content = content[:headLen] + "\n\n... (内容已截断，共 " + fmt.Sprintf("%d", len(content)) + " 字符) ...\n\n" + content[len(content)-tailLen:]
+		content = content[:headLen] + "\n\n... (内容已截断，�?" + fmt.Sprintf("%d", len(content)) + " 字符) ...\n\n" + content[len(content)-tailLen:]
 	}
 	sb.WriteString(content)
 	return sb.String()
