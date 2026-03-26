@@ -318,18 +318,23 @@ func (m *qqBotGatewayManager) handleLocalMessage(msg qqbot.IncomingMessage) {
 
 	text := msg.Text
 
-	// Prepend media info if present
+	// Pass images as multimodal attachments so the LLM can "see" them.
+	var attachments []MessageAttachment
 	if msg.MediaType != "" && len(msg.MediaData) > 0 {
-		mediaPath, err := saveQQMediaToTemp(msg)
-		if err != nil {
-			log.Printf("[qqbot-mgr] save media error: %v", err)
+		if msg.MediaType == "image" {
+			attachments = append(attachments, buildLocalImageAttachment(msg.MediaData, msg.MediaName, msg.MimeType))
 		} else {
-			prefix := "[收到" + mediaLabel(msg.MediaType) + ": " + mediaPath + "]\n"
-			text = prefix + text
+			mediaPath, err := saveQQMediaToTemp(msg)
+			if err != nil {
+				log.Printf("[qqbot-mgr] save media error: %v", err)
+			} else {
+				prefix := "[收到" + mediaLabel(msg.MediaType) + ": " + mediaPath + "]\n"
+				text = prefix + text
+			}
 		}
 	}
 
-	if text == "" {
+	if text == "" && len(attachments) == 0 {
 		return
 	}
 
@@ -350,9 +355,10 @@ func (m *qqBotGatewayManager) handleLocalMessage(msg qqbot.IncomingMessage) {
 	}
 
 	resp := handler.HandleIMMessageWithProgress(IMUserMessage{
-		UserID:   msg.OpenID,
-		Platform: "qqbot_local",
-		Text:     text,
+		UserID:      msg.OpenID,
+		Platform:    "qqbot_local",
+		Text:        text,
+		Attachments: attachments,
 	}, onProgress)
 
 	if resp == nil {

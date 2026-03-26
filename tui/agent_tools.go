@@ -20,6 +20,7 @@ import (
 	"github.com/RapidAI/CodeClaw/corelib/remote"
 	"github.com/RapidAI/CodeClaw/corelib/scheduler"
 	"github.com/RapidAI/CodeClaw/corelib/security"
+	cskill "github.com/RapidAI/CodeClaw/corelib/skill"
 	"github.com/RapidAI/CodeClaw/corelib/websearch"
 	"github.com/RapidAI/CodeClaw/tui/commands"
 )
@@ -768,8 +769,56 @@ func (h *TUIAgentHandler) toolSearchSkillHub(args map[string]interface{}) string
 	if query == "" {
 		return "错误: 缺少 query"
 	}
-	// 复用 CLI 的 skillhub search 逻辑
-	return fmt.Sprintf("请使用 CLI: maclaw-tui skillhub search %s", query)
+
+	var b strings.Builder
+	found := 0
+
+	// 1) SkillMarket (HubCenter)
+	base := commands.ResolveHubCenterURL()
+	if base != "" {
+		smResults, err := commands.SearchSkillMarket(base, query, 10)
+		if err == nil && len(smResults) > 0 {
+			b.WriteString(fmt.Sprintf("## SkillMarket 结果 (%d 个)\n", len(smResults)))
+			for _, r := range smResults {
+				b.WriteString(fmt.Sprintf("- %s: %s (source: skillmarket)\n", r.Name, r.Description))
+			}
+			found += len(smResults)
+		}
+	}
+
+	// 2) SkillHub
+	hubResults, err := commands.SearchSkillHub(query)
+	if err == nil && len(hubResults) > 0 {
+		b.WriteString(fmt.Sprintf("## SkillHub 结果 (%d 个)\n", len(hubResults)))
+		for _, r := range hubResults {
+			b.WriteString(fmt.Sprintf("- %s: %s (source: skillhub)\n", r.Name, r.Description))
+		}
+		found += len(hubResults)
+	}
+
+	// 3) GitHub fallback
+	if found == 0 {
+		gs := cskill.NewGitHubSearcher("")
+		candidates, ghErr := gs.SearchGitHub(query)
+		if ghErr == nil && len(candidates) > 0 {
+			limit := len(candidates)
+			if limit > 5 {
+				limit = 5
+			}
+			b.WriteString(fmt.Sprintf("## GitHub 结果 (%d 个)\n", limit))
+			for _, c := range candidates[:limit] {
+				b.WriteString(fmt.Sprintf("- %s: %s (★%d, source: github, url: %s)\n",
+					c.RepoFullName, c.Description, c.Stars, c.RepoURL))
+			}
+			found += limit
+		}
+	}
+
+	if found == 0 {
+		return fmt.Sprintf("在 SkillMarket、SkillHub 和 GitHub 上均未找到与 %q 相关的 Skill", query)
+	}
+
+	return b.String()
 }
 
 func (h *TUIAgentHandler) toolInstallSkillHub(args map[string]interface{}) string {

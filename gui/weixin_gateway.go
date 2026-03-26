@@ -422,20 +422,27 @@ func (m *weixinGatewayManager) handleLocalMessage(msg weixin.IncomingMessage) {
 	}
 	wl.Log("mgr.local", "---", msg.FromUserID, "ctx_token=%v text_len=%d media=%s", contextToken != "", len(msg.Text), msg.MediaType)
 
-	// Build the user message text; prepend media info if present.
+	// Build the user message; pass images as multimodal attachments so the
+	// LLM can actually "see" them, instead of just a file-path text prefix.
 	text := msg.Text
+	var attachments []MessageAttachment
 	if msg.MediaType != "" && len(msg.MediaData) > 0 {
-		// Save media to a temp file so the agent can reference it.
-		mediaPath, err := m.saveMediaToTemp(msg)
-		if err != nil {
-			log.Printf("[weixin-mgr] save media error: %v", err)
+		if msg.MediaType == "image" {
+			// Pass image as a proper attachment for multimodal vision.
+			attachments = append(attachments, buildLocalImageAttachment(msg.MediaData, msg.MediaName, ""))
 		} else {
-			prefix := "[收到" + mediaLabel(msg.MediaType) + ": " + mediaPath + "]\n"
-			text = prefix + text
+			// Non-image media: save to temp file and prepend path as text.
+			mediaPath, err := m.saveMediaToTemp(msg)
+			if err != nil {
+				log.Printf("[weixin-mgr] save media error: %v", err)
+			} else {
+				prefix := "[收到" + mediaLabel(msg.MediaType) + ": " + mediaPath + "]\n"
+				text = prefix + text
+			}
 		}
 	}
 
-	if text == "" {
+	if text == "" && len(attachments) == 0 {
 		wl.Log("mgr.local", "---", msg.FromUserID, "SKIP empty text after media processing")
 		return
 	}
@@ -459,11 +466,12 @@ func (m *weixinGatewayManager) handleLocalMessage(msg weixin.IncomingMessage) {
 		})
 	}
 
-	wl.Log("mgr.local", "---", msg.FromUserID, "calling HandleIMMessageWithProgress text_len=%d", len(text))
+	wl.Log("mgr.local", "---", msg.FromUserID, "calling HandleIMMessageWithProgress text_len=%d attachments=%d", len(text), len(attachments))
 	resp := handler.HandleIMMessageWithProgress(IMUserMessage{
-		UserID:   msg.FromUserID,
-		Platform: "weixin_local",
-		Text:     text,
+		UserID:      msg.FromUserID,
+		Platform:    "weixin_local",
+		Text:        text,
+		Attachments: attachments,
 	}, onProgress)
 
 	if resp == nil {

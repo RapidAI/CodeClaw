@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -760,6 +760,10 @@ type IMMessageHandler struct {
 	// desktop GUI after connecting to the Hub. When nil, IM forwarding is
 	// silently skipped.
 	imFileSender func(b64Data, fileName, mimeType, message string) error
+
+	// agentActivity is a process-local shared store that lets the GUI AI
+	// assistant and IM channels see each other's active tasks.
+	agentActivity *AgentActivityStore
 }
 
 // NewIMMessageHandler creates a new handler.
@@ -792,8 +796,9 @@ func NewIMMessageHandler(app *App, manager *RemoteSessionManager) *IMMessageHand
 		app:        app,
 		manager:    manager,
 		memory:     newConversationMemory(),
-		client:     chatClient,
-		taskClient: taskClient,
+		client:        chatClient,
+		taskClient:    taskClient,
+		agentActivity: NewAgentActivityStore(),
 	}
 	// Initialize ToolRegistry and register builtin tools.
 	h.registry = NewToolRegistry()
@@ -1564,6 +1569,35 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 	toolsTokenBudget := estimateToolsTokens(tools)
 	httpClient := ctx.HTTPClient
 
+	// Cross-channel activity: report this loop so the other channel can see it.
+	activitySource := "im"
+	if platform == "desktop" {
+		activitySource = "gui"
+	}
+	reportActivity := func(iter, maxI int, summary string) {
+		task := userText
+		if len(task) > 100 {
+			task = task[:100]
+		}
+		if len(summary) > 120 {
+			summary = summary[:120]
+		}
+		h.agentActivity.Update(&AgentActivity{
+			Source:      activitySource,
+			Task:        task,
+			Iteration:   iter,
+			MaxIter:     maxI,
+			LastSummary: summary,
+		})
+	}
+	reportActivity(0, maxIter, "")
+	defer h.agentActivity.Clear(activitySource)
+
+	// Inject cross-channel activity awareness into the system prompt.
+	if extra := h.agentActivity.FormatForPrompt(activitySource); extra != "" {
+		systemPrompt += extra
+	}
+
 	var conversation []interface{}
 	conversation = append(conversation, map[string]string{"role": "system", "content": systemPrompt})
 	for _, entry := range history {
@@ -1714,6 +1748,11 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 			assistantMsg["tool_calls"] = choice.Message.ToolCalls
 		}
 		conversation = append(conversation, assistantMsg)
+
+		// Update cross-channel activity every 5 iterations.
+		if iteration%5 == 0 {
+			reportActivity(iteration, effectiveMax, msgContent)
+		}
 
 		historyEntry := conversationEntry{Role: "assistant", Content: msgContent, ReasoningContent: msgReasoning}
 		if len(choice.Message.ToolCalls) > 0 {

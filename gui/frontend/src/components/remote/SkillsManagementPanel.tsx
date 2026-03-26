@@ -140,7 +140,7 @@ export function SkillsManagementPanel({ translate }: Props) {
             setSkills(list);
             // Clean up learned selection: remove names no longer present
             const learnedNames = new Set(
-                list.filter((s: NLSkillDefinition) => s.source === "learned" || s.source === "crafted" || s.source === "file").map((s: NLSkillDefinition) => s.name)
+                list.filter((s: NLSkillDefinition) => s.source === "learned" || s.source === "crafted").map((s: NLSkillDefinition) => s.name)
             );
             setLearnedSelected((prev) => {
                 const next = new Set<string>();
@@ -394,8 +394,14 @@ export function SkillsManagementPanel({ translate }: Props) {
 
     // --- Learned skills tab helpers ---
 
+    // Installed skills: exclude auto-generated (learned/crafted) skills
+    const installedSkills = useMemo(
+        () => skills.filter((s) => s.source !== "learned" && s.source !== "crafted"),
+        [skills]
+    );
+
     const learnedSkills = useMemo(
-        () => skills.filter((s) => s.source === "learned" || s.source === "crafted" || s.source === "file"),
+        () => skills.filter((s) => s.source === "learned" || s.source === "crafted"),
         [skills]
     );
 
@@ -457,7 +463,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                     }}
                     onClick={() => setActiveTab("local")}
                 >
-                    本地 Skills
+                    已安装 Skills
                 </button>
                 <button
                     style={{
@@ -485,7 +491,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                     {/* Header with create button */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: "0.78rem", color: "#5a6577" }}>
-                            {skills.length} {translate("skillsRegistered") || "个已注册 Skill"}
+                            {installedSkills.length} {translate("skillsRegistered") || "个已注册 Skill"}
                         </span>
                         <div style={{ display: "flex", gap: "6px" }}>
                             <button className="btn-secondary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={() => { loadData(); setDiagEntries(null); }} disabled={loading}>
@@ -549,7 +555,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                     )}
 
                     {/* Skills table */}
-                    {!loading && skills.length > 0 && (
+                    {!loading && installedSkills.length > 0 && (
                         <div style={{ border: "1px solid #e1e4e8", borderRadius: "6px", overflow: "hidden" }}>
                             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.76rem" }}>
                                 <thead>
@@ -563,7 +569,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {skills.map((s) => (
+                                    {installedSkills.map((s) => (
                                         <tr key={s.name} style={{ borderTop: "1px solid #e1e4e8" }}>
                                             <td style={tdStyle}>{s.name}</td>
                                             <td style={tdStyle}>
@@ -603,7 +609,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                         </div>
                     )}
 
-                    {!loading && skills.length === 0 && !error && (
+                    {!loading && installedSkills.length === 0 && !error && (
                         <div style={{ textAlign: "center", padding: "20px", fontSize: "0.78rem", color: "#8b95a5" }}>
                             暂无已注册的 Skill
                         </div>
