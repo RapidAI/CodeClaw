@@ -182,6 +182,18 @@ jobs:
             -DRS_BUILD_SERVER=OFF `
             -DRS_ENABLE_PYTHON=OFF
           cmake --build $BUILD_DIR --target rapidspeech_static --config Release -j $env:NUMBER_OF_PROCESSORS
+          # Remove DLL import libs that confuse the static linker
+          Get-ChildItem $BUILD_DIR -Filter "*.dll" -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $BUILD_DIR -Filter "*.dll.a" -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
+
+      - name: Clean DLL artifacts from cached RapidSpeech build
+        shell: pwsh
+        run: |
+          $BUILD_DIR = "${{ github.workspace }}/RapidSpeech.cpp/build"
+          if (Test-Path $BUILD_DIR) {
+            Get-ChildItem $BUILD_DIR -Filter "*.dll" -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
+            Get-ChildItem $BUILD_DIR -Filter "*.dll.a" -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Generate Windows resources & build GUI
         shell: pwsh
