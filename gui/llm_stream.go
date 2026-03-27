@@ -513,7 +513,7 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue // skip malformed chunks
 		}
-		// Capture usage from the final chunk (OpenAI sends it when stream_options.include_usage=true)
+		// Capture usage from the final chunk (some providers include it automatically)
 		if chunk.Usage != nil {
 			usage = chunk.Usage
 		}
