@@ -88,6 +88,8 @@ const outputAreaStyle: React.CSSProperties = {
     overflowX: "hidden",
     textAlign: "left",
     color: "#d4d4d4",
+    wordBreak: "break-all",
+    overflowWrap: "break-word",
 };
 
 const inputBarStyle: React.CSSProperties = {
@@ -657,6 +659,7 @@ export function RemoteSessionConsole(props: Props) {
                         overflowX: "auto",
                         color: "#ce9178",
                         lineHeight: 1.5,
+                        wordBreak: "normal",
                     }}>
                         {codeBlockLang && <div style={{ color: "#555", fontSize: "0.85em", marginBottom: "4px" }}>{codeBlockLang}</div>}
                         <code>{codeBlockLines.join("\n")}</code>
