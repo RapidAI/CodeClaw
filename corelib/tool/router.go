@@ -86,6 +86,14 @@ var BuiltinToolNames = map[string]bool{
 	"switch_llm_provider": true,
 	"manage_config": true,
 	"query_audit_log": true,
+	// Browser automation tools (CDP).
+	"browser_connect": true, "browser_navigate": true, "browser_click": true,
+	"browser_type": true, "browser_screenshot": true, "browser_get_text": true,
+	"browser_get_html": true, "browser_eval": true, "browser_wait": true,
+	"browser_scroll": true, "browser_select": true, "browser_list_pages": true,
+	"browser_switch_page": true, "browser_close": true,
+	"browser_click_at": true, "browser_set_files": true,
+	"browser_back": true, "browser_info": true,
 }
 
 func init() {

@@ -1,0 +1,208 @@
+// Package browser provides a lightweight CDP (Chrome DevTools Protocol) client
+// for browser automation. It connects to Chrome/Edge via the remote debugging port
+// and exposes high-level operations (navigate, click, type, screenshot, etc.).
+// Zero external dependencies beyond gorilla/websocket (already in go.mod).
+package browser
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+// CDPClient is a low-level Chrome DevTools Protocol client over WebSocket.
+type CDPClient struct {
+	conn     *websocket.Conn
+	mu       sync.Mutex
+	nextID   atomic.Int64
+	pending  map[int64]chan json.RawMessage
+	pendMu   sync.Mutex
+	events   chan CDPEvent
+	closed   chan struct{}
+	closeErr error
+}
+
+// CDPEvent is a CDP event pushed by the browser.
+type CDPEvent struct {
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
+}
+
+// cdpError holds a CDP protocol error.
+type cdpError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// cdpMessage is used for initial parsing to distinguish responses from events.
+type cdpMessage struct {
+	ID     int64           `json:"id"`
+	Method string          `json:"method"`
+	Result json.RawMessage `json:"result"`
+	Error  *cdpError       `json:"error"`
+	Params json.RawMessage `json:"params"`
+}
+
+// DiscoverTargets queries the /json endpoint to find debuggable page targets.
+func DiscoverTargets(cdpHTTP string) ([]TargetInfo, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(cdpHTTP + "/json")
+	if err != nil {
+		return nil, fmt.Errorf("discover targets: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read targets: %w", err)
+	}
+	var targets []TargetInfo
+	if err := json.Unmarshal(body, &targets); err != nil {
+		return nil, fmt.Errorf("parse targets: %w", err)
+	}
+	return targets, nil
+}
+
+// TargetInfo describes a browser target (page, worker, etc.).
+type TargetInfo struct {
+	ID                string `json:"id"`
+	Type              string `json:"type"`
+	Title             string `json:"title"`
+	URL               string `json:"url"`
+	WebSocketDebugURL string `json:"webSocketDebuggerUrl"`
+}
+
+// ConnectCDP connects to a CDP WebSocket endpoint.
+func ConnectCDP(wsURL string) (*CDPClient, error) {
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+	}
+	conn, _, err := dialer.Dial(wsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cdp dial: %w", err)
+	}
+	c := &CDPClient{
+		conn:    conn,
+		pending: make(map[int64]chan json.RawMessage),
+		events:  make(chan CDPEvent, 64),
+		closed:  make(chan struct{}),
+	}
+	go c.readLoop()
+	return c, nil
+}
+
+// Send sends a CDP command and waits for the response (up to timeout).
+func (c *CDPClient) Send(method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
+	id := c.nextID.Add(1)
+
+	msg := map[string]interface{}{
+		"id":     id,
+		"method": method,
+	}
+	if params != nil {
+		msg["params"] = params
+	}
+
+	ch := make(chan json.RawMessage, 1)
+	c.pendMu.Lock()
+	c.pending[id] = ch
+	c.pendMu.Unlock()
+
+	defer func() {
+		c.pendMu.Lock()
+		delete(c.pending, id)
+		c.pendMu.Unlock()
+	}()
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal cdp: %w", err)
+	}
+
+	c.mu.Lock()
+	err = c.conn.WriteMessage(websocket.TextMessage, data)
+	c.mu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("write cdp: %w", err)
+	}
+
+	select {
+	case result := <-ch:
+		return result, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("cdp timeout: %s (id=%d)", method, id)
+	case <-c.closed:
+		return nil, fmt.Errorf("cdp connection closed")
+	}
+}
+
+// Events returns the channel for receiving CDP events.
+func (c *CDPClient) Events() <-chan CDPEvent {
+	return c.events
+}
+
+// Close closes the WebSocket connection.
+func (c *CDPClient) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	select {
+	case <-c.closed:
+		return c.closeErr
+	default:
+	}
+	c.closeErr = c.conn.Close()
+	close(c.closed)
+	return c.closeErr
+}
+
+func (c *CDPClient) readLoop() {
+	defer func() {
+		select {
+		case <-c.closed:
+		default:
+			close(c.closed)
+		}
+	}()
+	for {
+		_, data, err := c.conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var msg cdpMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			log.Printf("[CDP] bad message: %v", err)
+			continue
+		}
+		if msg.ID > 0 {
+			// Response to a command.
+			c.pendMu.Lock()
+			ch, ok := c.pending[msg.ID]
+			c.pendMu.Unlock()
+			if ok {
+				if msg.Error != nil {
+					// Encode error as JSON so caller can inspect.
+					errJSON, _ := json.Marshal(map[string]interface{}{
+						"error": msg.Error.Message,
+						"code":  msg.Error.Code,
+					})
+					ch <- json.RawMessage(errJSON)
+				} else {
+					ch <- msg.Result
+				}
+			}
+		} else if msg.Method != "" {
+			// Event.
+			select {
+			case c.events <- CDPEvent{Method: msg.Method, Params: msg.Params}:
+			default:
+				// Drop if buffer full.
+			}
+		}
+	}
+}

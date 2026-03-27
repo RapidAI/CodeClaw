@@ -175,6 +175,12 @@ var GroupKeywords = map[string][]string{
 	"search":    {"web", "search", "internet", "fetch"},
 	"网页":       {"web", "fetch", "browse", "url"},
 	"web":       {"web", "fetch", "browse", "url", "search"},
+	"浏览器":      {"browser", "web", "automation", "test"},
+	"browser":   {"browser", "web", "automation", "test"},
+	"自动化":      {"browser", "automation", "test"},
+	"automation": {"browser", "automation", "test"},
+	"登录":       {"browser", "web", "automation"},
+	"下单":       {"browser", "web", "automation"},
 }
 
 // DetectGroupTags checks if the user message contains any group activation

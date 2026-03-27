@@ -21,6 +21,7 @@ import (
 
 	"github.com/RapidAI/CodeClaw/corelib"
 	"github.com/RapidAI/CodeClaw/corelib/project"
+	"github.com/RapidAI/CodeClaw/corelib/remote"
 	"github.com/RapidAI/CodeClaw/corelib/websearch"
 )
 
@@ -750,6 +751,9 @@ type IMMessageHandler struct {
 	// Background loop manager and session monitor (lazily initialized via setters).
 	bgManager      *BackgroundLoopManager
 	sessionMonitor *SessionMonitor
+
+	// SSH session manager (lazily initialized on first SSH tool call).
+	sshMgr *remote.SSHSessionManager
 
 	// lastUserText stores the most recent user message text for the current
 	// agent loop. Used by toolCreateSession to detect non-coding tasks and

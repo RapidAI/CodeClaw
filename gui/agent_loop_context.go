@@ -25,6 +25,7 @@ const (
 	SlotKindCoding    SlotKind = iota // 编程任务 — max 1
 	SlotKindScheduled                 // 定时任务 — max 1
 	SlotKindAuto                      // ClawNet 自动任务 — max 1
+	SlotKindSSH                       // SSH 远程会话 — max 10
 )
 
 // SlotKindString returns a human-readable label for the slot kind.
@@ -36,6 +37,8 @@ func (s SlotKind) String() string {
 		return "scheduled"
 	case SlotKindAuto:
 		return "auto"
+	case SlotKindSSH:
+		return "ssh"
 	default:
 		return "unknown"
 	}

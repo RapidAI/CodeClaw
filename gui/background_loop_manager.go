@@ -64,6 +64,7 @@ func NewBackgroundLoopManager(statusC chan StatusEvent) *BackgroundLoopManager {
 			SlotKindCoding:    2,
 			SlotKindScheduled: 1,
 			SlotKindAuto:      1,
+			SlotKindSSH:       10,
 		},
 		slotCounts: make(map[SlotKind]int),
 		queues:     make(map[SlotKind][]*pendingTask),
@@ -302,6 +303,12 @@ func (m *BackgroundLoopManager) notifyChange() {
 	if m.OnChange != nil {
 		m.OnChange()
 	}
+}
+
+// NotifyChange is the exported variant of notifyChange, allowing external
+// callers (e.g. SSH session update callbacks) to trigger a UI refresh.
+func (m *BackgroundLoopManager) NotifyChange() {
+	m.notifyChange()
 }
 
 // SetSlotLimit dynamically adjusts the concurrency limit for a given SlotKind.

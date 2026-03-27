@@ -466,4 +466,23 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 			"timeout":   map[string]string{"type": "integer", "description": "超时秒数（可选，默认 30，最大 120）"},
 		}, []string{"url"},
 		func(args map[string]interface{}) string { return h.toolWebFetch(args) })
+
+	// --- SSH remote server tools ---
+	reg("ssh", "SSH 远程服务器管理（connect/exec/list/close）。连接后会自动注册为后台任务，可在任务后台面板监看。",
+		ToolCategoryBuiltin, []string{"ssh", "remote", "server", "connect", "exec"},
+		map[string]interface{}{
+			"action":          map[string]string{"type": "string", "description": "操作: connect/exec/list/close"},
+			"host":            map[string]string{"type": "string", "description": "远程主机地址（connect 时必填）"},
+			"user":            map[string]string{"type": "string", "description": "登录用户名（connect 时必填）"},
+			"port":            map[string]string{"type": "integer", "description": "SSH 端口（默认 22）"},
+			"auth_method":     map[string]string{"type": "string", "description": "认证方式: key/password/agent（默认 key）"},
+			"key_path":        map[string]string{"type": "string", "description": "私钥路径（可选）"},
+			"password":        map[string]string{"type": "string", "description": "密码（可选）"},
+			"label":           map[string]string{"type": "string", "description": "主机标签（可选，如 prod-web-01）"},
+			"initial_command": map[string]string{"type": "string", "description": "连接后立即执行的命令（可选）"},
+			"session_id":      map[string]string{"type": "string", "description": "SSH 会话 ID（exec/close 时必填）"},
+			"command":         map[string]string{"type": "string", "description": "要执行的命令（exec 时必填）"},
+			"wait_seconds":    map[string]string{"type": "integer", "description": "等待输出秒数（exec 时可选，默认 5）"},
+		}, []string{"action"},
+		func(args map[string]interface{}) string { return h.toolSSH(args) })
 }
