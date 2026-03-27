@@ -10,6 +10,7 @@
 #include <cstring>
 #include <algorithm>
 #include <sstream>
+#include <unordered_set>
 
 // ============================================================
 // Moonshine ASR — ggml native encoder-decoder transformer
@@ -630,8 +631,9 @@ bool MoonshineModel::ComputeCrossKV(MoonshineState& ms, ggml_backend_sched_t sch
 //   - Cross-attention from persistent cache
 // ============================================================
 
-int MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
-                                    ggml_backend_sched_t sched) {
+bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
+                                    ggml_backend_sched_t sched,
+                                    std::vector<float>& logit_out) {
     const int dim = hparams_.decoder_dim;
     const int n_layers = hparams_.decoder_depth;
     const int n_heads = hparams_.decoder_heads;
@@ -642,7 +644,7 @@ int MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
     const int n_nodes = 65536;
     struct ggml_context* ctx0 = nullptr;
     struct ggml_cgraph* gf = nullptr;
-    if (!init_compute_ctx(&ctx0, &gf, n_nodes)) return -1;
+    if (!init_compute_ctx(&ctx0, &gf, n_nodes)) return false;
 
     // Inputs
     ggml_tensor* tok_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
@@ -800,7 +802,7 @@ int MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
     if (!ggml_backend_sched_alloc_graph(sched, gf)) {
         RS_LOG_ERR("Moonshine: decoder step %d alloc failed", step);
         ggml_free(ctx0);
-        return -1;
+        return false;
     }
 
     ggml_backend_tensor_set(tok_idx, &cur_token, 0, sizeof(int32_t));
@@ -810,7 +812,7 @@ int MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
     if (ggml_backend_sched_graph_compute(sched, gf) != GGML_STATUS_SUCCESS) {
         RS_LOG_ERR("Moonshine: decoder step %d compute failed", step);
         ggml_free(ctx0);
-        return -1;
+        return false;
     }
 
     // Write new self K/V to persistent cache at position [step]
@@ -831,22 +833,201 @@ int MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
     }
     ms.dec_cache.self_seq_len = step + 1;
 
-    // Greedy argmax
-    std::vector<float> logit_buf(hparams_.vocab_size);
-    ggml_backend_tensor_get(x, logit_buf.data(), 0,
+    // Output raw logits to caller
+    logit_out.resize(hparams_.vocab_size);
+    ggml_backend_tensor_get(x, logit_out.data(), 0,
                             hparams_.vocab_size * sizeof(float));
 
-    int best_id = 0;
-    float best_val = logit_buf[0];
-    for (int i = 1; i < hparams_.vocab_size; i++) {
-        if (logit_buf[i] > best_val) {
-            best_val = logit_buf[i];
-            best_id = i;
+    ggml_free(ctx0);
+    return true;
+}
+
+// ============================================================
+// Logit processing helpers
+// ============================================================
+
+void MoonshineModel::ApplySuppressTokens(std::vector<float>& logits,
+                                          const std::vector<int>& suppress_ids) {
+    for (int id : suppress_ids) {
+        if (id >= 0 && id < (int)logits.size()) {
+            logits[id] = -INFINITY;
+        }
+    }
+}
+
+void MoonshineModel::ApplyNoRepeatNgram(std::vector<float>& logits,
+                                         const std::vector<int>& tokens,
+                                         int ngram_size) {
+    if (ngram_size <= 0 || (int)tokens.size() < ngram_size) return;
+
+    // We look for (ngram_size-1) prefix matches at the end of tokens.
+    // If tokens ends with [..., a, b] and ngram_size=3, we scan for all
+    // occurrences of (a, b) in history and ban the token that followed.
+    const int prefix_len = ngram_size - 1;
+    const int seq_len = (int)tokens.size();
+
+    // Extract the current suffix of length prefix_len
+    // (the last prefix_len tokens in the sequence)
+    for (int i = 0; i <= seq_len - ngram_size; i++) {
+        bool match = true;
+        for (int j = 0; j < prefix_len; j++) {
+            if (tokens[i + j] != tokens[seq_len - prefix_len + j]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            // The token that followed this prefix in history
+            int banned = tokens[i + prefix_len];
+            if (banned >= 0 && banned < (int)logits.size()) {
+                logits[banned] = -INFINITY;
+            }
+        }
+    }
+}
+
+std::pair<int, float> MoonshineModel::SampleToken(const std::vector<float>& logits,
+                                                    float temperature,
+                                                    std::mt19937& rng) {
+    const int n = (int)logits.size();
+
+    if (temperature <= 0.0f) {
+        // Greedy argmax
+        int best_id = 0;
+        float best_val = logits[0];
+        for (int i = 1; i < n; i++) {
+            if (logits[i] > best_val) {
+                best_val = logits[i];
+                best_id = i;
+            }
+        }
+        // Compute log-softmax for the chosen token
+        float max_val = best_val;
+        double sum_exp = 0.0;
+        for (int i = 0; i < n; i++) {
+            if (logits[i] > -1e9f) sum_exp += std::exp((double)(logits[i] - max_val));
+        }
+        float logprob = 0.0f - (float)std::log(sum_exp);  // log(exp(0)/sum) = -log(sum)
+        return {best_id, logprob};
+    }
+
+    // Temperature-scaled softmax sampling
+    std::vector<float> scaled(n);
+    float max_val = *std::max_element(logits.begin(), logits.end());
+    double sum_exp = 0.0;
+    for (int i = 0; i < n; i++) {
+        if (logits[i] > -1e9f) {
+            scaled[i] = (logits[i] - max_val) / temperature;
+            sum_exp += std::exp((double)scaled[i]);
+        } else {
+            scaled[i] = -INFINITY;
         }
     }
 
-    ggml_free(ctx0);
-    return best_id;
+    // Build CDF and sample
+    double log_sum = std::log(sum_exp);
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    float u = dist(rng);
+    double cumulative = 0.0;
+    int sampled_id = 0;
+    for (int i = 0; i < n; i++) {
+        if (scaled[i] > -1e9f) {
+            cumulative += std::exp((double)scaled[i]) / sum_exp;
+            if (u <= cumulative) {
+                sampled_id = i;
+                break;
+            }
+        }
+    }
+
+    float logprob = scaled[sampled_id] - (float)log_sum;
+    return {sampled_id, logprob};
+}
+
+float MoonshineModel::ComputeCompressionRatio(const std::vector<int>& tokens) {
+    if (tokens.size() <= 1) return 1.0f;
+
+    // Heuristic: ratio of total bigrams to unique bigrams.
+    // High ratio = lots of repetition.
+    std::unordered_set<int64_t> unique_bigrams;
+    for (size_t i = 0; i + 1 < tokens.size(); i++) {
+        int64_t bigram = ((int64_t)tokens[i] << 32) | (int64_t)(uint32_t)tokens[i + 1];
+        unique_bigrams.insert(bigram);
+    }
+    int total = (int)tokens.size() - 1;
+    int unique = (int)unique_bigrams.size();
+    if (unique == 0) return 999.0f;
+    return (float)total / (float)unique;
+}
+
+// ============================================================
+// DecodeWithTemperature: single attempt at given temperature
+// ============================================================
+
+bool MoonshineModel::DecodeWithTemperature(MoonshineState& ms,
+                                            ggml_backend_sched_t sched,
+                                            float temperature,
+                                            ggml_backend_t backend) {
+    const int max_len = gen_config.max_new_tokens > 0
+                            ? gen_config.max_new_tokens
+                            : hparams_.max_seq_len;
+
+    // Reset self-attention KV cache (cross KV stays valid)
+    ms.dec_cache.self_seq_len = 0;
+    ms.tokens.clear();
+    ms.tokens.push_back(hparams_.bos_id);
+    ms.token_logprobs.clear();
+    ms.sum_logprob = 0.0f;
+
+    std::mt19937 rng(42);  // deterministic seed per attempt
+    std::vector<float> logits;
+
+    for (int step = 0; step < max_len; step++) {
+        int cur_token = ms.tokens.back();
+        if (!RunDecoderStep(ms, step, cur_token, sched, logits)) return false;
+
+        // Logit processing pipeline
+        ApplySuppressTokens(logits, gen_config.suppress_tokens);
+        // Also always suppress BOS during generation
+        if (hparams_.bos_id >= 0 && hparams_.bos_id < (int)logits.size()) {
+            logits[hparams_.bos_id] = -INFINITY;
+        }
+        ApplyNoRepeatNgram(logits, ms.tokens, gen_config.no_repeat_ngram_size);
+
+        auto [next_id, logprob] = SampleToken(logits, temperature, rng);
+
+        if (next_id == hparams_.eos_id) break;
+
+        ms.tokens.push_back(next_id);
+        ms.token_logprobs.push_back(logprob);
+        ms.sum_logprob += logprob;
+    }
+
+    // Quality checks (skip for last fallback temperature)
+    int n_gen = (int)ms.tokens.size() - 1;  // exclude BOS
+    if (n_gen == 0) return true;  // empty output is valid (silence)
+
+    float avg_logprob = ms.sum_logprob / (float)n_gen;
+    float comp_ratio = ComputeCompressionRatio(
+        std::vector<int>(ms.tokens.begin() + 1, ms.tokens.end()));
+
+    RS_LOG_INFO("Moonshine: temp=%.1f, %d tokens, avg_logprob=%.3f, comp_ratio=%.2f",
+                temperature, n_gen, avg_logprob, comp_ratio);
+
+    // Check thresholds
+    bool quality_ok = true;
+    if (comp_ratio > gen_config.compression_ratio_threshold) {
+        RS_LOG_INFO("Moonshine: compression ratio %.2f > %.2f, rejecting",
+                    comp_ratio, gen_config.compression_ratio_threshold);
+        quality_ok = false;
+    }
+    if (avg_logprob < gen_config.logprob_threshold) {
+        RS_LOG_INFO("Moonshine: avg logprob %.3f < %.3f, rejecting",
+                    avg_logprob, gen_config.logprob_threshold);
+        quality_ok = false;
+    }
+
+    return quality_ok;
 }
 
 // ============================================================
@@ -861,23 +1042,36 @@ bool MoonshineModel::Decode(RSState& state, ggml_backend_sched_t sched) {
         return false;
     }
 
-    const int max_len = hparams_.max_seq_len;
     const int enc_frames = ms.encoder_frames;
-
     ggml_backend_t backend = ggml_backend_sched_get_backend(sched, 0);
 
     if (!AllocDecoderCache(ms, enc_frames, backend)) return false;
     if (!ComputeCrossKV(ms, sched)) return false;
 
-    ms.tokens.clear();
-    ms.tokens.push_back(hparams_.bos_id);
-
-    for (int step = 0; step < max_len; step++) {
-        int cur_token = ms.tokens.back();
-        int next_id = RunDecoderStep(ms, step, cur_token, sched);
-        if (next_id < 0) return false;
-        if (next_id == hparams_.eos_id) break;
-        ms.tokens.push_back(next_id);
+    // Temperature fallback loop
+    const auto& temps = gen_config.temperature_fallback;
+    if (temps.empty()) {
+        // No fallback configured — single greedy attempt
+        if (!DecodeWithTemperature(ms, sched, 0.0f, backend)) return false;
+    } else {
+        bool accepted = false;
+        for (size_t ti = 0; ti < temps.size(); ti++) {
+            bool is_last = (ti == temps.size() - 1);
+            bool ok = DecodeWithTemperature(ms, sched, temps[ti], backend);
+            if (!ok && is_last) {
+                // Last attempt — accept whatever we got
+                RS_LOG_INFO("Moonshine: last fallback temp=%.1f, accepting result",
+                            temps[ti]);
+                accepted = true;
+                break;
+            }
+            if (ok) {
+                accepted = true;
+                break;
+            }
+            RS_LOG_INFO("Moonshine: retrying with next temperature...");
+        }
+        if (!accepted) return false;
     }
 
     RS_LOG_INFO("Moonshine: decoded %zu tokens", ms.tokens.size());

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -22,6 +23,7 @@ type SSHPTYSession struct {
 	closed   bool
 	once     sync.Once
 	hostID   string
+	stopKA   chan struct{} // 停止 session 级 keepalive
 }
 
 // NewSSHPTYSession 基于已有的 SSH 连接创建 PTY 会话。
@@ -31,6 +33,7 @@ func NewSSHPTYSession(client *ssh.Client, hostID string) *SSHPTYSession {
 		outputCh: make(chan []byte, 64),
 		exitCh:   make(chan PTYExit, 1),
 		hostID:   hostID,
+		stopKA:   make(chan struct{}),
 	}
 }
 
@@ -106,6 +109,7 @@ func (s *SSHPTYSession) Start(spec SSHSessionSpec) error {
 	go s.readLoop(stdout)
 	go s.readLoop(stderr)
 	go s.waitLoop()
+	go s.sessionKeepalive(spec.HostConfig.KeepaliveInterval)
 
 	return nil
 }
@@ -168,6 +172,8 @@ func (s *SSHPTYSession) Close() error {
 		session := s.session
 		stdin := s.stdin
 		s.mu.Unlock()
+		// 停止 session 级 keepalive
+		close(s.stopKA)
 		if stdin != nil {
 			_ = stdin.Close()
 		}
@@ -176,6 +182,33 @@ func (s *SSHPTYSession) Close() error {
 		}
 	})
 	return nil
+}
+
+// sessionKeepalive 定期通过底层 ssh.Client 发送 keepalive 请求，
+// 防止 SSH channel 因空闲被服务端或中间网络设备断开。
+// 与 SSHPool 的连接级 keepalive 互补：pool 保活 TCP 连接，这里保活 session channel。
+func (s *SSHPTYSession) sessionKeepalive(interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopKA:
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			closed := s.closed
+			client := s.client
+			s.mu.Unlock()
+			if closed || client == nil {
+				return
+			}
+			// SendRequest 在连接级别发心跳，同时也能保持 channel 活跃
+			_, _, _ = client.SendRequest("keepalive@openssh.com", true, nil)
+		}
+	}
 }
 
 func (s *SSHPTYSession) readLoop(r io.Reader) {

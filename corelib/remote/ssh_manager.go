@@ -2,6 +2,7 @@ package remote
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -269,6 +270,7 @@ func (m *SSHSessionManager) ReconnectByID(sessionID string) error {
 
 // WaitForOutput 智能等待命令输出完成。
 // 不再盲等固定秒数，而是检测输出是否稳定（连续 stableRounds 次轮询无新输出即认为完成）。
+// 对于长时间运行的命令（如 du、find），使用更宽松的稳定阈值避免误判。
 // maxWait 是最大等待时间上限。
 func (m *SSHSessionManager) WaitForOutput(sessionID string, afterLine int, maxWait time.Duration) ([]string, SessionStatus) {
 	s, ok := m.Get(sessionID)
@@ -281,7 +283,9 @@ func (m *SSHSessionManager) WaitForOutput(sessionID string, afterLine int, maxWa
 	}
 
 	const pollInterval = 300 * time.Millisecond
-	const stableThreshold = 3 // 连续 3 次无新输出视为完成
+	// 提高稳定阈值：连续 8 次（约 2.4s）无新输出才判定完成，
+	// 避免 du/find 等命令在扫描大目录时短暂停顿被误判。
+	const stableThreshold = 8
 
 	deadline := time.Now().Add(maxWait)
 	stableCount := 0
@@ -308,13 +312,33 @@ func (m *SSHSessionManager) WaitForOutput(sessionID string, afterLine int, maxWa
 		} else {
 			stableCount++
 			if stableCount >= stableThreshold {
-				// 输出已稳定
-				break
+				// 额外检查：如果最后一行看起来像 shell prompt，说明命令确实结束了
+				if looksLikeShellPrompt(s.PreviewTail(1)) {
+					break
+				}
+				// 不像 prompt，可能命令还在跑但暂时没输出，再多等几轮
+				if stableCount >= stableThreshold+4 {
+					break
+				}
 			}
 		}
 	}
 
 	return s.NewLinesSince(afterLine)
+}
+
+// looksLikeShellPrompt 简单判断最后一行是否像 shell prompt。
+// 常见 prompt 模式：以 $ # > % 结尾。
+func looksLikeShellPrompt(lines []string) bool {
+	if len(lines) == 0 {
+		return false
+	}
+	last := strings.TrimRight(lines[len(lines)-1], " \t")
+	if last == "" {
+		return false
+	}
+	lastChar := last[len(last)-1]
+	return lastChar == '$' || lastChar == '#' || lastChar == '>' || lastChar == '%'
 }
 
 // Interrupt 向 SSH 会话发送 Ctrl+C。

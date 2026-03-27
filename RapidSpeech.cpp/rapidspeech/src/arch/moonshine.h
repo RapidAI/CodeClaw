@@ -5,6 +5,8 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <random>
 
 /**
  * Moonshine model hyperparameters (from GGUF metadata).
@@ -42,6 +44,34 @@ struct MoonshineHParams {
 
     // RoPE
     float rope_theta = 10000.0f;
+};
+
+/**
+ * Whisper-style generation config for advanced decoding strategies.
+ * Controls suppress tokens, no-repeat n-gram blocking, and
+ * temperature fallback with quality checks.
+ */
+struct MoonshineGenerationConfig {
+    // Tokens to suppress (set logit to -inf). Default: {0} (pad/blank).
+    std::vector<int> suppress_tokens = {0};
+
+    // No-repeat n-gram: if > 0, any n-gram of this size that already
+    // appeared in the generated sequence is forbidden.
+    int no_repeat_ngram_size = 3;
+
+    // Temperature fallback schedule.
+    // Decode is attempted with each temperature in order.
+    // temperature=0 means greedy argmax; >0 means softmax sampling.
+    std::vector<float> temperature_fallback = {0.0f, 0.2f, 0.4f, 0.6f, 0.8f, 1.0f};
+
+    // Quality thresholds for accepting a decode attempt.
+    // If compression_ratio > threshold OR avg_logprob < threshold,
+    // the attempt is rejected and the next temperature is tried.
+    float compression_ratio_threshold = 2.4f;
+    float logprob_threshold = -1.0f;
+
+    // Max tokens to generate (overrides hparams.max_seq_len if > 0).
+    int max_new_tokens = 0;
 };
 
 // ============================================================
@@ -96,6 +126,10 @@ struct MoonshineState : public RSState {
 
     // Generated token sequence
     std::vector<int> tokens;
+
+    // Per-step log probabilities (for quality checking)
+    std::vector<float> token_logprobs;
+    float sum_logprob = 0.0f;
 
     // Streaming encoder state
     std::vector<float> sample_buffer;       // raw PCM accumulator
@@ -203,6 +237,9 @@ public:
     std::string GetTranscription(RSState& state) override;
     const RSModelMeta& GetMeta() const override { return meta_; }
 
+    // Generation config (public so callers can customize before Decode).
+    MoonshineGenerationConfig gen_config;
+
     // Streaming: push audio chunk, returns number of new encoder frames.
     // Uses causal conv frontend + causal encoder attention.
     int PushStreamingAudio(RSState& state, const float* audio, int n_samples,
@@ -228,9 +265,36 @@ private:
     // Build and run a single decoder step.  Uses pre-allocated KV cache
     // via ggml_view; the graph structure is identical for every step
     // (only input data changes), enabling future graph caching.
-    // Returns the argmax token id, or -1 on error.
-    int RunDecoderStep(MoonshineState& ms, int step, int cur_token,
-                       ggml_backend_sched_t sched);
+    // Writes raw logits into logit_out buffer. Returns false on error.
+    bool RunDecoderStep(MoonshineState& ms, int step, int cur_token,
+                        ggml_backend_sched_t sched,
+                        std::vector<float>& logit_out);
+
+    // --- Logit processing & sampling ---
+
+    // Apply suppress_tokens: set logits[id] = -inf for each suppressed id.
+    void ApplySuppressTokens(std::vector<float>& logits,
+                             const std::vector<int>& suppress_ids);
+
+    // Apply no-repeat n-gram blocking on logits given generated tokens so far.
+    void ApplyNoRepeatNgram(std::vector<float>& logits,
+                            const std::vector<int>& tokens,
+                            int ngram_size);
+
+    // Sample from logits with given temperature.
+    // temperature=0 -> greedy argmax. >0 -> softmax + multinomial.
+    // Returns (token_id, log_probability).
+    std::pair<int, float> SampleToken(const std::vector<float>& logits,
+                                      float temperature,
+                                      std::mt19937& rng);
+
+    // Compute compression ratio of token sequence (unique bigrams heuristic).
+    float ComputeCompressionRatio(const std::vector<int>& tokens);
+
+    // Run a single decode attempt with given temperature.
+    // Returns true if decode succeeded and passed quality checks.
+    bool DecodeWithTemperature(MoonshineState& ms, ggml_backend_sched_t sched,
+                               float temperature, ggml_backend_t backend);
 
     // Build encoder computation graph
     // out_positions: if non-null, receives the position tensor that caller must fill
