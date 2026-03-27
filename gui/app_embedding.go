@@ -143,9 +143,9 @@ func (a *App) CheckEmbeddingModel() map[string]interface{} {
 //   { "percent": int, "downloaded": int64, "total": int64, "error": string }
 // This method blocks until download completes or fails.
 func (a *App) DownloadEmbeddingModel() error {
-	// Prevent concurrent downloads — second caller returns immediately.
+	// Prevent concurrent downloads — second caller is silently ignored.
 	if !embeddingDownloadMu.TryLock() {
-		return fmt.Errorf("download already in progress")
+		return nil
 	}
 	defer embeddingDownloadMu.Unlock()
 
