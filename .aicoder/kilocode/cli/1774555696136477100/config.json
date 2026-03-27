@@ -1,0 +1,11 @@
+{
+  "providers": [
+    {
+      "id": "default",
+      "openAiApiKey": "sk-cycr0873rfkeumg2evvkakipvpwltig3jg67hk595t2hy8sa",
+      "openAiBaseUrl": "https://api.xiaomimimo.com/v1/chat/completions",
+      "openAiModelId": "mimo-v2-pro",
+      "provider": "openai"
+    }
+  ]
+}

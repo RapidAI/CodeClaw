@@ -272,6 +272,9 @@ func NewRouter(
 		mux.HandleFunc("/api/chat/ws", ChatWSHandler(identity, chatNotifier))
 	}
 
+	// Model file download (embedding models etc.) — public, no auth
+	mux.HandleFunc("GET /api/v1/models/{filename}", ModelDownloadHandler("./data"))
+
 	registerPWAStaticRoutes(mux, staticDir, routePrefix)
 	registerAdminStaticRoutes(mux, "./web/admin", "/admin")
 	registerBindStaticRoutes(mux, "./web/bind", "/bind")

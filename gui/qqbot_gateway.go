@@ -361,7 +361,7 @@ func (m *qqBotGatewayManager) handleLocalMessage(msg qqbot.IncomingMessage) {
 		Attachments: attachments,
 	}, onProgress)
 
-	if resp == nil {
+	if resp == nil || resp.Deferred {
 		return
 	}
 

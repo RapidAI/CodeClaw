@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/RapidAI/CodeClaw/corelib/freeproxy"
 )
 
 // TokenCallback is called with each text delta from the LLM streaming response.
@@ -16,6 +18,11 @@ type TokenCallback func(delta string)
 
 // NewRoundCallback is called when a new agent loop iteration starts LLM generation.
 type NewRoundCallback func()
+
+// StreamDoneCallback is called when a single LLM streaming round finishes,
+// allowing the frontend to hide the "thinking" indicator before the full
+// agent loop completes (tool execution may still be in progress).
+type StreamDoneCallback func()
 
 // stripThinkTags removes <think>...</think> blocks (including the tags) from
 // LLM output. Some models (e.g. kimi, deepseek) include reasoning traces
@@ -49,6 +56,9 @@ const (
 
 	funcCallOpen  = "<|FunctionCallBegin|>"
 	funcCallClose = "<|FunctionCallEnd|>"
+
+	toolCallOpen  = "<tool_call>"
+	toolCallClose = "</tool_call>"
 )
 
 // newThinkFilter returns a TokenCallback that filters out <think> blocks
@@ -227,6 +237,84 @@ func (f *funcCallFilter) drain() {
 
 // Shared helpers for partial-tag detection (used by both filters).
 
+// ---------------------------------------------------------------------------
+// toolCallFilter — stateful streaming filter for <tool_call>...</tool_call>
+// ---------------------------------------------------------------------------
+
+// toolCallFilter wraps a TokenCallback to suppress <tool_call>...</tool_call>
+// content in real-time during streaming. Small models (e.g. xiaomi/mimo-v2-pro)
+// emit tool calls as XML tags in the content field; this filter prevents the
+// raw tags from reaching the user-facing token stream.
+type toolCallFilter struct {
+	downstream TokenCallback
+	inside     bool
+	pending    strings.Builder
+}
+
+func newToolCallFilter(downstream TokenCallback) *toolCallFilter {
+	return &toolCallFilter{downstream: downstream}
+}
+
+func (f *toolCallFilter) Write(delta string) {
+	f.pending.WriteString(delta)
+	f.drain()
+}
+
+func (f *toolCallFilter) Flush() {
+	if f.pending.Len() > 0 && !f.inside {
+		f.downstream(f.pending.String())
+		f.pending.Reset()
+	}
+}
+
+func (f *toolCallFilter) drain() {
+	for f.pending.Len() > 0 {
+		s := f.pending.String()
+		if f.inside {
+			idx := strings.Index(s, toolCallClose)
+			if idx >= 0 {
+				after := s[idx+len(toolCallClose):]
+				f.pending.Reset()
+				f.pending.WriteString(after)
+				f.inside = false
+				continue
+			}
+			tail := partialTagTail(s, toolCallClose)
+			f.pending.Reset()
+			if tail != "" {
+				f.pending.WriteString(tail)
+			}
+			return
+		}
+		idx := strings.Index(s, toolCallOpen)
+		if idx >= 0 {
+			if idx > 0 {
+				f.downstream(s[:idx])
+			}
+			after := s[idx+len(toolCallOpen):]
+			f.pending.Reset()
+			f.pending.WriteString(after)
+			f.inside = true
+			continue
+		}
+		if hasPartialTagSuffix(s, toolCallOpen) {
+			safe := safeEmitLen(s, toolCallOpen)
+			if safe > 0 {
+				f.downstream(s[:safe])
+				rest := s[safe:]
+				f.pending.Reset()
+				f.pending.WriteString(rest)
+			}
+			return
+		}
+		f.downstream(s)
+		f.pending.Reset()
+		return
+	}
+}
+
+// Shared helpers for partial-tag detection (used by all filters).
+
 func partialTagTail(s, tag string) string {
 	maxCheck := len(tag) - 1
 	if maxCheck > len(s) {
@@ -265,6 +353,15 @@ var reFuncCallBlock = regexp.MustCompile(`(?s)<\|FunctionCallBegin\|>.*?<\|Funct
 
 func stripFunctionCalls(s string) string {
 	return reFuncCallBlock.ReplaceAllString(s, "")
+}
+
+// stripXMLToolCalls removes <tool_call>...</tool_call> blocks from a complete
+// string (non-streaming path). Used by small models that emit tool calls as
+// XML tags in the content field.
+var reXMLToolCallBlock = regexp.MustCompile(`(?s)<tool_call>.*?</tool_call>`)
+
+func stripXMLToolCalls(s string) string {
+	return reXMLToolCallBlock.ReplaceAllString(s, "")
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +415,7 @@ type openAIStreamChunk struct {
 		Delta        openAIStreamDelta `json:"delta"`
 		FinishReason *string           `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *llmUsage `json:"usage,omitempty"`
 }
 
 func (h *IMMessageHandler) doOpenAILLMRequestStream(
@@ -333,6 +431,9 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 		"model":    cfg.Model,
 		"messages": messages,
 		"stream":   true,
+		"stream_options": map[string]interface{}{
+			"include_usage": true,
+		},
 	}
 	if len(tools) > 0 {
 		reqBody["tools"] = tools
@@ -355,14 +456,35 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 	}
 	defer resp.Body.Close()
 
-	// Fallback: if provider doesn't return SSE, parse as normal JSON response.
+	// Detect SSE: check Content-Type first, then sniff the body prefix.
+	// Some API gateways (e.g. NewAPI, OneAPI) return SSE data but with a
+	// non-standard Content-Type like "application/octet-stream" or "text/plain".
 	contentType := resp.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "text/event-stream") {
+	isSSE := strings.Contains(contentType, "text/event-stream")
+
+	// If Content-Type doesn't indicate SSE, peek at the body to detect SSE
+	// format ("data:" prefix). This handles gateways that strip/change the
+	// Content-Type header while still proxying SSE correctly.
+	var bodyReader io.Reader = resp.Body
+	if !isSSE {
+		peek := make([]byte, 64)
+		n, _ := resp.Body.Read(peek)
+		peek = peek[:n]
+		trimmed := bytes.TrimLeft(peek, " \t\r\n")
+		if bytes.HasPrefix(trimmed, []byte("data:")) {
+			isSSE = true
+		}
+		// Reconstruct the reader so the peeked bytes aren't lost.
+		bodyReader = io.MultiReader(bytes.NewReader(peek), resp.Body)
+	}
+
+	if !isSSE {
 		return parseNonStreamOpenAIResponse(resp, data)
 	}
 
-	// SSE parsing — wrap onToken with think-tag filter and func-call filter
-	fcf := newFuncCallFilter(onToken)
+	// SSE parsing — wrap onToken with think-tag filter, func-call filter, and tool-call filter
+	tcf := newToolCallFilter(onToken)
+	fcf := newFuncCallFilter(func(s string) { tcf.Write(s) })
 	tf := newThinkFilter(func(s string) { fcf.Write(s) })
 	var contentBuf strings.Builder
 	type toolAccum struct {
@@ -374,9 +496,9 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 	toolAccums := make(map[int]*toolAccum)
 	var reasoningBuf strings.Builder
 	var finishReason string
+	var usage *llmUsage
 
-	scanner := bufio.NewScanner(resp.Body)
-	// Increase scanner buffer for large chunks
+	scanner := bufio.NewScanner(bodyReader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 
 	for scanner.Scan() {
@@ -393,6 +515,10 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 		var chunk openAIStreamChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue // skip malformed chunks
+		}
+		// Capture usage from the final chunk (OpenAI sends it when stream_options.include_usage=true)
+		if chunk.Usage != nil {
+			usage = chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -449,12 +575,13 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 	}
 	tf.Flush()
 	fcf.Flush()
+	tcf.Flush()
 
 	// Assemble llmResponse
-	content := stripFunctionCalls(stripThinkTags(contentBuf.String()))
+	content := stripXMLToolCalls(stripFunctionCalls(stripThinkTags(contentBuf.String())))
 	reasoning := reasoningBuf.String()
 	if content == "" && reasoning != "" {
-		content = stripFunctionCalls(stripThinkTags(reasoning))
+		content = stripXMLToolCalls(stripFunctionCalls(stripThinkTags(reasoning)))
 	}
 	msg := llmMessage{
 		Role:             "assistant",
@@ -488,12 +615,36 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 		}
 	}
 
+	// Fallback: if no structured delta.tool_calls were received, check the
+	// raw content for <tool_call>JSON</tool_call> XML blocks emitted by small
+	// models (e.g. xiaomi/mimo-v2-pro). Only parse when no structured tool
+	// calls exist to avoid duplicate execution (deduplication).
+	if len(msg.ToolCalls) == 0 {
+		if xmlCalls := freeproxy.ParseXMLToolCalls(contentBuf.String()); len(xmlCalls) > 0 {
+			for _, xc := range xmlCalls {
+				msg.ToolCalls = append(msg.ToolCalls, llmToolCall{
+					ID:   xc.ID,
+					Type: xc.Type,
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{
+						Name:      xc.Function.Name,
+						Arguments: xc.Function.Arguments,
+					},
+				})
+			}
+			finishReason = "tool_calls"
+		}
+	}
+
 	if finishReason == "" {
 		finishReason = "stop"
 	}
 
 	return &llmResponse{
 		Choices: []llmChoice{{Message: msg, FinishReason: finishReason}},
+		Usage:   usage,
 	}, nil
 }
 
@@ -522,11 +673,31 @@ func parseNonStreamOpenAIResponse(resp *http.Response, requestBody []byte) (*llm
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
-	// Strip <think>...</think> blocks from content.
+	// Strip <think>...</think> and <tool_call>...</tool_call> blocks from content.
 	for i := range result.Choices {
-		result.Choices[i].Message.Content = stripFunctionCalls(stripThinkTags(result.Choices[i].Message.Content))
+		result.Choices[i].Message.Content = stripXMLToolCalls(stripFunctionCalls(stripThinkTags(result.Choices[i].Message.Content)))
 		if result.Choices[i].Message.Content == "" && result.Choices[i].Message.ReasoningContent != "" {
-			result.Choices[i].Message.Content = stripFunctionCalls(stripThinkTags(result.Choices[i].Message.ReasoningContent))
+			result.Choices[i].Message.Content = stripXMLToolCalls(stripFunctionCalls(stripThinkTags(result.Choices[i].Message.ReasoningContent)))
+		}
+		// Fallback: extract XML tool calls if no structured tool_calls present.
+		if len(result.Choices[i].Message.ToolCalls) == 0 {
+			if xmlCalls := freeproxy.ParseXMLToolCalls(result.Choices[i].Message.Content); len(xmlCalls) > 0 {
+				for _, xc := range xmlCalls {
+					result.Choices[i].Message.ToolCalls = append(result.Choices[i].Message.ToolCalls, llmToolCall{
+						ID:   xc.ID,
+						Type: xc.Type,
+						Function: struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						}{
+							Name:      xc.Function.Name,
+							Arguments: xc.Function.Arguments,
+						},
+					})
+				}
+				result.Choices[i].Message.Content = freeproxy.RemoveXMLToolCallBlocks(result.Choices[i].Message.Content)
+				result.Choices[i].FinishReason = "tool_calls"
+			}
 		}
 	}
 	return &result, nil
@@ -713,6 +884,7 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 	}
 	blocks := make(map[int]*blockAccum)
 	var stopReason string
+	var usage *llmUsage
 
 	fcf := newFuncCallFilter(onToken)
 	tf := newThinkFilter(func(s string) { fcf.Write(s) })
@@ -739,14 +911,21 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 				Input map[string]interface{} `json:"input,omitempty"`
 			} `json:"content_block,omitempty"`
 			Delta struct {
-				Type        string `json:"type"`
-				Text        string `json:"text,omitempty"`
-				PartialJSON string `json:"partial_json,omitempty"`
-				StopReason  string `json:"stop_reason,omitempty"`
+				Type         string `json:"type"`
+				Text         string `json:"text,omitempty"`
+				PartialJSON  string `json:"partial_json,omitempty"`
+				StopReason   string `json:"stop_reason,omitempty"`
 			} `json:"delta,omitempty"`
 			Message struct {
-				StopReason string `json:"stop_reason,omitempty"`
+				StopReason string    `json:"stop_reason,omitempty"`
+				Usage      *struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage,omitempty"`
 			} `json:"message,omitempty"`
+			Usage *struct {
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage,omitempty"`
 		}
 		if err := json.Unmarshal([]byte(payload), &evt); err != nil {
 			continue
@@ -782,6 +961,12 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 			if evt.Delta.StopReason != "" {
 				stopReason = evt.Delta.StopReason
 			}
+			// Anthropic sends output_tokens in message_delta.usage
+			if evt.Usage != nil && usage != nil {
+				usage.OutputTokens = evt.Usage.OutputTokens
+				usage.CompletionTokens = evt.Usage.OutputTokens
+				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+			}
 
 		case "message_stop":
 			// End of stream
@@ -789,6 +974,13 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 		case "message_start":
 			if evt.Message.StopReason != "" {
 				stopReason = evt.Message.StopReason
+			}
+			// Anthropic sends input_tokens in message_start.message.usage
+			if evt.Message.Usage != nil {
+				usage = &llmUsage{
+					InputTokens:  evt.Message.Usage.InputTokens,
+					PromptTokens: evt.Message.Usage.InputTokens,
+				}
 			}
 		}
 	}
@@ -844,6 +1036,7 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 
 	return &llmResponse{
 		Choices: []llmChoice{{Message: msg, FinishReason: finishReason}},
+		Usage:   usage,
 	}, nil
 }
 

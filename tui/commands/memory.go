@@ -4,16 +4,20 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
+	"github.com/RapidAI/CodeClaw/corelib/embedding"
 	"github.com/RapidAI/CodeClaw/corelib/memory"
 )
 
 // RunMemory 执行 memory 子命令。
 func RunMemory(args []string, dataDir string) error {
 	if len(args) == 0 {
-		return NewUsageError("usage: maclaw-tui memory <list|search|save|delete|compress|backup|auto-compress>")
+		return NewUsageError("usage: maclaw-tui memory <list|search|save|delete|compress|backup|auto-compress|stats|embed-status|graph|strength>")
 	}
 	switch args[0] {
 	case "list":
@@ -30,6 +34,14 @@ func RunMemory(args []string, dataDir string) error {
 		return memoryBackup(dataDir, args[1:])
 	case "auto-compress":
 		return memoryAutoCompress(dataDir, args[1:])
+	case "stats":
+		return memoryStats(dataDir)
+	case "embed-status":
+		return memoryEmbedStatus(dataDir)
+	case "graph":
+		return memoryGraph(dataDir, args[1:])
+	case "strength":
+		return memoryStrength(dataDir)
 	default:
 		return NewUsageError("unknown memory action: %s", args[0])
 	}
@@ -345,4 +357,226 @@ func memoryAutoCompress(dataDir string, args []string) error {
 	default:
 		return NewUsageError("usage: maclaw-tui memory auto-compress <on|off|status>")
 	}
+}
+
+func memoryStats(dataDir string) error {
+	store, err := openMemoryStore(dataDir)
+	if err != nil {
+		return err
+	}
+	defer store.Stop()
+
+	entries := store.List("", "")
+	total := len(entries)
+	var active, dormant, superseded int
+	var withEmb, withGraph int
+	scopeGlobal, scopeProject := 0, 0
+	catCounts := make(map[memory.Category]int)
+	tierSemantic, tierEpisodic := 0, 0
+
+	for _, e := range entries {
+		catCounts[e.Category]++
+		switch e.Status {
+		case memory.StatusDormant:
+			dormant++
+		case memory.StatusSuperseded:
+			superseded++
+		default:
+			active++
+		}
+		if len(e.Embedding) > 0 {
+			withEmb++
+		}
+		if len(e.RelatedIDs) > 0 {
+			withGraph++
+		}
+		if e.Scope == memory.ScopeGlobal {
+			scopeGlobal++
+		} else {
+			scopeProject++
+		}
+		if e.Category.Tier() == memory.TierSemantic {
+			tierSemantic++
+		} else {
+			tierEpisodic++
+		}
+	}
+
+	fmt.Printf("Memory Store Stats:\n")
+	fmt.Printf("  Total entries:    %d\n", total)
+	fmt.Printf("  Active:           %d\n", active)
+	fmt.Printf("  Dormant:          %d\n", dormant)
+	fmt.Printf("  Superseded:       %d\n", superseded)
+	fmt.Printf("  With embedding:   %d\n", withEmb)
+	fmt.Printf("  With graph links: %d\n", withGraph)
+	fmt.Printf("  Scope global:     %d\n", scopeGlobal)
+	fmt.Printf("  Scope project:    %d\n", scopeProject)
+	fmt.Printf("  Tier semantic:    %d\n", tierSemantic)
+	fmt.Printf("  Tier episodic:    %d\n", tierEpisodic)
+	fmt.Printf("  Categories:\n")
+	for cat, count := range catCounts {
+		fmt.Printf("    %-25s %d\n", cat, count)
+	}
+	return nil
+}
+
+func memoryEmbedStatus(dataDir string) error {
+	store, err := openMemoryStore(dataDir)
+	if err != nil {
+		return err
+	}
+	defer store.Stop()
+
+	store.RLock()
+	entries := store.Entries()
+	total := len(entries)
+	withEmb := 0
+	for _, e := range entries {
+		if len(e.Embedding) > 0 {
+			withEmb++
+		}
+	}
+	store.RUnlock()
+
+	embedder := store.Embedder()
+	embedderType := "Noop"
+	modelPath := "(none)"
+	if embedder != nil && !embedding.IsNoop(embedder) {
+		embedderType = "Gemma"
+		modelPath = embedding.DefaultModelPath()
+	}
+
+	fmt.Printf("Embedding Status:\n")
+	fmt.Printf("  Total entries:           %d\n", total)
+	fmt.Printf("  With embeddings:         %d\n", withEmb)
+	fmt.Printf("  Without embeddings:      %d\n", total-withEmb)
+	fmt.Printf("  Embedder type:           %s\n", embedderType)
+	fmt.Printf("  Model path:              %s\n", modelPath)
+	return nil
+}
+
+func memoryGraph(dataDir string, args []string) error {
+	if len(args) == 0 {
+		return NewUsageError("usage: maclaw-tui memory graph <id>")
+	}
+	id := args[0]
+
+	store, err := openMemoryStore(dataDir)
+	if err != nil {
+		return err
+	}
+	defer store.Stop()
+
+	neighbors := store.GraphNeighbors(id)
+	if len(neighbors) == 0 {
+		fmt.Printf("No graph neighbors for entry %s.\n", id)
+		return nil
+	}
+
+	// Build entry lookup for content preview.
+	store.RLock()
+	entryByID := make(map[string]*memory.Entry)
+	for i := range store.Entries() {
+		entryByID[store.Entries()[i].ID] = &store.Entries()[i]
+	}
+	store.RUnlock()
+
+	fmt.Printf("Graph neighbors for %s:\n\n", id)
+	fmt.Printf("%-26s %-10s %s\n", "NEIGHBOR", "STRENGTH", "CONTENT")
+	fmt.Println(strings.Repeat("-", 76))
+
+	// Sort neighbor IDs for stable output.
+	type neighborInfo struct {
+		id       string
+		strength float64
+	}
+	sorted := make([]neighborInfo, 0, len(neighbors))
+	for nid, str := range neighbors {
+		sorted = append(sorted, neighborInfo{id: nid, strength: str})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].strength > sorted[j].strength
+	})
+
+	for _, n := range sorted {
+		content := "(not found)"
+		if e, ok := entryByID[n.id]; ok {
+			content = strings.ReplaceAll(e.Content, "\n", " ")
+			if len(content) > 36 {
+				content = content[:33] + "..."
+			}
+		}
+		fmt.Printf("%-26s %-10.4f %s\n", n.id, n.strength, content)
+	}
+	return nil
+}
+
+func memoryStrength(dataDir string) error {
+	store, err := openMemoryStore(dataDir)
+	if err != nil {
+		return err
+	}
+	defer store.Stop()
+
+	store.RLock()
+	entries := make([]memory.Entry, len(store.Entries()))
+	copy(entries, store.Entries())
+	store.RUnlock()
+
+	if len(entries) == 0 {
+		fmt.Println("No memories found.")
+		return nil
+	}
+
+	now := time.Now()
+
+	type strengthEntry struct {
+		entry    memory.Entry
+		current  float64
+		dormant  bool
+	}
+
+	items := make([]strengthEntry, 0, len(entries))
+	for _, e := range entries {
+		cur := e.Strength
+		if cur > 0 {
+			hours := now.Sub(e.UpdatedAt).Hours()
+			if hours < 0 {
+				hours = 0
+			}
+			cur = e.Strength * math.Exp(-0.003*hours)
+		}
+		isDormant := cur < 0.1 && e.Status != memory.StatusSuperseded && !e.Category.IsProtected()
+		items = append(items, strengthEntry{entry: e, current: cur, dormant: isDormant})
+	}
+
+	// Sort by current strength ascending (weakest first).
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].current < items[j].current
+	})
+
+	fmt.Printf("%-26s %-10s %-12s %-20s %s\n", "ID", "STRENGTH", "STATUS", "LAST ACCESS", "CONTENT")
+	fmt.Println(strings.Repeat("-", 96))
+
+	for _, it := range items {
+		status := string(it.entry.Status)
+		if status == "" {
+			status = "active"
+		}
+		marker := "  "
+		if it.dormant || it.entry.Status == memory.StatusDormant {
+			marker = "⚠ "
+		}
+
+		content := strings.ReplaceAll(it.entry.Content, "\n", " ")
+		if len(content) > 24 {
+			content = content[:21] + "..."
+		}
+
+		lastAccess := it.entry.UpdatedAt.Format("2006-01-02 15:04")
+
+		fmt.Printf("%s%-24s %-10.4f %-12s %-20s %s\n",
+			marker, it.entry.ID, it.current, status, lastAccess, content)
+	}
+	return nil
 }

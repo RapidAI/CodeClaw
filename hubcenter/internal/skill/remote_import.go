@@ -2,6 +2,7 @@ package skill
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,21 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// skillMDFrontMatter 表示 SKILL.md 的 YAML front-matter 结构。
+type skillMDFrontMatter struct {
+	Name        string   `yaml:"name"`
+	License     string   `yaml:"license"`
+	GitHub      string   `yaml:"github"`
+	Description string   `yaml:"description"`
+	Tags        []string `yaml:"tags"`
+	Platforms   []string `yaml:"platforms"`
+	Permissions []string `yaml:"permissions"`
+	Metadata    struct {
+		Author  string `yaml:"author"`
+		Version string `yaml:"version"`
+	} `yaml:"metadata"`
+}
 
 // RemoteImporter 从远程 URL 抓取 skill 并转换为 maclaw 格式。
 type RemoteImporter struct {
@@ -106,7 +122,12 @@ func (ri *RemoteImporter) scanGitHubTree(owner, repo, branch, subPath, sourceURL
 		return nil, fmt.Errorf("parse tree: %w", err)
 	}
 
+	// 收集已有 skill.yaml 的目录，避免 SKILL.md 重复导入
+	yamlDirs := make(map[string]bool)
+
 	result := &ImportResult{}
+
+	// 第一轮：扫描 skill.yaml / skill.yml（优先）
 	for _, entry := range tree.Tree {
 		if entry.Type != "blob" {
 			continue
@@ -115,10 +136,12 @@ func (ri *RemoteImporter) scanGitHubTree(owner, repo, branch, subPath, sourceURL
 		if base != "skill.yaml" && base != "skill.yml" {
 			continue
 		}
-		// 如果指定了子路径，只匹配该子路径下的
 		if subPath != "" && !strings.HasPrefix(entry.Path, subPath) {
 			continue
 		}
+
+		skillDir := path.Dir(entry.Path)
+		yamlDirs[skillDir] = true
 
 		rawContentURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, branch, entry.Path)
 		yamlData, err := ri.httpGet(rawContentURL)
@@ -127,58 +150,201 @@ func (ri *RemoteImporter) scanGitHubTree(owner, repo, branch, subPath, sourceURL
 			continue
 		}
 
-		skillDir := path.Dir(entry.Path)
-
 		sk, err := ri.parseSkillYAML(yamlData, sourceURL, skillDir)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("parse %s: %v", entry.Path, err))
 			continue
 		}
 
-		// 抓取同目录下的其他文件
-		sk.Files = make(map[string]string)
-		dirPrefix := skillDir + "/"
-		if skillDir == "." {
-			dirPrefix = "" // 根目录时不加前缀
+		ri.collectFiles(sk, &tree, skillDir, owner, repo, branch)
+		// 把 skill.yaml 本身也放入 Files，客户端 scanner 需要它
+		sk.Files["skill.yaml"] = base64.StdEncoding.EncodeToString(yamlData)
+		result.Skills = append(result.Skills, *sk)
+	}
+
+	// 第二轮：扫描 SKILL.md（仅在同目录无 skill.yaml 时）
+	for _, entry := range tree.Tree {
+		if entry.Type != "blob" {
+			continue
 		}
-		for _, f := range tree.Tree {
-			if f.Type != "blob" {
-				continue
-			}
-			// 判断是否在同一目录下（不含子目录的子目录）
-			var relPath string
-			if dirPrefix == "" {
-				// 根目录：只取不含 "/" 的文件（排除子目录文件）
-				if strings.Contains(f.Path, "/") {
-					continue
-				}
-				relPath = f.Path
-			} else {
-				if !strings.HasPrefix(f.Path, dirPrefix) {
-					continue
-				}
-				relPath = strings.TrimPrefix(f.Path, dirPrefix)
-			}
-			if relPath == "skill.yaml" || relPath == "skill.yml" || relPath == "" {
-				continue
-			}
-			fileURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, branch, f.Path)
-			fileData, err := ri.httpGet(fileURL)
-			if err != nil {
-				continue
-			}
-			if len(fileData) <= 512*1024 { // 最大 512KB
-				sk.Files[relPath] = string(fileData)
-			}
+		base := path.Base(entry.Path)
+		if !strings.EqualFold(base, "SKILL.md") {
+			continue
+		}
+		if subPath != "" && !strings.HasPrefix(entry.Path, subPath) {
+			continue
 		}
 
+		skillDir := path.Dir(entry.Path)
+		if yamlDirs[skillDir] {
+			continue // 同目录已有 skill.yaml，跳过
+		}
+
+		rawContentURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, branch, entry.Path)
+		mdData, err := ri.httpGet(rawContentURL)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("fetch %s: %v", entry.Path, err))
+			continue
+		}
+
+		sk, err := ri.parseSkillMD(mdData, sourceURL, skillDir)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("parse %s: %v", entry.Path, err))
+			continue
+		}
+
+		ri.collectFiles(sk, &tree, skillDir, owner, repo, branch)
+		// SKILL.md 格式没有 skill.yaml，自动生成一个供客户端 scanner 识别
+		generatedYAML := ri.generateSkillYAML(sk)
+		sk.Files["skill.yaml"] = base64.StdEncoding.EncodeToString(generatedYAML)
+		// 保留 SKILL.md 正文内容，供本地使用
+		if sk.AgentSkillMD != "" {
+			sk.Files["SKILL.md"] = base64.StdEncoding.EncodeToString(mdData)
+		}
 		result.Skills = append(result.Skills, *sk)
 	}
 
 	if len(result.Skills) == 0 && len(result.Errors) == 0 {
-		return nil, fmt.Errorf("no skill.yaml found in repo %s/%s (branch: %s, subpath: %q)", owner, repo, branch, subPath)
+		return nil, fmt.Errorf("no skill.yaml or SKILL.md found in repo %s/%s (branch: %s, subpath: %q)", owner, repo, branch, subPath)
 	}
 	return result, nil
+}
+
+// collectFiles 抓取同目录下的附属文件（scripts 等），递归包含子目录。
+func (ri *RemoteImporter) collectFiles(sk *HubSkillFull, tree *ghTreeResponse, skillDir, owner, repo, branch string) {
+	sk.Files = make(map[string]string)
+	dirPrefix := skillDir + "/"
+	if skillDir == "." {
+		dirPrefix = ""
+	}
+	skipFiles := map[string]bool{"skill.yaml": true, "skill.yml": true}
+	for _, f := range tree.Tree {
+		if f.Type != "blob" {
+			continue
+		}
+		var relPath string
+		if dirPrefix == "" {
+			relPath = f.Path
+		} else {
+			if !strings.HasPrefix(f.Path, dirPrefix) {
+				continue
+			}
+			relPath = strings.TrimPrefix(f.Path, dirPrefix)
+		}
+		if relPath == "" || skipFiles[relPath] {
+			continue
+		}
+		// 跳过根级别的 SKILL.md（定义文件本身），但保留子目录中的同名文件
+		if strings.EqualFold(relPath, "SKILL.md") {
+			continue
+		}
+		fileURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, branch, f.Path)
+		fileData, err := ri.httpGet(fileURL)
+		if err != nil {
+			continue
+		}
+		if len(fileData) <= 512*1024 {
+			sk.Files[relPath] = base64.StdEncoding.EncodeToString(fileData)
+		}
+	}
+}
+
+// parseSkillMD 解析 SKILL.md（带 YAML front-matter 的 Markdown）为标准 HubSkillFull。
+func (ri *RemoteImporter) parseSkillMD(data []byte, sourceURL, skillDir string) (*HubSkillFull, error) {
+	content := string(data)
+
+	// 提取 YAML front-matter（--- 包裹的部分）
+	frontMatter, body, err := extractFrontMatter(content)
+	if err != nil {
+		return nil, err
+	}
+
+	var fm skillMDFrontMatter
+	if err := yaml.Unmarshal([]byte(frontMatter), &fm); err != nil {
+		return nil, fmt.Errorf("invalid YAML front-matter: %w", err)
+	}
+
+	name := fm.Name
+	if name == "" {
+		if skillDir != "" && skillDir != "." {
+			name = path.Base(skillDir)
+		} else {
+			name = "imported-skill"
+		}
+	}
+
+	version := fm.Metadata.Version
+	if version == "" {
+		version = "1"
+	}
+
+	author := fm.Metadata.Author
+	description := fm.Description
+
+	now := time.Now().Format(time.RFC3339)
+
+	full := &HubSkillFull{
+		HubSkillMeta: HubSkillMeta{
+			ID:          generateImportID(),
+			Name:        name,
+			Description: description,
+			Tags:        fm.Tags,
+			Version:     version,
+			Author:      author,
+			TrustLevel:  "community",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			Visible:     true,
+			Price:       0,
+			Status:      "published",
+			Platforms:   fm.Platforms,
+			Permissions: fm.Permissions,
+			SourceURL:   sourceURL,
+		},
+		AgentSkillMD: strings.TrimSpace(body),
+	}
+	return full, nil
+}
+
+// extractFrontMatter 从 Markdown 内容中提取 YAML front-matter 和正文。
+// 支持标准格式 (---\ncontent\n---) 和连续分隔符格式 (---\n---\ncontent\n---)。
+func extractFrontMatter(content string) (frontMatter, body string, err error) {
+	content = strings.TrimSpace(content)
+	if !strings.HasPrefix(content, "---") {
+		return "", "", fmt.Errorf("no YAML front-matter found (missing opening ---)")
+	}
+
+	// 跳过第一个 ---
+	rest := content[3:]
+	if idx := strings.IndexByte(rest, '\n'); idx >= 0 {
+		rest = rest[idx+1:]
+	} else {
+		return "", "", fmt.Errorf("no YAML front-matter found (missing closing ---)")
+	}
+
+	// 如果紧接着又是 ---（连续分隔符格式），跳过它作为真正的开头
+	trimmed := strings.TrimLeft(rest, " \t")
+	if strings.HasPrefix(trimmed, "---") {
+		after := trimmed[3:]
+		if after == "" || after[0] == '\n' || after[0] == '\r' {
+			rest = after
+			if len(rest) > 0 && (rest[0] == '\n' || rest[0] == '\r') {
+				if rest[0] == '\r' && len(rest) > 1 && rest[1] == '\n' {
+					rest = rest[2:]
+				} else {
+					rest = rest[1:]
+				}
+			}
+		}
+	}
+
+	endIdx := strings.Index(rest, "\n---")
+	if endIdx < 0 {
+		return "", "", fmt.Errorf("no YAML front-matter found (missing closing ---)")
+	}
+	frontMatter = rest[:endIdx]
+	body = rest[endIdx+4:] // skip "\n---"
+	return frontMatter, body, nil
 }
 
 // importFromRawURL 直接抓取一个 URL 作为 skill.yaml 解析。
@@ -297,6 +463,26 @@ func parseSteps(m map[string]interface{}) []HubSkillStep {
 }
 
 // ── HTTP 和 ID 生成 ────────────────────────────────────────────────────
+
+// generateSkillYAML 为 SKILL.md 格式的 skill 生成一个最小的 skill.yaml，
+// 使客户端 scanner 能够识别该 skill 目录。
+func (ri *RemoteImporter) generateSkillYAML(sk *HubSkillFull) []byte {
+	m := map[string]interface{}{
+		"name":        sk.Name,
+		"description": sk.Description,
+	}
+	if len(sk.HubSkillMeta.Tags) > 0 {
+		m["triggers"] = sk.HubSkillMeta.Tags
+	}
+	if sk.Version != "" {
+		m["version"] = sk.Version
+	}
+	if len(sk.HubSkillMeta.Platforms) > 0 {
+		m["platforms"] = sk.HubSkillMeta.Platforms
+	}
+	data, _ := yaml.Marshal(m)
+	return data
+}
 
 func (ri *RemoteImporter) httpGet(url string) ([]byte, error) {
 	req, err := http.NewRequest("GET", url, nil)

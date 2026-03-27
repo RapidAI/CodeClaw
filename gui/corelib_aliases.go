@@ -34,6 +34,7 @@ type MaclawLLMProvider = corelib.MaclawLLMProvider
 type MaclawLLMConfig = corelib.MaclawLLMConfig
 type SkillHubEntry = corelib.SkillHubEntry
 type Skill = corelib.Skill
+type TokenUsageStat = corelib.TokenUsageStat
 
 // ── app_config.go alias ─────────────────────────────────────────────────────
 

@@ -159,6 +159,9 @@ def main():
         print(f"Wrote {len(tokens)} vocabulary tokens")
 
     # Write tensors
+    # Note: gguf stores numpy arrays as-is, and ggml reverses dimension order
+    # when reading. So PyTorch [OC, IC, K] -> ggml [K, IC, OC] automatically.
+    # No manual transpose needed.
     print("Writing tensors...")
     tensor_count = 0
     for name, data in load_weights(model_dir):

@@ -109,10 +109,33 @@ if !errorlevel! neq 0 (
     goto :error
 )
 
+REM -- (Optional) Build RapidSpeech static library for CGO embedding --
+REM   If build\build_rapidspeech.cmd succeeds, the cgo_embedding tag is added
+REM   so that GemmaEmbedder (vector embedding via RapidSpeech) is compiled in.
+REM   If it fails (missing CMake/compiler), the build continues without it.
+echo [Step 5.5/9] Building RapidSpeech static library (optional)...
+set "RS_LIB=%~dp0RapidSpeech.cpp\build\librapidspeech_static.a"
+if exist "%~dp0build\build_rapidspeech.cmd" (
+    call "%~dp0build\build_rapidspeech.cmd"
+    if !errorlevel! equ 0 (
+        if exist "%RS_LIB%" (
+            echo [INFO] RapidSpeech static library built. Enabling cgo_embedding tag.
+            set "BUILD_TAGS=%BUILD_TAGS%,cgo_embedding"
+            set "CGO_ENABLED=1"
+        ) else (
+            echo [WARN] build_rapidspeech.cmd succeeded but library not found. Skipping cgo_embedding.
+        )
+    ) else (
+        echo [WARN] RapidSpeech static library build failed. Continuing without cgo_embedding.
+    )
+) else (
+    echo [WARN] build\build_rapidspeech.cmd not found. Skipping RapidSpeech build.
+)
+
 REM -- Build Go Binaries (with oem_qianxin tag) --
 echo [Step 6/9] Compiling TigerClaw GUI binaries...
 set "GOOS=windows"
-set "CGO_ENABLED=0"
+if not "%CGO_ENABLED%"=="1" set "CGO_ENABLED=0"
 set "GOARCH=amd64"
 "%GOVERSIONINFO_PATH%" -64 -icon "%ICON_PATH%" -manifest "%~dp0build\windows\wails.exe.manifest.tmp" -o "%~dp0gui\resource_windows_amd64.syso" "%~dp0build\windows\versioninfo.json.tmp"
 if !errorlevel! neq 0 (

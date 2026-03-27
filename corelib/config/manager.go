@@ -258,6 +258,8 @@ func (m *Manager) formatMaclawRoleConfig(cfg corelib.AppConfig) string {
 func (m *Manager) formatProxyConfig(cfg corelib.AppConfig, raw bool) string {
 	var b strings.Builder
 	b.WriteString("=== 代理设置 ===\n")
+	b.WriteString(fmt.Sprintf("default_proxy_enabled: %v\n", cfg.DefaultProxyEnabled))
+	b.WriteString(fmt.Sprintf("default_proxy_protocol: %s\n", cfg.DefaultProxyProtocol))
 	b.WriteString(fmt.Sprintf("default_proxy_host: %s\n", cfg.DefaultProxyHost))
 	b.WriteString(fmt.Sprintf("default_proxy_port: %s\n", cfg.DefaultProxyPort))
 	b.WriteString(fmt.Sprintf("default_proxy_username: %s\n", cfg.DefaultProxyUsername))
@@ -266,6 +268,10 @@ func (m *Manager) formatProxyConfig(cfg corelib.AppConfig, raw bool) string {
 		pwd = maskSensitive(pwd)
 	}
 	b.WriteString(fmt.Sprintf("default_proxy_password: %s\n", pwd))
+	b.WriteString(fmt.Sprintf("default_proxy_bypass: %s\n", cfg.DefaultProxyBypass))
+	b.WriteString(fmt.Sprintf("default_proxy_scope_maclaw: %v\n", cfg.DefaultProxyScopeMaclaw))
+	b.WriteString(fmt.Sprintf("default_proxy_scope_coding_tools: %v\n", cfg.DefaultProxyScopeCodingTools))
+	b.WriteString(fmt.Sprintf("default_proxy_scope_agent: %v\n", cfg.DefaultProxyScopeAgent))
 	return b.String()
 }
 
@@ -708,6 +714,14 @@ func (m *Manager) applyMaclawRoleChange(cfg *corelib.AppConfig, key, value strin
 
 func (m *Manager) applyProxyChange(cfg *corelib.AppConfig, key, value string) (string, error) {
 	switch key {
+	case "default_proxy_enabled":
+		old := fmt.Sprintf("%v", cfg.DefaultProxyEnabled)
+		cfg.DefaultProxyEnabled = value == "true"
+		return old, nil
+	case "default_proxy_protocol":
+		old := cfg.DefaultProxyProtocol
+		cfg.DefaultProxyProtocol = value
+		return old, nil
 	case "default_proxy_host":
 		old := cfg.DefaultProxyHost
 		cfg.DefaultProxyHost = value
@@ -723,6 +737,22 @@ func (m *Manager) applyProxyChange(cfg *corelib.AppConfig, key, value string) (s
 	case "default_proxy_password":
 		old := cfg.DefaultProxyPassword
 		cfg.DefaultProxyPassword = value
+		return old, nil
+	case "default_proxy_bypass":
+		old := cfg.DefaultProxyBypass
+		cfg.DefaultProxyBypass = value
+		return old, nil
+	case "default_proxy_scope_maclaw":
+		old := fmt.Sprintf("%v", cfg.DefaultProxyScopeMaclaw)
+		cfg.DefaultProxyScopeMaclaw = value == "true"
+		return old, nil
+	case "default_proxy_scope_coding_tools":
+		old := fmt.Sprintf("%v", cfg.DefaultProxyScopeCodingTools)
+		cfg.DefaultProxyScopeCodingTools = value == "true"
+		return old, nil
+	case "default_proxy_scope_agent":
+		old := fmt.Sprintf("%v", cfg.DefaultProxyScopeAgent)
+		cfg.DefaultProxyScopeAgent = value == "true"
 		return old, nil
 	}
 	return "", fmt.Errorf("unsupported proxy key %q", key)
@@ -889,10 +919,16 @@ func (m *Manager) initSchema() {
 			Name:        "proxy",
 			Description: "代理设置",
 			Keys: []ConfigKeySchema{
+				{Key: "default_proxy_enabled", Description: "启用代理", Type: "bool"},
+				{Key: "default_proxy_protocol", Description: "代理协议 (http/https/socks5)", Type: "string"},
 				{Key: "default_proxy_host", Description: "默认代理主机地址", Type: "string"},
 				{Key: "default_proxy_port", Description: "默认代理端口", Type: "string"},
 				{Key: "default_proxy_username", Description: "默认代理用户名", Type: "string"},
 				{Key: "default_proxy_password", Description: "默认代理密码", Type: "string"},
+				{Key: "default_proxy_bypass", Description: "绕过地址列表 (分号分隔)", Type: "string"},
+				{Key: "default_proxy_scope_maclaw", Description: "代理范围: MacClaw", Type: "bool"},
+				{Key: "default_proxy_scope_coding_tools", Description: "代理范围: 编程工具", Type: "bool"},
+				{Key: "default_proxy_scope_agent", Description: "代理范围: 智能体", Type: "bool"},
 			},
 		},
 		{

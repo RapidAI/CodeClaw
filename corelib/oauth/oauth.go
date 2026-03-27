@@ -62,7 +62,7 @@ func DefaultConfig() Config {
 		TokenEndpoint: OpenAITokenEndpoint,
 		Scopes:        []string{"openid", "profile", "email", "offline_access", "api.connectors.read", "api.connectors.invoke"},
 		CallbackPath:  "/auth/callback",
-		Timeout:       120 * time.Second,
+		Timeout:       300 * time.Second,
 	}
 }
 

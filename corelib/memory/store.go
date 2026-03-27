@@ -4,12 +4,15 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/RapidAI/CodeClaw/corelib/embedding"
 )
 
 // Store provides persistent long-term memory storage.
@@ -23,6 +26,9 @@ type Store struct {
 	stopOnce sync.Once
 	maxItems int
 	bm25     *bm25Index
+	vecIndex *vectorIndex
+	graph    *memoryGraph
+	embedder embedding.Embedder // nil until SetEmbedder is called
 }
 
 // NewStore creates a Store that persists to the given path.
@@ -39,14 +45,18 @@ func NewStore(path string) (*Store, error) {
 		stopCh:   make(chan struct{}),
 		maxItems: 500,
 		bm25:     newBM25Index(),
+		vecIndex: newVectorIndex(),
+		graph:    newMemoryGraph(),
 	}
 
 	if err := s.load(); err != nil {
 		return nil, err
 	}
 
-	// Build BM25 index from loaded entries.
+	// Build indices from loaded entries.
 	s.bm25.rebuild(s.entries)
+	s.vecIndex.rebuild(s.entries)
+	s.graph.rebuild(s.entries)
 
 	go s.persistLoop()
 	return s, nil
@@ -88,9 +98,20 @@ func (s *Store) Save(entry Entry) error {
 	if entry.AccessCount == 0 {
 		entry.AccessCount = 1
 	}
+	if entry.Strength == 0 {
+		entry.Strength = 1.0
+	}
+	if entry.Scope == "" {
+		entry.Scope = InferScope(entry.Category)
+	}
 
 	s.entries = append(s.entries, entry)
 	s.bm25.addEntry(entry)
+	s.vecIndex.add(entry.ID, entry.Embedding)
+
+	// Auto-link: find related entries and create graph edges.
+	s.autoLink(entry)
+
 	s.evictLRU()
 	s.dirty = true
 	s.signalSave()
@@ -136,6 +157,8 @@ func (s *Store) Delete(id string) error {
 		if e.ID == id {
 			s.entries = append(s.entries[:i], s.entries[i+1:]...)
 			s.bm25.removeEntry(id)
+			s.vecIndex.remove(id)
+			s.graph.remove(id)
 			s.dirty = true
 			s.signalSave()
 			return nil
@@ -191,10 +214,16 @@ func (s *Store) Recall(userMessage string) []Entry {
 }
 
 // RecallForProject retrieves memory entries relevant to the given user
-// message, with optional project path affinity boosting.
+// message, with optional project path affinity boosting. Uses Memory Stream
+// scoring (Recency + Importance + BM25+Vector Relevance) for the general tier.
+// Filters out dormant and superseded entries. Respects Scope for project filtering.
+// Performs 1-hop graph expansion on top matches.
 func (s *Store) RecallForProject(userMessage, projectPath string) []Entry {
 	// Compute BM25 scores outside the store lock to avoid nested locking.
 	bm25Scores := s.bm25.score(userMessage)
+
+	// Compute vector scores if available.
+	vecScores := s.vecIndex.score(s.queryEmbeddingCached(userMessage))
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -207,13 +236,27 @@ func (s *Store) RecallForProject(userMessage, projectPath string) []Entry {
 
 	var selfIdentity []Entry
 	var userFacts []Entry
-	type scored struct {
-		entry Entry
-		score float64
-	}
-	var others []scored
+	var others []recallScored
 
 	for _, e := range s.entries {
+		// Skip inactive entries.
+		if !e.IsActive() {
+			continue
+		}
+		// Scope filtering: project-scoped entries only match their project.
+		if e.Scope == ScopeProject && projectLower != "" {
+			matched := false
+			for _, tag := range e.Tags {
+				if strings.ToLower(tag) == projectLower {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
 		if e.Category == CategorySelfIdentity {
 			selfIdentity = append(selfIdentity, e)
 			continue
@@ -223,28 +266,24 @@ func (s *Store) RecallForProject(userMessage, projectPath string) []Entry {
 			continue
 		}
 
-		sc := bm25Scores[e.ID] // 0 if not matched
-
+		// Fused relevance: 0.4×BM25 + 0.6×cosine + project affinity.
+		bm25 := bm25Scores[e.ID]
+		cosine := 0.0
+		if vs, ok := vecScores[e.ID]; ok {
+			cosine = vs
+		}
+		fusedRelevance := 0.4*bm25 + 0.6*cosine
 		if projectLower != "" {
 			for _, tag := range e.Tags {
 				if strings.ToLower(tag) == projectLower {
-					sc += 3.0
+					fusedRelevance += 3.0
 					break
 				}
 			}
 		}
 
-		age := now.Sub(e.UpdatedAt)
-		if age > 7*24*time.Hour {
-			weeks := int(age.Hours() / (24 * 7))
-			sc -= float64(weeks)
-		}
-
-		if e.Category == CategorySessionCheckpoint && age < 24*time.Hour {
-			sc += 2.0
-		}
-
-		others = append(others, scored{entry: e, score: sc})
+		sc := memoryStreamScore(e, fusedRelevance, "", now)
+		others = append(others, recallScored{entry: e, score: sc})
 	}
 
 	sort.SliceStable(others, func(i, j int) bool {
@@ -254,11 +293,13 @@ func (s *Store) RecallForProject(userMessage, projectPath string) []Entry {
 		return others[i].entry.AccessCount > others[j].entry.AccessCount
 	})
 
+	// 1-hop graph expansion: expand top candidates to discover related entries.
+	others = s.graphExpand(others, graphExpandSeeds)
+
 	var result []Entry
 	tokenBudget := maxTokens
 
 	// Self-identity memories are always recalled first — highest priority.
-	// They are never skipped due to token budget constraints.
 	for _, e := range selfIdentity {
 		tokens := len(e.Content) / 4
 		tokenBudget -= tokens
@@ -280,9 +321,6 @@ func (s *Store) RecallForProject(userMessage, projectPath string) []Entry {
 	for _, sc := range others {
 		if len(result) >= maxEntries {
 			break
-		}
-		if sc.score < 0 {
-			continue
 		}
 		tokens := len(sc.entry.Content) / 4
 		if tokens > tokenBudget {
@@ -326,6 +364,19 @@ func (s *Store) TouchAccess(ids []string) {
 // SelfIdentitySummary returns a concatenated summary of all self_identity
 // memory entries. Returns empty string if none exist.
 func (s *Store) SelfIdentitySummary(maxRunes int) string {
+	return s.categorySummary(CategorySelfIdentity, maxRunes)
+}
+
+// UserFactSummary returns a compressed one-line summary of all user_fact
+// entries. The summary is capped at maxRunes runes to keep system prompt
+// overhead predictable (~200 tokens). Original entries are NOT modified.
+func (s *Store) UserFactSummary(maxRunes int) string {
+	return s.categorySummary(CategoryUserFact, maxRunes)
+}
+
+// categorySummary joins all entries of the given category into a pipe-separated
+// string, capped at maxRunes.
+func (s *Store) categorySummary(cat Category, maxRunes int) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -335,7 +386,7 @@ func (s *Store) SelfIdentitySummary(maxRunes int) string {
 
 	var parts []string
 	for _, e := range s.entries {
-		if e.Category == CategorySelfIdentity {
+		if e.Category == cat {
 			parts = append(parts, strings.TrimSpace(e.Content))
 		}
 	}
@@ -349,6 +400,221 @@ func (s *Store) SelfIdentitySummary(maxRunes int) string {
 		summary = string(runes[:maxRunes]) + "…"
 	}
 	return summary
+}
+
+// ---------------------------------------------------------------------------
+// Memory Stream scoring (inspired by Stanford "Generative Agents")
+//
+//   Score = w1·Recency + w2·Importance + w3·Relevance
+//
+// Recency:    exponential decay based on hours since last update.
+// Importance: category weight + log(1 + accessCount).
+// Relevance:  BM25 score against query + project affinity boost.
+// ---------------------------------------------------------------------------
+
+const (
+	msDecay       = 0.005 // recency decay rate per hour
+	msWRecency    = 1.0
+	msWImportance = 1.0
+	msWRelevance  = 1.0
+)
+
+// graphExpandSeeds is the number of top-scored entries used as seeds for
+// 1-hop graph expansion during Recall.
+const graphExpandSeeds = 5
+
+// recallScored pairs an entry with its computed recall score.
+type recallScored struct {
+	entry Entry
+	score float64
+}
+
+// CategoryImportanceWeight returns a base importance weight for each category.
+func CategoryImportanceWeight(c Category) float64 {
+	switch c {
+	case CategorySelfIdentity:
+		return 4.0
+	case CategoryInstruction:
+		return 3.0
+	case CategoryPreference:
+		return 2.0
+	case CategoryProjectKnowledge:
+		return 2.0
+	case CategorySessionCheckpoint:
+		return 1.5
+	case CategoryConversationSummary:
+		return 1.0
+	default:
+		return 1.0
+	}
+}
+
+// memoryStreamScore computes the three-dimensional score for a memory entry.
+func memoryStreamScore(e Entry, bm25Score float64, projectLower string, now time.Time) float64 {
+	// --- Recency ---
+	hours := now.Sub(e.UpdatedAt).Hours()
+	if hours < 0 {
+		hours = 0
+	}
+	recency := math.Exp(-msDecay * hours)
+
+	// --- Importance ---
+	importance := CategoryImportanceWeight(e.Category) + math.Log1p(float64(e.AccessCount))
+
+	// --- Relevance (BM25 + project affinity) ---
+	relevance := bm25Score
+	if projectLower != "" {
+		for _, tag := range e.Tags {
+			if strings.ToLower(tag) == projectLower {
+				relevance += 3.0
+				break
+			}
+		}
+	}
+
+	return msWRecency*recency + msWImportance*importance + msWRelevance*relevance
+}
+
+// graphExpand performs 1-hop graph expansion on the top-scored entries.
+// It takes the top `seedCount` entries as seeds, expands via the memory graph,
+// and merges any newly discovered entries (with derived scores) back into the
+// candidate list. Already-present entries are not duplicated.
+// Caller MUST hold s.mu.RLock.
+func (s *Store) graphExpand(candidates []recallScored, seedCount int) []recallScored {
+	if len(candidates) == 0 {
+		return candidates
+	}
+	if seedCount > len(candidates) {
+		seedCount = len(candidates)
+	}
+
+	// Collect seed IDs and their scores.
+	seedIDs := make([]string, seedCount)
+	seedScores := make(map[string]float64, seedCount)
+	for i := 0; i < seedCount; i++ {
+		seedIDs[i] = candidates[i].entry.ID
+		seedScores[candidates[i].entry.ID] = candidates[i].score
+	}
+
+	// 1-hop BFS expansion. expand() returns neighbor → decayed edge weight.
+	expanded := s.graph.expand(seedIDs, 1)
+	if len(expanded) == 0 {
+		return candidates
+	}
+
+	// Build set of IDs already in candidates for deduplication.
+	existing := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		existing[c.entry.ID] = true
+	}
+
+	// Build entry lookup for quick access.
+	entryByID := make(map[string]*Entry, len(s.entries))
+	for i := range s.entries {
+		entryByID[s.entries[i].ID] = &s.entries[i]
+	}
+
+	// Find the best seed score among seeds that link to each expanded neighbor.
+	// Use the maximum seed score as the base for the derived score.
+	// expandedWeight already includes the 0.5 decay factor from graph.expand().
+	for neighborID, expandWeight := range expanded {
+		if existing[neighborID] {
+			continue
+		}
+		e, ok := entryByID[neighborID]
+		if !ok || !e.IsActive() {
+			continue
+		}
+
+		// Derive score: best seed score × expanded weight (which is edge_strength × 0.5).
+		bestSeed := 0.0
+		for _, sid := range seedIDs {
+			if sc, ok := seedScores[sid]; ok && sc > bestSeed {
+				bestSeed = sc
+			}
+		}
+		derivedScore := bestSeed * expandWeight
+
+		candidates = append(candidates, recallScored{entry: *e, score: derivedScore})
+		existing[neighborID] = true
+	}
+
+	// Re-sort after merging expanded entries.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	return candidates
+}
+
+// RecallDynamic retrieves memory entries matching the given query, excluding
+// user_fact entries (which are injected separately as a compressed summary).
+// Uses Memory Stream scoring with BM25+Vector fused relevance.
+// Filters out dormant and superseded entries.
+func (s *Store) RecallDynamic(query string, category Category, projectPath string) []Entry {
+	bm25Scores := s.bm25.score(query)
+	vecScores := s.vecIndex.score(s.queryEmbeddingCached(query))
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	const maxEntries = 15
+	const maxTokens = 1500
+
+	projectLower := strings.ToLower(projectPath)
+	now := time.Now()
+
+	var candidates []recallScored
+
+	for _, e := range s.entries {
+		if !e.IsActive() {
+			continue
+		}
+		if e.Category == CategoryUserFact {
+			continue
+		}
+		if category != "" && e.Category != category {
+			continue
+		}
+		bm25 := bm25Scores[e.ID]
+		cosine := 0.0
+		if vs, ok := vecScores[e.ID]; ok {
+			cosine = vs
+		}
+		fusedRelevance := 0.4*bm25 + 0.6*cosine
+		if projectLower != "" {
+			for _, tag := range e.Tags {
+				if strings.ToLower(tag) == projectLower {
+					fusedRelevance += 3.0
+					break
+				}
+			}
+		}
+		sc := memoryStreamScore(e, fusedRelevance, "", now)
+		candidates = append(candidates, recallScored{entry: e, score: sc})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	// 1-hop graph expansion: expand top candidates to discover related entries.
+	candidates = s.graphExpand(candidates, graphExpandSeeds)
+
+	var result []Entry
+	tokenBudget := maxTokens
+	for _, sc := range candidates {
+		if len(result) >= maxEntries {
+			break
+		}
+		tokens := len(sc.entry.Content) / 4
+		if tokens > tokenBudget {
+			continue
+		}
+		tokenBudget -= tokens
+		result = append(result, sc.entry)
+	}
+	return result
 }
 
 // Stop gracefully shuts down the persistence loop.
@@ -367,6 +633,279 @@ func (s *Store) Stop() {
 
 		close(s.stopCh)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Exported accessors for external compressors (e.g. GUI MemoryCompressor)
+// that need low-level store access without importing unexported fields.
+// ---------------------------------------------------------------------------
+
+// RLock acquires a read lock on the store.
+func (s *Store) RLock() { s.mu.RLock() }
+
+// RUnlock releases the read lock.
+func (s *Store) RUnlock() { s.mu.RUnlock() }
+
+// Lock acquires a write lock on the store.
+func (s *Store) Lock() { s.mu.Lock() }
+
+// Unlock releases the write lock.
+func (s *Store) Unlock() { s.mu.Unlock() }
+
+// Entries returns a direct reference to the internal entries slice.
+// Caller MUST hold the appropriate lock.
+func (s *Store) Entries() []Entry { return s.entries }
+
+// SetEntries replaces the internal entries slice. Caller MUST hold the write lock.
+func (s *Store) SetEntries(entries []Entry) {
+	s.entries = entries
+	s.bm25.rebuild(entries)
+	s.vecIndex.rebuild(entries)
+	s.graph.rebuild(entries)
+}
+
+// MarkDirty marks the store as needing a flush.
+// Caller MUST hold the write lock.
+func (s *Store) MarkDirty() {
+	s.dirty = true
+}
+
+// SignalSave triggers an async persist. Safe to call without lock.
+func (s *Store) SignalSave() { s.signalSave() }
+
+// Flush writes current entries to disk immediately.
+func (s *Store) Flush() error { return s.flush() }
+
+// Path returns the file path of the store.
+func (s *Store) Path() string { return s.path }
+
+// queryEmbeddingCached returns the embedding for a query string.
+// Returns nil if no embedder is configured (graceful degradation).
+func (s *Store) queryEmbeddingCached(query string) []float32 {
+	if s.embedder == nil || embedding.IsNoop(s.embedder) {
+		return nil
+	}
+	emb, err := s.embedder.Embed(query)
+	if err != nil {
+		return nil
+	}
+	return emb
+}
+
+// autoLinkThreshold is the minimum cosine similarity required to create a graph link.
+const autoLinkThreshold = 0.7
+
+// autoLinkTopK is the maximum number of related entries to link per save.
+const autoLinkTopK = 3
+
+// autoLink finds related entries for the newly saved entry and creates
+// bidirectional graph edges. It uses BM25 scores and, when an embedder is
+// available, cosine similarity to rank candidates. Only candidates above
+// autoLinkThreshold are linked. The entry's RelatedIDs field is updated
+// to reflect the new graph neighbors.
+//
+// Caller MUST hold s.mu write lock.
+func (s *Store) autoLink(entry Entry) {
+	if len(s.entries) <= 1 {
+		return
+	}
+
+	// Gather BM25 scores for the new entry's content.
+	bm25Scores := s.bm25.score(entry.Content)
+
+	// Gather cosine similarity scores if embedding is available.
+	var vecScores map[string]float64
+	if len(entry.Embedding) > 0 {
+		vecScores = s.vecIndex.score(entry.Embedding)
+	}
+
+	// Fuse scores: 0.4×BM25 + 0.6×cosine (same weights as Recall).
+	type candidate struct {
+		id    string
+		score float64
+	}
+	var candidates []candidate
+	seen := make(map[string]bool)
+
+	// Collect all candidate IDs from both sources.
+	for id := range bm25Scores {
+		if id != entry.ID {
+			seen[id] = true
+		}
+	}
+	for id := range vecScores {
+		if id != entry.ID {
+			seen[id] = true
+		}
+	}
+
+	for id := range seen {
+		bm25 := bm25Scores[id]
+		cosine := 0.0
+		if vecScores != nil {
+			cosine = vecScores[id]
+		}
+
+		var fused float64
+		if vecScores != nil {
+			// Both signals available: fuse them.
+			fused = 0.4*bm25 + 0.6*cosine
+		} else {
+			// BM25 only fallback — use raw BM25 as the score.
+			fused = bm25
+		}
+
+		// Apply threshold: when embedder is available, require cosine > threshold.
+		// When BM25-only, require a positive BM25 score as a basic filter.
+		if vecScores != nil {
+			if cosine < autoLinkThreshold {
+				continue
+			}
+		} else {
+			if bm25 <= 0 {
+				continue
+			}
+		}
+
+		candidates = append(candidates, candidate{id: id, score: fused})
+	}
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	// Sort by fused score descending, take top-K.
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+	if len(candidates) > autoLinkTopK {
+		candidates = candidates[:autoLinkTopK]
+	}
+
+	// Create graph links and determine edge strength.
+	for _, c := range candidates {
+		strength := c.score
+		// When cosine is available, use it directly as edge strength.
+		if vecScores != nil {
+			if cs, ok := vecScores[c.id]; ok {
+				strength = cs
+			}
+		}
+		s.graph.link(entry.ID, c.id, strength)
+	}
+
+	// Update RelatedIDs on the new entry.
+	relIDs := s.graph.relatedIDsFor(entry.ID)
+	for i := range s.entries {
+		if s.entries[i].ID == entry.ID {
+			s.entries[i].RelatedIDs = relIDs
+			break
+		}
+	}
+
+	// Also update RelatedIDs on the linked entries (bidirectional).
+	for _, c := range candidates {
+		neighborRels := s.graph.relatedIDsFor(c.id)
+		for i := range s.entries {
+			if s.entries[i].ID == c.id {
+				s.entries[i].RelatedIDs = neighborRels
+				break
+			}
+		}
+	}
+}
+
+// SetEmbedder wires an Embedder into the store. If the embedder is real
+// (not NoopEmbedder), a background goroutine is launched to compute
+// embeddings for any existing entries that are missing them.
+// Safe to call at most once after NewStore.
+func (s *Store) SetEmbedder(e embedding.Embedder) {
+	s.embedder = e
+	if e == nil || embedding.IsNoop(e) {
+		return
+	}
+	go s.backfillEmbeddings()
+}
+
+// EmbedderActive returns true if a real (non-noop) embedder is loaded.
+func (s *Store) EmbedderActive() bool {
+	return s.embedder != nil && !embedding.IsNoop(s.embedder)
+}
+
+// EmbedderDim returns the embedding dimension, or 0 if no embedder is active.
+func (s *Store) EmbedderDim() int {
+	if s.embedder == nil {
+		return 0
+	}
+	return s.embedder.Dim()
+}
+
+// backfillEmbeddings scans entries missing embeddings and computes them
+// in the background. It processes entries one at a time to avoid blocking
+// the store for extended periods.
+func (s *Store) backfillEmbeddings() {
+	// Collect IDs and content of entries that need embeddings.
+	type pending struct {
+		id      string
+		content string
+	}
+
+	s.mu.RLock()
+	var todo []pending
+	for _, e := range s.entries {
+		if len(e.Embedding) == 0 && e.Content != "" {
+			todo = append(todo, pending{id: e.ID, content: e.Content})
+		}
+	}
+	s.mu.RUnlock()
+
+	if len(todo) == 0 {
+		return
+	}
+
+	updated := 0
+	for _, p := range todo {
+		// Check if store is shutting down.
+		select {
+		case <-s.stopCh:
+			return
+		default:
+		}
+
+		emb, err := s.embedder.Embed(p.content)
+		if err != nil || len(emb) == 0 {
+			continue
+		}
+
+		s.mu.Lock()
+		for i := range s.entries {
+			if s.entries[i].ID == p.id && len(s.entries[i].Embedding) == 0 {
+				s.entries[i].Embedding = emb
+				s.vecIndex.add(p.id, emb)
+				updated++
+				break
+			}
+		}
+		s.mu.Unlock()
+	}
+
+	if updated > 0 {
+		s.mu.Lock()
+		s.dirty = true
+		s.mu.Unlock()
+		s.signalSave()
+	}
+}
+
+// Graph returns the memory graph for external access (e.g. CLI commands).
+func (s *Store) Graph() *memoryGraph { return s.graph }
+
+// Embedder returns the configured embedder (may be nil).
+func (s *Store) Embedder() embedding.Embedder { return s.embedder }
+
+// GraphNeighbors returns the direct neighbors and edge weights for the given entry ID.
+func (s *Store) GraphNeighbors(id string) map[string]float64 {
+	return s.graph.neighborsOf(id)
 }
 
 
@@ -423,6 +962,8 @@ func (s *Store) evictLRU() {
 	}
 	s.entries = kept
 	s.bm25.rebuild(kept)
+	s.vecIndex.rebuild(kept)
+	s.graph.rebuild(kept)
 }
 
 func (s *Store) persistLoop() {
@@ -510,6 +1051,11 @@ func containsKeyword(e Entry, kw string) bool {
 		}
 	}
 	return false
+}
+
+// MergeTags combines two tag slices, removing duplicates.
+func MergeTags(existing, incoming []string) []string {
+	return mergeTags(existing, incoming)
 }
 
 func mergeTags(existing, incoming []string) []string {

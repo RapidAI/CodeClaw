@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// MemCategorySessionCheckpoint is the memory category for session progress snapshots.
-const MemCategorySessionCheckpoint MemoryCategory = "session_checkpoint"
-
 // SessionCheckpoint captures the progress state of a session at exit time,
 // enabling the next session on the same project to resume where it left off.
 type SessionCheckpoint struct {

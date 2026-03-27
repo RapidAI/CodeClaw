@@ -8,6 +8,7 @@ interface AIAssistantPanelProps {
     lang: string; // 'zh-Hans' | 'zh-Hant' | 'en'
     messages: ChatMessage[];
     sending: boolean;
+    streaming: boolean;
     sendMessage: (text: string) => Promise<void>;
     clearHistory: () => Promise<void>;
     executeAction: (command: string) => Promise<void>;
@@ -491,7 +492,7 @@ if (typeof document !== "undefined" && !document.getElementById("ai-blink-style"
 
 /* ── Main component ── */
 
-export function AIAssistantPanel({ onClose, lang, messages, sending, sendMessage, clearHistory, executeAction, inline, onHideWindow }: AIAssistantPanelProps) {
+export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, sendMessage, clearHistory, executeAction, inline, onHideWindow }: AIAssistantPanelProps) {
     const [inputValue, setInputValue] = useState("");
     const [composing, setComposing] = useState(false);
     const inputRef = useRef<HTMLInputElement | null>(null);
@@ -505,9 +506,11 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, sendMessage
 
     const title = lang === "en" ? "AI Assistant" : "AI 助手";
     const thinkingText = lang === "en" ? "Thinking..." : "正在思考...";
-    const placeholderText = sending
+    const placeholderText = streaming
         ? (lang === "en" ? "Thinking..." : "正在思考...")
-        : (lang === "en" ? "Type a message..." : "输入消息...");
+        : sending
+            ? (lang === "en" ? "Processing..." : "处理中...")
+            : (lang === "en" ? "Type a message..." : "输入消息...");
 
     // Debounced auto-scroll: coalesce rapid token updates into a single scroll
     useEffect(() => {
@@ -658,7 +661,7 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, sendMessage
                 ) : (
                     renderedMessages
                 )}
-                {sending && (
+                {streaming && (
                     <div style={{ color: t.textMuted, fontSize: "11px", padding: "4px 0", fontStyle: "italic" }}>
                         {thinkingText}
                     </div>

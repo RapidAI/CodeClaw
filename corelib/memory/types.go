@@ -20,15 +20,75 @@ func (c Category) IsProtected() bool {
 	return c == CategorySelfIdentity
 }
 
+// Scope controls cross-project visibility of a memory entry.
+type Scope string
+
+const (
+	ScopeGlobal  Scope = "global"  // visible in all projects
+	ScopeProject Scope = "project" // visible only when project path matches
+)
+
+// Status tracks the lifecycle state of a memory entry.
+type Status string
+
+const (
+	StatusActive     Status = ""           // default — participates in recall
+	StatusSuperseded Status = "superseded" // replaced by a newer conflicting entry
+	StatusDormant    Status = "dormant"    // forgotten — below strength threshold
+)
+
+// InferScope returns the default scope for a given category.
+func InferScope(c Category) Scope {
+	switch c {
+	case CategorySelfIdentity, CategoryUserFact, CategoryPreference, CategoryInstruction:
+		return ScopeGlobal
+	default:
+		return ScopeProject
+	}
+}
+
+// MemoryTier classifies categories into the MemGPT-style hierarchy.
+type MemoryTier int
+
+const (
+	TierSemantic MemoryTier = iota // abstract knowledge (user_fact, preference, instruction, self_identity)
+	TierEpisodic                   // event records (conversation_summary, session_checkpoint)
+)
+
+// Tier returns the memory tier for a category.
+func (c Category) Tier() MemoryTier {
+	switch c {
+	case CategoryConversationSummary, CategorySessionCheckpoint:
+		return TierEpisodic
+	default:
+		return TierSemantic
+	}
+}
+
 // Entry represents a single memory record.
 type Entry struct {
-	ID          string   `json:"id"`
-	Content     string   `json:"content"`
-	Category    Category `json:"category"`
-	Tags        []string `json:"tags"`
+	ID          string    `json:"id"`
+	Content     string    `json:"content"`
+	Category    Category  `json:"category"`
+	Tags        []string  `json:"tags"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
-	AccessCount int      `json:"access_count"`
+	AccessCount int       `json:"access_count"`
+	// --- F1: Vector embedding ---
+	Embedding []float32 `json:"embedding,omitempty"`
+	// --- F3: Memory graph ---
+	RelatedIDs []string `json:"related_ids,omitempty"`
+	// --- F5: Forgetting curve ---
+	Strength float64 `json:"strength,omitempty"`
+	// --- F6: Conflict detection ---
+	Status Status `json:"status,omitempty"`
+	// --- F7: Cross-project scope ---
+	Scope Scope `json:"scope,omitempty"`
+}
+
+// IsActive returns true if the entry participates in normal recall.
+func (e *Entry) IsActive() bool {
+	return e.Status == StatusActive
 }
 
 // BackupInfo describes a single memory backup snapshot.

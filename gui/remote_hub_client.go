@@ -1245,7 +1245,7 @@ func (c *RemoteHubClient) SendIMGatewayMessage(platform string, data map[string]
 		if platform == "weixin" {
 			weixin.GetWxLog().Log("hubClient.send", "OUT", "-", "ERR not connected, dropping gateway_message")
 		}
-		return nil
+		return fmt.Errorf("hub not connected")
 	}
 	err := c.conn.WriteJSON(HubEnvelope{
 		Type:      "im.gateway_message",

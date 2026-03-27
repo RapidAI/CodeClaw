@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/RapidAI/CodeClaw/corelib/proxyutil"
 )
 
 var (
 	sharedClient *http.Client
 	clientOnce   sync.Once
+	clientMu     sync.Mutex
 )
 
 // httpClient returns a shared HTTP client with sensible defaults.
@@ -32,7 +35,6 @@ func httpClient() *http.Client {
 				if len(via) >= 10 {
 					return http.ErrUseLastResponse
 				}
-				// Carry User-Agent across redirects
 				if len(via) > 0 {
 					req.Header.Set("User-Agent", via[0].Header.Get("User-Agent"))
 				}
@@ -41,6 +43,31 @@ func httpClient() *http.Client {
 		}
 	})
 	return sharedClient
+}
+
+// SetProxy reconfigures the shared HTTP client's transport to use the given proxy.
+// Safe to call multiple times; rebuilds the transport each time.
+func SetProxy(cfg proxyutil.Config) {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+
+	// Ensure client exists
+	_ = httpClient()
+
+	t := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+		MaxIdleConns:        10,
+		IdleConnTimeout:     30 * time.Second,
+		DisableCompression:  true,
+		MaxConnsPerHost:     5,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	if cfg.Enabled {
+		proxyutil.WrapTransport(t, cfg)
+	}
+	sharedClient.Transport = t
 }
 
 var userAgents = []string{

@@ -53,3 +53,6 @@ hub/hub.exe
 gui.exe
 gui/frontend/.npm_cache/
 site/
+
+# RapidSpeech model files (large GGUF/ONNX)
+RapidSpeech.cpp/models/

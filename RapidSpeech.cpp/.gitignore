@@ -1,1 +1,6 @@
 build
+debug_dump
+scripts/__pycache__
+models/._____temp
+models/.lock
+*.pyc

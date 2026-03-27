@@ -238,6 +238,7 @@ func (m *ConfigManager) formatGeneralConfig(cfg AppConfig) string {
 	b.WriteString(fmt.Sprintf("language: %s\n", cfg.Language))
 	b.WriteString(fmt.Sprintf("power_optimization: %v\n", cfg.PowerOptimization))
 	b.WriteString(fmt.Sprintf("screen_dim_timeout_min: %d\n", cfg.ScreenDimTimeoutMin))
+	b.WriteString(fmt.Sprintf("workstation_mode: %v\n", cfg.WorkstationMode))
 	b.WriteString(fmt.Sprintf("check_update_on_startup: %v\n", cfg.CheckUpdateOnStartup))
 	b.WriteString(fmt.Sprintf("hide_startup_popup: %v\n", cfg.HideStartupPopup))
 	b.WriteString(fmt.Sprintf("hide_maclaw_llm_popup: %v\n", cfg.HideMaclawLLMPopup))
@@ -249,6 +250,7 @@ func (m *ConfigManager) formatPowerConfig(cfg AppConfig) string {
 	b.WriteString("=== 电源管理 ===\n")
 	b.WriteString(fmt.Sprintf("power_optimization: %v\n", cfg.PowerOptimization))
 	b.WriteString(fmt.Sprintf("screen_dim_timeout_min: %d\n", cfg.ScreenDimTimeoutMin))
+	b.WriteString(fmt.Sprintf("workstation_mode: %v\n", cfg.WorkstationMode))
 	return b.String()
 }
 
@@ -730,6 +732,10 @@ func (m *ConfigManager) applyGeneralChange(cfg *AppConfig, key, value string) (s
 		old := fmt.Sprintf("%v", cfg.CheckUpdateOnStartup)
 		cfg.CheckUpdateOnStartup = strings.EqualFold(value, "true")
 		return old, nil
+	case "workstation_mode":
+		old := fmt.Sprintf("%v", cfg.WorkstationMode)
+		cfg.WorkstationMode = strings.EqualFold(value, "true")
+		return old, nil
 	case "hide_startup_popup":
 		old := fmt.Sprintf("%v", cfg.HideStartupPopup)
 		cfg.HideStartupPopup = strings.EqualFold(value, "true")
@@ -759,6 +765,10 @@ func (m *ConfigManager) applyPowerChange(cfg *AppConfig, key, value string) (str
 			return "", fmt.Errorf("invalid integer value %q for screen_dim_timeout_min", value)
 		}
 		cfg.ScreenDimTimeoutMin = n
+		return old, nil
+	case "workstation_mode":
+		old := fmt.Sprintf("%v", cfg.WorkstationMode)
+		cfg.WorkstationMode = strings.EqualFold(value, "true")
 		return old, nil
 	}
 	return "", fmt.Errorf("unsupported power key %q", key)

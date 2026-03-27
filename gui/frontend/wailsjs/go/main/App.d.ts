@@ -220,6 +220,12 @@ export function GetLLMTrajectoryLogging():Promise<boolean>;
 
 export function SetLLMTrajectoryLogging(arg1:boolean):Promise<void>;
 
+export function GetLLMTokenUsage(arg1:string):Promise<any>;
+
+export function GetAllLLMTokenUsage():Promise<any>;
+
+export function ResetLLMTokenUsage(arg1:string):Promise<void>;
+
 export function PingMaclawLLM():Promise<any>;
 
 export function PingSkillHub(arg1:string):Promise<any>;
@@ -484,3 +490,11 @@ export function GetFreeProxyModels():Promise<Array<Record<string, string>>>;
 export function GetFreeProxyModel():Promise<string>;
 
 export function SetFreeProxyModel(arg1:string):Promise<void>;
+
+export function GetVectorSearchEnabled():Promise<boolean>;
+
+export function SetVectorSearchEnabled(arg1:boolean):Promise<void>;
+
+export function CheckEmbeddingModel():Promise<{[key:string]:any}>;
+
+export function DownloadEmbeddingModel():Promise<void>;

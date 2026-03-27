@@ -184,7 +184,8 @@ if not exist "%POWERSHELL%" (
   "$copyFiles = @('go.mod','go.sum');" ^
   "foreach ($f in $copyFiles) { $p = Join-Path $src $f; if (Test-Path $p) { Copy-Item -Path $p -Destination $dst -Force } };" ^
   "foreach ($d in $copyDirs) { $p = Join-Path $src $d; if (Test-Path $p) { Copy-Item -Path $p -Destination (Join-Path $dst $d) -Recurse -Force } };" ^
-  "$removePaths = @('hub\bin','hub\package','hub\data','hub\.gocache','hub\.gomodcache','hubcenter\bin','hubcenter\package','hubcenter\data','hubcenter\.gocache','hubcenter\.gomodcache','openclaw-bridge\node_modules','openclaw-bridge\dist');" ^
+  "$buildSrc = Join-Path $src 'build'; $buildDst = Join-Path $dst 'build'; if (Test-Path $buildSrc) { New-Item -ItemType Directory -Path $buildDst -Force | Out-Null; Get-ChildItem -Path $buildSrc | Where-Object { $_.Name -ne 'deploy' } | ForEach-Object { Copy-Item -Path $_.FullName -Destination (Join-Path $buildDst $_.Name) -Recurse -Force } };" ^
+  "$removePaths = @('hub\bin','hub\package','hub\data','hub\.gocache','hub\.gomodcache','hubcenter\bin','hubcenter\package','hubcenter\data','hubcenter\.gocache','hubcenter\.gomodcache','openclaw-bridge\node_modules','openclaw-bridge\dist','RapidSpeech.cpp\build');" ^
   "foreach ($rel in $removePaths) { $path = Join-Path $dst $rel; if (Test-Path $path) { Remove-Item -Recurse -Force $path -ErrorAction SilentlyContinue } };" ^
   "Get-ChildItem -Path $dst -Recurse -File -Include *.exe,*.exe~ -Force | Remove-Item -Force -ErrorAction SilentlyContinue;"
 if errorlevel 1 (
@@ -222,10 +223,28 @@ setlocal DisableDelayedExpansion
   echo echo "[remote] Downloading dependencies..."
   echo GOPROXY="$GOPROXY" go mod download
   echo.
+  echo # Optional: Build RapidSpeech static library for cgo_embedding support.
+  echo # If CMake/compiler is available and build succeeds, CGO_ENABLED is set to 1
+  echo # and the cgo_embedding tag is added. Otherwise the Go build proceeds without it.
+  echo RS_BUILD_SCRIPT="$SRC_ROOT/build/build_rapidspeech.sh"
+  echo RS_LIB="$SRC_ROOT/RapidSpeech.cpp/build/librapidspeech_static.a"
+  echo EXTRA_TAGS=""
+  echo if [ -f "$RS_BUILD_SCRIPT" ]; then
+  echo   echo "[remote] Building RapidSpeech static library (optional)..."
+  echo   chmod +x "$RS_BUILD_SCRIPT"
+  echo   if "$RS_BUILD_SCRIPT" ^&^& [ -f "$RS_LIB" ]; then
+  echo     echo "[remote] RapidSpeech built. Enabling cgo_embedding."
+  echo     CGO_ENABLED=1
+  echo     EXTRA_TAGS="cgo_embedding"
+  echo   else
+  echo     echo "[remote] RapidSpeech build skipped or failed. Continuing without cgo_embedding."
+  echo   fi
+  echo fi
+  echo.
   echo echo "[remote] Building hub..."
-  echo GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -o "$BUILD_ROOT/maclaw-hub" ./hub/cmd/hub
+  echo GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -tags "$EXTRA_TAGS" -o "$BUILD_ROOT/maclaw-hub" ./hub/cmd/hub
   echo echo "[remote] Building hubcenter..."
-  echo GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -o "$BUILD_ROOT/maclaw-hubcenter" ./hubcenter/cmd/hubcenter
+  echo GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -tags "$EXTRA_TAGS" -o "$BUILD_ROOT/maclaw-hubcenter" ./hubcenter/cmd/hubcenter
   echo.
   echo deploy_one^(^) {
   echo   source_dir="$1"

@@ -21,6 +21,7 @@ import {
 } from "../../../wailsjs/go/main/App";
 import { colors } from "./styles";
 import { UsageDisplay } from "./UsageDisplay";
+import { TokenUsagePanel } from "./TokenUsagePanel";
 import { PROVIDER_LOGOS } from "./providerLogos";
 import { useDialog } from "../CustomDialog";
 
@@ -361,6 +362,13 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                 </div>
             )}
 
+            {/* Token usage statistics */}
+            {!isNone && (
+                <div style={{ marginBottom: 16 }}>
+                    <TokenUsagePanel lang={lang} />
+                </div>
+            )}
+
             {/* Max iterations — inline editable */}
             <div style={{
                 marginBottom: 16, padding: "12px 16px", borderRadius: 6,
@@ -588,7 +596,8 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                                         <label style={labelStyle}>{t("服务商名称", "Provider Name")}</label>
                                         <input style={inputStyle} value={dlgProvider.name}
                                             onChange={e => dlgUpdateField("name", e.target.value)}
-                                            placeholder={t("自定义名称", "Custom name")} />
+                                            placeholder={t("自定义名称", "Custom name")}
+                                            autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off" />
                                     </div>
                                 )}
 
@@ -605,7 +614,8 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                                     {dlgProvider.is_custom ? (
                                         <input style={inputStyle} value={dlgProvider.url}
                                             onChange={e => dlgUpdateField("url", e.target.value)}
-                                            placeholder="https://api.openai.com/v1" />
+                                            placeholder="https://api.openai.com/v1"
+                                            autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off" />
                                     ) : (
                                         <input style={readonlyStyle} value={dlgProvider.url} readOnly tabIndex={-1} />
                                     )}
@@ -629,11 +639,13 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                                     {dlgProvider.is_custom ? (
                                         <input style={inputStyle} value={dlgProvider.model}
                                             onChange={e => dlgUpdateField("model", e.target.value)}
-                                            placeholder="gpt-5.4" />
+                                            placeholder="gpt-5.4"
+                                            autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off" />
                                     ) : dlgProvider.auth_type === "oauth" ? (
                                         <input style={inputStyle} value={dlgProvider.model}
                                             onChange={e => dlgUpdateField("model", e.target.value)}
-                                            placeholder="gpt-5.4" />
+                                            placeholder="gpt-5.4"
+                                            autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off" />
                                     ) : (
                                         <input style={readonlyStyle} value={dlgProvider.model} readOnly tabIndex={-1} />
                                     )}
@@ -916,7 +928,8 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                                         <label style={labelStyle}>{t("API 密钥", "API Key")} <span style={{ color: "#ef4444" }}>*</span></label>
                                         <input style={inputStyle} type="password" value={dlgProvider.key}
                                             onChange={e => dlgUpdateField("key", e.target.value)}
-                                            placeholder={(dlgProvider.protocol || "openai") === "anthropic" ? "sk-ant-..." : "sk-..."} autoComplete="off" />
+                                            placeholder={(dlgProvider.protocol || "openai") === "anthropic" ? "sk-ant-..." : "sk-..."}
+                                            autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off" />
                                     </div>
                                 )}
 
@@ -924,6 +937,7 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                                 <div style={{ marginTop: 12 }}>
                                     <label style={labelStyle}>{t("上下文长度 (tokens)", "Context Length (tokens)")}</label>
                                     <input style={inputStyle} type="number" min={0} step={1000}
+                                        autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                                         value={dlgProvider.context_length || ""}
                                         onChange={e => dlgUpdateField("context_length", e.target.value)}
                                         placeholder="128000" />

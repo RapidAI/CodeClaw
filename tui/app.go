@@ -13,6 +13,7 @@ import (
 	"github.com/RapidAI/CodeClaw/corelib/agent"
 	"github.com/RapidAI/CodeClaw/corelib/clawnet"
 	"github.com/RapidAI/CodeClaw/corelib/config"
+	"github.com/RapidAI/CodeClaw/corelib/embedding"
 	"github.com/RapidAI/CodeClaw/corelib/memory"
 	"github.com/RapidAI/CodeClaw/corelib/remote"
 	"github.com/RapidAI/CodeClaw/corelib/scheduler"
@@ -44,6 +45,7 @@ type TUIApp struct {
 	selector       *tool.Selector
 	configMgr      *config.Manager
 	memoryStore    *memory.Store
+	memPipeline    *memory.Pipeline
 	schedulerMgr   *scheduler.Manager
 	clawnetClient  *clawnet.Client
 
@@ -184,6 +186,24 @@ func (a *TUIApp) initKernel() tea.Msg {
 	}
 	a.memoryStore = memStore
 
+	// --- Embedding: try GemmaEmbedder, fall back to Noop ---
+	if memStore != nil {
+		modelPath := embedding.DefaultModelPath()
+		emb := embedding.NewDefaultEmbedder(modelPath)
+		memStore.SetEmbedder(emb)
+	}
+
+	// --- Memory Pipeline (compress → promote → reflect) ---
+	if memStore != nil {
+		pipeline := memory.NewPipeline(memStore, nil, nil, nil, nil)
+		a.memPipeline = pipeline
+		// Pipeline will be started after LLM config is available.
+		// For now, just decay+compress (no LLM components).
+		compressor := memory.NewCompressor(memStore, nil, nil)
+		a.memPipeline = memory.NewPipeline(memStore, compressor, nil, nil, nil)
+		a.memPipeline.Start()
+	}
+
 	// --- 新增：SchedulerManager ---
 	schedPath := filepath.Join(dataDir, "scheduled_tasks.json")
 	schedMgr, schedErr := scheduler.NewManager(schedPath)
@@ -241,6 +261,9 @@ func (a *TUIApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.schedulerMgr != nil {
 				a.schedulerMgr.Stop()
 			}
+			if a.memPipeline != nil {
+				a.memPipeline.Stop()
+			}
 			if a.memoryStore != nil {
 				a.memoryStore.Stop()
 			}
@@ -268,6 +291,9 @@ func (a *TUIApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if a.schedulerMgr != nil {
 					a.schedulerMgr.Stop()
+				}
+				if a.memPipeline != nil {
+					a.memPipeline.Stop()
 				}
 				if a.memoryStore != nil {
 					a.memoryStore.Stop()

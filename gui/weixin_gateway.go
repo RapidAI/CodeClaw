@@ -319,8 +319,9 @@ func (m *weixinGatewayManager) forwardToHub(msg weixin.IncomingMessage) {
 	}
 
 	if err := hubClient.SendIMGatewayMessage("weixin", payload); err != nil {
-		wl.Log("mgr.forward", "OUT", msg.FromUserID, "ERR SendIMGatewayMessage: %v", err)
-		log.Printf("[weixin-mgr] forwardToHub SendIMGatewayMessage error: %v", err)
+		wl.Log("mgr.forward", "OUT", msg.FromUserID, "ERR SendIMGatewayMessage: %v, fallback to local", err)
+		log.Printf("[weixin-mgr] forwardToHub SendIMGatewayMessage error: %v, falling back to local", err)
+		m.handleLocalMessage(msg)
 	} else {
 		wl.Log("mgr.forward", "OUT", msg.FromUserID, "OK sent to hub, has_ctx_token=%v", msg.ContextToken != "")
 		log.Printf("[weixin-mgr] forwardToHub OK: user=%s text=%q", msg.FromUserID, truncateForLog(msg.Text, 30))
@@ -476,6 +477,10 @@ func (m *weixinGatewayManager) handleLocalMessage(msg weixin.IncomingMessage) {
 
 	if resp == nil {
 		wl.Log("mgr.local", "---", msg.FromUserID, "agent returned nil response")
+		return
+	}
+	if resp.Deferred {
+		wl.Log("mgr.local", "---", msg.FromUserID, "media buffered, waiting for user intent")
 		return
 	}
 
@@ -947,6 +952,14 @@ func (a *App) WaitWeixinQRLogin(qrcodeToken string) map[string]string {
 	cfg.WeixinAccountID = result.AccountID
 	if result.BaseURL != "" {
 		cfg.WeixinBaseURL = result.BaseURL
+	}
+	// First-time WeChat binding: if the user has never explicitly set local
+	// mode, default to local so the gateway works immediately without
+	// requiring a Hub round-trip. Users can switch to Hub mode later.
+	if cfg.WeixinLocalMode == nil {
+		local := true
+		cfg.WeixinLocalMode = &local
+		log.Printf("[weixin-mgr] first-time binding: auto-setting local mode")
 	}
 	if err := a.SaveConfig(cfg); err != nil {
 		return map[string]string{

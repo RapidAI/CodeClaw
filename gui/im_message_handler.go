@@ -65,6 +65,7 @@ type IMAgentResponse struct {
 	LocalFilePaths  []string           `json:"local_file_paths,omitempty"`
 	ThumbnailBase64 string             `json:"thumbnail_base64,omitempty"`
 	Error           string             `json:"error,omitempty"`
+	Deferred        bool               `json:"deferred,omitempty"`
 }
 
 // IMResponseField is a key-value field in the agent response.
@@ -1031,7 +1032,7 @@ func (h *IMMessageHandler) HandleIMMessage(msg IMUserMessage) *IMAgentResponse {
 // updates (e.g. "正在执行 bash 命令…") so the Hub can relay them to the user
 // and reset the response timeout — preventing 504 on long-running tasks.
 func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProgress ProgressCallback) *IMAgentResponse {
-	return h.HandleIMMessageWithProgressAndStream(msg, onProgress, nil, nil)
+	return h.HandleIMMessageWithProgressAndStream(msg, onProgress, nil, nil, nil)
 }
 
 // HandleIMMessageWithProgressAndStream extends HandleIMMessageWithProgress with
@@ -1039,7 +1040,7 @@ func (h *IMMessageHandler) HandleIMMessageWithProgress(msg IMUserMessage, onProg
 // LLM text delta is pushed in real-time. When onNewRound is non-nil, it is called
 // at the start of each new agent loop iteration (after the first) so the frontend
 // can create a new message bubble. IM platforms pass nil for both.
-func (h *IMMessageHandler) HandleIMMessageWithProgressAndStream(msg IMUserMessage, onProgress ProgressCallback, onToken TokenCallback, onNewRound NewRoundCallback) *IMAgentResponse {
+func (h *IMMessageHandler) HandleIMMessageWithProgressAndStream(msg IMUserMessage, onProgress ProgressCallback, onToken TokenCallback, onNewRound NewRoundCallback, onStreamDone StreamDoneCallback) *IMAgentResponse {
 	trimmed := strings.TrimSpace(msg.Text)
 
 	// Slash commands are processed before the LLM config check — they don't
@@ -1256,6 +1257,7 @@ func (h *IMMessageHandler) compactHistory(entries []conversationEntry, httpClien
 
 type llmResponse struct {
 	Choices []llmChoice `json:"choices"`
+	Usage   *llmUsage   `json:"usage,omitempty"`
 }
 
 type llmChoice struct {

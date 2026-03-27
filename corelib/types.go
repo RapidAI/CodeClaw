@@ -187,6 +187,13 @@ func (c MaclawLLMConfig) EffectiveContextTokens() int {
 	return limit * 80 / 100 // reserve 20% for output
 }
 
+// TokenUsageStat 记录某个 LLM 服务商的累计 token 用量。
+type TokenUsageStat struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+	TotalTokens  int64 `json:"total_tokens"`
+}
+
 // SkillHubEntry 描述一个 SkillHUB 注册端点。
 type SkillHubEntry struct {
 	Label string `json:"label"`

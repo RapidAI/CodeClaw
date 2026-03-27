@@ -438,6 +438,18 @@ export function SetLLMTrajectoryLogging(arg1) {
   return window['go']['main']['App']['SetLLMTrajectoryLogging'](arg1);
 }
 
+export function GetLLMTokenUsage(arg1) {
+  return window['go']['main']['App']['GetLLMTokenUsage'](arg1);
+}
+
+export function GetAllLLMTokenUsage() {
+  return window['go']['main']['App']['GetAllLLMTokenUsage']();
+}
+
+export function ResetLLMTokenUsage(arg1) {
+  return window['go']['main']['App']['ResetLLMTokenUsage'](arg1);
+}
+
 export function PingSkillHub(arg1) {
   return window['go']['main']['App']['PingSkillHub'](arg1);
 }
@@ -1072,4 +1084,20 @@ export function GetFreeProxyModel() {
 
 export function SetFreeProxyModel(arg1) {
   return window['go']['main']['App']['SetFreeProxyModel'](arg1);
+}
+
+export function GetVectorSearchEnabled() {
+  return window['go']['main']['App']['GetVectorSearchEnabled']();
+}
+
+export function SetVectorSearchEnabled(arg1) {
+  return window['go']['main']['App']['SetVectorSearchEnabled'](arg1);
+}
+
+export function CheckEmbeddingModel() {
+  return window['go']['main']['App']['CheckEmbeddingModel']();
+}
+
+export function DownloadEmbeddingModel() {
+  return window['go']['main']['App']['DownloadEmbeddingModel']();
 }

@@ -798,3 +798,83 @@ func (a *App) SetLLMTrajectoryLogging(enabled bool) error {
 	cfg.LLMTrajectoryLogging = enabled
 	return a.SaveConfig(cfg)
 }
+
+// ---------------------------------------------------------------------------
+// LLM Token Usage Statistics
+// ---------------------------------------------------------------------------
+
+// AccumulateLLMTokenUsage adds token counts for the given provider.
+// Called internally after each LLM API call.
+func (a *App) AccumulateLLMTokenUsage(providerName string, inputTokens, outputTokens int) {
+	if inputTokens == 0 && outputTokens == 0 {
+		return
+	}
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		log.Printf("[LLM] AccumulateLLMTokenUsage: load config: %v", err)
+		return
+	}
+	if cfg.LLMTokenUsage == nil {
+		cfg.LLMTokenUsage = make(map[string]*TokenUsageStat)
+	}
+	stat, ok := cfg.LLMTokenUsage[providerName]
+	if !ok {
+		stat = &TokenUsageStat{}
+		cfg.LLMTokenUsage[providerName] = stat
+	}
+	stat.InputTokens += int64(inputTokens)
+	stat.OutputTokens += int64(outputTokens)
+	stat.TotalTokens = stat.InputTokens + stat.OutputTokens
+	if err := a.SaveConfig(cfg); err != nil {
+		log.Printf("[LLM] AccumulateLLMTokenUsage: save config: %v", err)
+	}
+}
+
+// GetLLMTokenUsage returns the token usage stats for a specific provider.
+// If provider is empty, returns stats for the current provider.
+func (a *App) GetLLMTokenUsage(provider string) *TokenUsageStat {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return &TokenUsageStat{}
+	}
+	if provider == "" {
+		provider = cfg.MaclawLLMCurrentProvider
+	}
+	if cfg.LLMTokenUsage == nil {
+		return &TokenUsageStat{}
+	}
+	if stat, ok := cfg.LLMTokenUsage[provider]; ok {
+		return stat
+	}
+	return &TokenUsageStat{}
+}
+
+// GetAllLLMTokenUsage returns token usage stats for all providers.
+func (a *App) GetAllLLMTokenUsage() map[string]*TokenUsageStat {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return map[string]*TokenUsageStat{}
+	}
+	if cfg.LLMTokenUsage == nil {
+		return map[string]*TokenUsageStat{}
+	}
+	return cfg.LLMTokenUsage
+}
+
+// ResetLLMTokenUsage resets the token usage stats for a specific provider.
+// If provider is empty, resets all providers.
+func (a *App) ResetLLMTokenUsage(provider string) error {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.LLMTokenUsage == nil {
+		return nil
+	}
+	if provider == "" {
+		cfg.LLMTokenUsage = make(map[string]*TokenUsageStat)
+	} else {
+		delete(cfg.LLMTokenUsage, provider)
+	}
+	return a.SaveConfig(cfg)
+}

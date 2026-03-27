@@ -44,13 +44,43 @@ struct MoonshineHParams {
     float rope_theta = 10000.0f;
 };
 
+// ============================================================
+// Pre-allocated KV cache for decoder graph reuse.
+// All tensors are pre-allocated to max_seq_len and live in a
+// persistent ggml_context + backend buffer.  The decoder graph
+// uses ggml_view to read/write at the current position.
+// ============================================================
+
 /**
- * Moonshine decoder KV cache state.
+ * Persistent decoder KV cache.
+ * Allocated once per Decode() call, reused across all steps.
  */
-struct MoonshineKVCache {
-    std::vector<float> k;  // [n_layers, n_heads, seq_len, head_dim]
-    std::vector<float> v;
-    int seq_len = 0;
+struct MoonshineDecoderCache {
+    // Persistent ggml context that owns the cache tensors.
+    ggml_context* ctx = nullptr;
+    ggml_backend_buffer_t buf = nullptr;
+
+    // Per-layer self-attention KV: [head_dim, n_heads, max_seq_len]
+    std::vector<ggml_tensor*> self_k;  // one per decoder layer
+    std::vector<ggml_tensor*> self_v;
+
+    // Per-layer cross-attention KV: [head_dim, n_heads, max_enc_frames]
+    // Allocated to a fixed max size; actual enc_frames may be smaller.
+    std::vector<ggml_tensor*> cross_k;
+    std::vector<ggml_tensor*> cross_v;
+
+    int self_seq_len = 0;       // current number of cached self-attn tokens
+    bool cross_valid = false;   // true after first step computes cross KV
+    int max_enc_frames = 0;     // allocated cross KV capacity
+
+    void Free() {
+        if (buf) { ggml_backend_buffer_free(buf); buf = nullptr; }
+        if (ctx) { ggml_free(ctx); ctx = nullptr; }
+        self_k.clear(); self_v.clear();
+        cross_k.clear(); cross_v.clear();
+        self_seq_len = 0; cross_valid = false;
+    }
+    ~MoonshineDecoderCache() { Free(); }
 };
 
 /**
@@ -61,22 +91,17 @@ struct MoonshineState : public RSState {
     std::vector<float> encoder_out;
     int encoder_frames = 0;
 
-    // Decoder KV caches
-    MoonshineKVCache self_kv;    // self-attention cache
-    MoonshineKVCache cross_kv;   // cross-attention cache (from encoder output)
-    bool cross_kv_valid = false;
+    // Persistent decoder KV cache (allocated in Decode, freed on reset)
+    MoonshineDecoderCache dec_cache;
 
     // Generated token sequence
     std::vector<int> tokens;
 
-    // Streaming state
-    std::vector<float> sample_buffer;
-    std::vector<float> conv1_buffer;
-    std::vector<float> conv2_buffer;
-    int64_t frame_count = 0;
-    std::vector<float> accumulated_features;
-    int accumulated_feature_count = 0;
-    int encoder_frames_emitted = 0;
+    // Streaming encoder state
+    std::vector<float> sample_buffer;       // raw PCM accumulator
+    std::vector<float> conv1_state;         // conv1 overlap buffer
+    std::vector<float> conv2_state;         // conv2 overlap buffer
+    int streaming_enc_frames = 0;           // total encoder frames emitted so far
 
     // Transcription result
     std::string text_result;
@@ -86,15 +111,17 @@ struct MoonshineState : public RSState {
  * Moonshine encoder layer weights.
  */
 struct MoonshineEncoderLayer {
-    // Self-attention
+    // Fused QKV (legacy, may be nullptr if model uses separate Q/K/V)
     struct ggml_tensor* attn_qkv_weight = nullptr;
     struct ggml_tensor* attn_qkv_bias = nullptr;
+    // Separate Q/K/V (used by Moonshine HuggingFace models)
+    struct ggml_tensor* attn_q_weight = nullptr;
+    struct ggml_tensor* attn_k_weight = nullptr;
+    struct ggml_tensor* attn_v_weight = nullptr;
     struct ggml_tensor* attn_out_weight = nullptr;
     struct ggml_tensor* attn_out_bias = nullptr;
     struct ggml_tensor* attn_norm_weight = nullptr;
     struct ggml_tensor* attn_norm_bias = nullptr;
-
-    // Feed-forward
     struct ggml_tensor* ff_up_weight = nullptr;
     struct ggml_tensor* ff_up_bias = nullptr;
     struct ggml_tensor* ff_down_weight = nullptr;
@@ -114,7 +141,6 @@ struct MoonshineDecoderLayer {
     struct ggml_tensor* self_attn_out_weight = nullptr;
     struct ggml_tensor* self_attn_norm_weight = nullptr;
     struct ggml_tensor* self_attn_norm_bias = nullptr;
-
     // Cross-attention
     struct ggml_tensor* cross_attn_q_weight = nullptr;
     struct ggml_tensor* cross_attn_k_weight = nullptr;
@@ -122,7 +148,6 @@ struct MoonshineDecoderLayer {
     struct ggml_tensor* cross_attn_out_weight = nullptr;
     struct ggml_tensor* cross_attn_norm_weight = nullptr;
     struct ggml_tensor* cross_attn_norm_bias = nullptr;
-
     // Feed-forward
     struct ggml_tensor* ff_up_weight = nullptr;
     struct ggml_tensor* ff_up_bias = nullptr;
@@ -136,25 +161,21 @@ struct MoonshineDecoderLayer {
  * All Moonshine model weights.
  */
 struct MoonshineWeights {
-    // Audio frontend (1D convolutions)
+    // Audio frontend: 3 x 1D conv + groupnorm
     struct ggml_tensor* frontend_conv1_weight = nullptr;
-    struct ggml_tensor* frontend_conv1_bias = nullptr;
+    struct ggml_tensor* frontend_conv1_bias = nullptr;   // may be null
     struct ggml_tensor* frontend_conv2_weight = nullptr;
     struct ggml_tensor* frontend_conv2_bias = nullptr;
-    struct ggml_tensor* frontend_linear_weight = nullptr;
-    struct ggml_tensor* frontend_linear_bias = nullptr;
-
-    // Encoder layers
+    struct ggml_tensor* frontend_conv3_weight = nullptr;  // was "linear"
+    struct ggml_tensor* frontend_conv3_bias = nullptr;
+    struct ggml_tensor* frontend_groupnorm_weight = nullptr;
+    struct ggml_tensor* frontend_groupnorm_bias = nullptr;
     std::vector<MoonshineEncoderLayer> encoder_layers;
     struct ggml_tensor* encoder_final_norm_weight = nullptr;
     struct ggml_tensor* encoder_final_norm_bias = nullptr;
-
-    // Decoder layers
     std::vector<MoonshineDecoderLayer> decoder_layers;
     struct ggml_tensor* decoder_final_norm_weight = nullptr;
     struct ggml_tensor* decoder_final_norm_bias = nullptr;
-
-    // Token embedding + output projection
     struct ggml_tensor* token_embedding = nullptr;
     struct ggml_tensor* lm_head_weight = nullptr;
     struct ggml_tensor* lm_head_bias = nullptr;
@@ -162,8 +183,11 @@ struct MoonshineWeights {
 
 /**
  * Moonshine ASR model — ggml native implementation.
- * Encoder-decoder transformer with RoPE, supporting both
- * offline and streaming modes.
+ * Encoder-decoder transformer with RoPE.
+ * Features:
+ *   - Pre-allocated KV cache with graph reuse across decoder steps
+ *   - Causal streaming encoder with conv frontend state
+ *   - Cross K/V computed once and cached
  */
 class MoonshineModel : public ISpeechModel {
 public:
@@ -179,7 +203,8 @@ public:
     std::string GetTranscription(RSState& state) override;
     const RSModelMeta& GetMeta() const override { return meta_; }
 
-    // Streaming: push audio chunk, returns number of new encoder frames
+    // Streaming: push audio chunk, returns number of new encoder frames.
+    // Uses causal conv frontend + causal encoder attention.
     int PushStreamingAudio(RSState& state, const float* audio, int n_samples,
                            ggml_backend_sched_t sched);
 
@@ -187,24 +212,38 @@ private:
     RSModelMeta meta_;
     MoonshineHParams hparams_;
     MoonshineWeights weights_;
-
-    // Simple BPE vocabulary (loaded from GGUF)
     std::unordered_map<int, std::string> vocab_;
 
     bool MapTensors(ggml_context* gguf_data);
     bool LoadVocab(gguf_context* ctx_gguf);
 
+    // Allocate persistent KV cache tensors in state.dec_cache.
+    bool AllocDecoderCache(MoonshineState& ms, int max_enc_frames,
+                           ggml_backend_t backend);
+
+    // Compute cross K/V projections and write into dec_cache.
+    // Called once at the start of Decode.
+    bool ComputeCrossKV(MoonshineState& ms, ggml_backend_sched_t sched);
+
+    // Build and run a single decoder step.  Uses pre-allocated KV cache
+    // via ggml_view; the graph structure is identical for every step
+    // (only input data changes), enabling future graph caching.
+    // Returns the argmax token id, or -1 on error.
+    int RunDecoderStep(MoonshineState& ms, int step, int cur_token,
+                       ggml_backend_sched_t sched);
+
     // Build encoder computation graph
+    // out_positions: if non-null, receives the position tensor that caller must fill
     ggml_tensor* BuildEncoder(ggml_context* ctx0, ggml_tensor* audio_features,
-                              int n_frames);
+                              int n_frames, bool causal,
+                              ggml_tensor** out_positions = nullptr);
 
-    // Build single decoder step
-    ggml_tensor* BuildDecoderStep(ggml_context* ctx0,
-                                  ggml_tensor* token_emb,
-                                  ggml_tensor* encoder_out,
-                                  int enc_frames, int step);
+    // Build encoder with causal mask for streaming
+    ggml_tensor* BuildCausalEncoder(ggml_context* ctx0,
+                                     ggml_tensor* audio_features,
+                                     int n_new_frames, int n_prev_frames);
 
-    // RoPE helper
+    // RoPE helper (encoder only; decoder uses inline rope with position tensor)
     ggml_tensor* ApplyRoPE(ggml_context* ctx0, ggml_tensor* x,
                            int head_dim, int offset);
 };

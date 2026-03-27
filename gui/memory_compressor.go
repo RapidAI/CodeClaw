@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/RapidAI/CodeClaw/corelib/memory"
 )
 
 // MemoryBackupInfo describes a single memory backup snapshot.
@@ -97,14 +99,14 @@ func (mc *MemoryCompressor) Compress(ctx context.Context) (*CompressResult, erro
 
 	// 4. LLM compression — only if configured.
 	if mc.isConfigured() {
-		mc.store.mu.RLock()
+		mc.store.RLock()
 		var candidates []MemoryEntry
-		for _, e := range mc.store.entries {
+		for _, e := range mc.store.Entries() {
 			if len([]rune(e.Content)) >= mc.minContentLen {
 				candidates = append(candidates, e)
 			}
 		}
-		mc.store.mu.RUnlock()
+		mc.store.RUnlock()
 
 		for _, entry := range candidates {
 			select {
@@ -150,17 +152,18 @@ func (mc *MemoryCompressor) Compress(ctx context.Context) (*CompressResult, erro
 // UpdatedAt as tiebreaker) is kept; the others are removed.
 // Returns the number of entries removed.
 func (mc *MemoryCompressor) dedup() int {
-	mc.store.mu.Lock()
-	defer mc.store.mu.Unlock()
+	mc.store.Lock()
+	defer mc.store.Unlock()
 
-	n := len(mc.store.entries)
+	entries := mc.store.Entries()
+	n := len(entries)
 	if n < 2 {
 		return 0
 	}
 
 	// Pre-compute lowercased content to avoid repeated allocations.
 	lower := make([]string, n)
-	for i, e := range mc.store.entries {
+	for i, e := range entries {
 		lower[i] = strings.TrimSpace(strings.ToLower(e.Content))
 	}
 
@@ -175,7 +178,7 @@ func (mc *MemoryCompressor) dedup() int {
 			if remove[j] {
 				continue
 			}
-			if !mc.isDuplicateLower(mc.store.entries[i], mc.store.entries[j], lower[i], lower[j]) {
+			if !mc.isDuplicateLower(entries[i], entries[j], lower[i], lower[j]) {
 				continue
 			}
 			// Keep the "better" entry.
@@ -189,14 +192,14 @@ func (mc *MemoryCompressor) dedup() int {
 	}
 
 	kept := make([]MemoryEntry, 0, n-len(remove))
-	for i, e := range mc.store.entries {
+	for i, e := range entries {
 		if !remove[i] {
 			kept = append(kept, e)
 		}
 	}
-	mc.store.entries = kept
-	mc.store.dirty = true
-	mc.store.signalSave()
+	mc.store.SetEntries(kept)
+	mc.store.MarkDirty()
+	mc.store.SignalSave()
 	return len(remove)
 }
 
@@ -242,8 +245,9 @@ func (mc *MemoryCompressor) isDuplicateLower(a, b MemoryEntry, ca, cb string) bo
 // loser (the longer entry contains more information). Otherwise we prefer
 // keeping higher AccessCount; ties broken by newer UpdatedAt.
 func (mc *MemoryCompressor) pickLoser(i, j int) int {
-	ei := mc.store.entries[i]
-	ej := mc.store.entries[j]
+	entries := mc.store.Entries()
+	ei := entries[i]
+	ej := entries[j]
 
 	li := len([]rune(ei.Content))
 	lj := len([]rune(ej.Content))
@@ -283,24 +287,24 @@ func (mc *MemoryCompressor) mergeSemanticDuplicates(ctx context.Context) (int, e
 	totalMerged := 0
 
 	// Collect categories present in the store.
-	mc.store.mu.RLock()
+	mc.store.RLock()
 	catSet := make(map[MemoryCategory]bool)
-	for _, e := range mc.store.entries {
+	for _, e := range mc.store.Entries() {
 		catSet[e.Category] = true
 	}
-	mc.store.mu.RUnlock()
+	mc.store.RUnlock()
 
 	for cat := range catSet {
 		// Re-snapshot entries for this category each iteration so we see
 		// the latest state after previous batches may have mutated the store.
-		mc.store.mu.RLock()
+		mc.store.RLock()
 		var entries []MemoryEntry
-		for _, e := range mc.store.entries {
+		for _, e := range mc.store.Entries() {
 			if e.Category == cat {
 				entries = append(entries, e)
 			}
 		}
-		mc.store.mu.RUnlock()
+		mc.store.RUnlock()
 
 		if len(entries) < 2 {
 			continue
@@ -455,7 +459,7 @@ Rules:
 		}
 
 		survivor := batch[bestIdx]
-		_ = mc.store.Update(survivor.ID, inst.Merged, survivor.Category, mergeTags(nil, allTags))
+		_ = mc.store.Update(survivor.ID, inst.Merged, survivor.Category, memory.MergeTags(nil, allTags))
 
 		// Mark non-survivors for removal.
 		for _, idx := range groupIndices {
@@ -468,19 +472,19 @@ Rules:
 	// Remove merged-away entries.
 	removed := 0
 	if len(removeIDs) > 0 {
-		mc.store.mu.Lock()
-		kept := make([]MemoryEntry, 0, len(mc.store.entries))
-		for _, e := range mc.store.entries {
+		mc.store.Lock()
+		kept := make([]MemoryEntry, 0, len(mc.store.Entries()))
+		for _, e := range mc.store.Entries() {
 			if removeIDs[e.ID] {
 				removed++
 			} else {
 				kept = append(kept, e)
 			}
 		}
-		mc.store.entries = kept
-		mc.store.dirty = true
-		mc.store.mu.Unlock()
-		mc.store.signalSave()
+		mc.store.SetEntries(kept)
+		mc.store.MarkDirty()
+		mc.store.Unlock()
+		mc.store.SignalSave()
 	}
 
 	return removed, nil
@@ -618,9 +622,9 @@ func (mc *MemoryCompressor) isConfigured() bool {
 }
 
 func (mc *MemoryCompressor) entryCount() int {
-	mc.store.mu.RLock()
-	defer mc.store.mu.RUnlock()
-	return len(mc.store.entries)
+	mc.store.RLock()
+	defer mc.store.RUnlock()
+	return len(mc.store.Entries())
 }
 
 // ---------------------------------------------------------------------------
@@ -628,7 +632,7 @@ func (mc *MemoryCompressor) entryCount() int {
 // ---------------------------------------------------------------------------
 
 func (mc *MemoryCompressor) backupDir() string {
-	return filepath.Join(filepath.Dir(mc.store.path), "memory_backups")
+	return filepath.Join(filepath.Dir(mc.store.Path()), "memory_backups")
 }
 
 func (mc *MemoryCompressor) createBackup() (string, error) {
@@ -636,10 +640,10 @@ func (mc *MemoryCompressor) createBackup() (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create backup dir: %w", err)
 	}
-	if err := mc.store.flush(); err != nil {
+	if err := mc.store.Flush(); err != nil {
 		return "", fmt.Errorf("flush before backup: %w", err)
 	}
-	data, err := os.ReadFile(mc.store.path)
+	data, err := os.ReadFile(mc.store.Path())
 	if err != nil {
 		return "", fmt.Errorf("read memory file: %w", err)
 	}
@@ -733,13 +737,13 @@ func (mc *MemoryCompressor) RestoreBackup(backupName string) error {
 	if err := json.Unmarshal(data, &entries); err != nil {
 		return fmt.Errorf("parse backup: %w", err)
 	}
-	if err := os.WriteFile(mc.store.path, data, 0o644); err != nil {
+	if err := os.WriteFile(mc.store.Path(), data, 0o644); err != nil {
 		return fmt.Errorf("write memory file: %w", err)
 	}
-	mc.store.mu.Lock()
-	mc.store.entries = entries
-	mc.store.dirty = false
-	mc.store.mu.Unlock()
+	mc.store.Lock()
+	mc.store.SetEntries(entries)
+	// File already written to disk — no need to flush again.
+	mc.store.Unlock()
 	return nil
 }
 

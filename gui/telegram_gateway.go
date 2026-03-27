@@ -347,7 +347,7 @@ func (m *telegramGatewayManager) handleLocalMessage(msg telegram.IncomingMessage
 		Attachments: attachments,
 	}, onProgress)
 
-	if resp == nil {
+	if resp == nil || resp.Deferred {
 		return
 	}
 

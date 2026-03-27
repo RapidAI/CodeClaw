@@ -25,6 +25,7 @@ type AppConfig struct {
 	Language             string          `json:"language"`
 	PowerOptimization    bool            `json:"power_optimization"`
 	ScreenDimTimeoutMin  int             `json:"screen_dim_timeout_min"`
+	WorkstationMode      bool            `json:"workstation_mode"`
 	CheckUpdateOnStartup bool            `json:"check_update_on_startup"`
 	// Environment check settings
 	PauseEnvCheck    bool   `json:"pause_env_check"`
@@ -32,10 +33,16 @@ type AppConfig struct {
 	EnvCheckInterval int    `json:"env_check_interval"`
 	LastEnvCheckTime string `json:"last_env_check_time"`
 	// Proxy settings (global default)
-	DefaultProxyHost     string `json:"default_proxy_host"`
-	DefaultProxyPort     string `json:"default_proxy_port"`
-	DefaultProxyUsername string `json:"default_proxy_username"`
-	DefaultProxyPassword string `json:"default_proxy_password"`
+	DefaultProxyEnabled        bool   `json:"default_proxy_enabled"`
+	DefaultProxyProtocol       string `json:"default_proxy_protocol,omitempty"` // "http", "https", "socks5"
+	DefaultProxyHost           string `json:"default_proxy_host"`
+	DefaultProxyPort           string `json:"default_proxy_port"`
+	DefaultProxyUsername       string `json:"default_proxy_username"`
+	DefaultProxyPassword       string `json:"default_proxy_password"`
+	DefaultProxyBypass         string `json:"default_proxy_bypass,omitempty"`          // semicolon-separated bypass list
+	DefaultProxyScopeMaclaw    bool   `json:"default_proxy_scope_maclaw,omitempty"`    // MacClaw LLM
+	DefaultProxyScopeCodingTools bool `json:"default_proxy_scope_coding_tools,omitempty"` // coding tools (macOS/Linux only)
+	DefaultProxyScopeAgent     bool   `json:"default_proxy_scope_agent,omitempty"`     // web_search / web_fetch
 	// Terminal settings (Windows only)
 	UseWindowsTerminal bool   `json:"use_windows_terminal"`
 	RemoteEnabled      bool   `json:"remote_enabled"`
@@ -114,8 +121,24 @@ type AppConfig struct {
 	GossipAutoPublish bool `json:"gossip_auto_publish"`
 	// LLM Trajectory Logging — 记录所有 LLM 交互用于模型训练
 	LLMTrajectoryLogging bool `json:"llm_trajectory_logging,omitempty"`
+	// LLM Token Usage — 按服务商累计 token 用量统计
+	LLMTokenUsage map[string]*TokenUsageStat `json:"llm_token_usage,omitempty"`
 	// Onboarding — 是否已完成引导流程
 	OnboardingDone bool `json:"onboarding_done,omitempty"`
+	// Embedding — 向量搜索开关
+	VectorSearchEnabled bool `json:"vector_search_enabled,omitempty"`
+	// SSH — 预配置的远程主机列表
+	SSHHosts []SSHHostEntry `json:"ssh_hosts,omitempty"`
+}
+
+// SSHHostEntry 描述一个预配置的 SSH 远程主机。
+type SSHHostEntry struct {
+	Label      string `json:"label"`                 // 用户可读标签，如 "prod-web-01"
+	Host       string `json:"host"`                  // IP 或域名
+	Port       int    `json:"port,omitempty"`         // 默认 22
+	User       string `json:"user"`                  // 登录用户名
+	AuthMethod string `json:"auth_method,omitempty"` // key/password/agent
+	KeyPath    string `json:"key_path,omitempty"`    // 私钥路径
 }
 
 // IsWeixinLocalMode returns the effective WeChat local mode setting.

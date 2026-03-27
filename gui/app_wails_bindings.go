@@ -508,7 +508,10 @@ func (a *App) SendAIAssistantMessage(text string) (*IMAgentResponse, error) {
 	onNewRound := func() {
 		runtime.EventsEmit(a.ctx, "ai-assistant-new-round")
 	}
-	resp := hubClient.imHandler.HandleIMMessageWithProgressAndStream(msg, onProgress, onToken, onNewRound)
+	onStreamDone := func() {
+		runtime.EventsEmit(a.ctx, "ai-assistant-stream-done")
+	}
+	resp := hubClient.imHandler.HandleIMMessageWithProgressAndStream(msg, onProgress, onToken, onNewRound, onStreamDone)
 	// 触发聊天八卦检测
 	if a.gossipAutoPublish != nil && resp != nil && resp.Text != "" {
 		go a.gossipAutoPublish.OnChatCompleted(text, resp.Text)

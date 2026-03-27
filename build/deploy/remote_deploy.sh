@@ -24,10 +24,28 @@ cd "$SRC_ROOT"
 echo "[remote] Downloading dependencies..."
 GOPROXY="$GOPROXY" go mod download
 
+# Optional: Build RapidSpeech static library for cgo_embedding support.
+# If CMake/compiler is available and build succeeds, CGO_ENABLED is set to 1
+# and the cgo_embedding tag is added. Otherwise the Go build proceeds without it.
+RS_BUILD_SCRIPT="$SRC_ROOT/build/build_rapidspeech.sh"
+RS_LIB="$SRC_ROOT/RapidSpeech.cpp/build/librapidspeech_static.a"
+EXTRA_TAGS=""
+if [ -f "$RS_BUILD_SCRIPT" ]; then
+  echo "[remote] Building RapidSpeech static library (optional)..."
+  chmod +x "$RS_BUILD_SCRIPT"
+  if "$RS_BUILD_SCRIPT" && [ -f "$RS_LIB" ]; then
+    echo "[remote] RapidSpeech built. Enabling cgo_embedding."
+    CGO_ENABLED=1
+    EXTRA_TAGS="cgo_embedding"
+  else
+    echo "[remote] RapidSpeech build skipped or failed. Continuing without cgo_embedding."
+  fi
+fi
+
 echo "[remote] Building hub..."
-GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -o "$BUILD_ROOT/maclaw-hub" ./hub/cmd/hub
+GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -tags "$EXTRA_TAGS" -o "$BUILD_ROOT/maclaw-hub" ./hub/cmd/hub
 echo "[remote] Building hubcenter..."
-GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -o "$BUILD_ROOT/maclaw-hubcenter" ./hubcenter/cmd/hubcenter
+GOPROXY="$GOPROXY" CGO_ENABLED="$CGO_ENABLED" go build -tags "$EXTRA_TAGS" -o "$BUILD_ROOT/maclaw-hubcenter" ./hubcenter/cmd/hubcenter
 
 deploy_one() {
   source_dir="$1"

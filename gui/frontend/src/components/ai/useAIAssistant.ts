@@ -22,10 +22,12 @@ function nextId(): string {
 
 const STREAM_TOKEN_EVENT = "ai-assistant-token";
 const NEW_ROUND_EVENT = "ai-assistant-new-round";
+const STREAM_DONE_EVENT = "ai-assistant-stream-done";
 
 export function useAIAssistant() {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [sending, setSending] = useState(false);
+    const [streaming, setStreaming] = useState(false);
     // Ref-based guard prevents concurrent sends (React state is async).
     const sendingRef = useRef(false);
     // Track the current streaming message ID so token events know where to append.
@@ -43,12 +45,9 @@ export function useAIAssistant() {
             ));
         };
 
-        // New round: agent loop started a new LLM call.
-        // Reuse the previous streaming bubble if it's still empty (tool-only round);
-        // only create a new bubble when the previous one already has content.
+        // New round means a new LLM streaming call is starting.
         const newRoundHandler = () => {
-            // Two-phase approach: first read current state to decide, then update.
-            // We use a ref to communicate the decision out of the updater.
+            setStreaming(true);
             let reusedId: string | null = null;
             const newId = nextId();
             setMessages(prev => {
@@ -70,11 +69,17 @@ export function useAIAssistant() {
             streamingMsgIdRef.current = reusedId ?? newId;
         };
 
+        const streamDoneHandler = () => {
+            setStreaming(false);
+        };
+
         EventsOn(STREAM_TOKEN_EVENT, tokenHandler);
         EventsOn(NEW_ROUND_EVENT, newRoundHandler);
+        EventsOn(STREAM_DONE_EVENT, streamDoneHandler);
         return () => {
             EventsOff(STREAM_TOKEN_EVENT);
             EventsOff(NEW_ROUND_EVENT);
+            EventsOff(STREAM_DONE_EVENT);
         };
     }, []);
 
@@ -82,6 +87,7 @@ export function useAIAssistant() {
         if (text.trim() === "" || sendingRef.current) return;
         sendingRef.current = true;
         setSending(true);
+        setStreaming(true);
 
         // 1. Add user message
         const userMsg: ChatMessage = {
@@ -164,6 +170,7 @@ export function useAIAssistant() {
         } finally {
             sendingRef.current = false;
             setSending(false);
+            setStreaming(false);
             // Clean up empty assistant bubbles left over from tool-only rounds,
             // but keep the last assistant message (it may carry structured data
             // like fields/actions even with empty text content).
@@ -187,6 +194,7 @@ export function useAIAssistant() {
         // Reset sending state in case it was stuck (e.g. after max iterations).
         sendingRef.current = false;
         setSending(false);
+        setStreaming(false);
         streamingMsgIdRef.current = null;
         setMessages([]);
     }, []);
@@ -211,7 +219,7 @@ export function useAIAssistant() {
         };
     }, []);
 
-    return { messages, sending, sendMessage, clearHistory, executeAction };
+    return { messages, sending, streaming, sendMessage, clearHistory, executeAction };
 }
 
 // Polyfill for Array.findLastIndex (not available in all environments)

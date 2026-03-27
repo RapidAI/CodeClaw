@@ -246,6 +246,24 @@ if (RS_BUILD_SERVER)
     install(TARGETS rs-server RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
+# --- Static Library for CGO embedding (Go integration) ---
+# This target produces librapidspeech_static.a containing only the text
+# embedding pipeline (no audio/TTS) for linking into Go binaries via CGO.
+add_library(rapidspeech_static STATIC
+        ${RS_SOURCES}
+        rapidspeech/src/c_api/rapidspeech_c.cpp
+)
+target_include_directories(rapidspeech_static
+        PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/rapidspeech/src
+)
+target_compile_definitions(rapidspeech_static PRIVATE RAPIDSPEECH_BUILD)
+target_link_libraries(rapidspeech_static PRIVATE ggml)
+set_target_properties(rapidspeech_static PROPERTIES
+        OUTPUT_NAME rapidspeech_static
+        POSITION_INDEPENDENT_CODE ON
+)
+
 # --- Example Executables ---
 add_executable(rs-asr-offline examples/rs-asr-offline.cpp)
 target_include_directories(rs-asr-offline PRIVATE

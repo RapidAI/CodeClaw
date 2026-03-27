@@ -23,6 +23,8 @@ import (
 
 	"github.com/RapidAI/CodeClaw/corelib"
 	"github.com/RapidAI/CodeClaw/corelib/brand"
+	"github.com/RapidAI/CodeClaw/corelib/embedding"
+	"github.com/RapidAI/CodeClaw/corelib/memory"
 	"github.com/RapidAI/CodeClaw/corelib/remote"
 	"github.com/RapidAI/CodeClaw/corelib/swarm"
 )
@@ -47,6 +49,7 @@ type App struct {
 	powerStateMutex   sync.Mutex
 	powerStateProcess *exec.Cmd
 	screenDimCancel   context.CancelFunc // cancels the screen-dim goroutine
+	workstationCancel context.CancelFunc // cancels the workstation-mode anti-lock goroutine
 	mcpRegistry       *MCPRegistry
 	localMCPManager   *LocalMCPManager
 	skillExecutor     *SkillExecutor
@@ -83,6 +86,7 @@ type App struct {
 	ioRelay              *SessionIORelay
 	swarmOrchestrator    *swarm.SwarmOrchestrator
 	memoryCompressor     *MemoryCompressor
+	memPipeline          *memory.Pipeline
 	compressorMu         sync.Mutex // guards lazy creation of memoryCompressor
 	scheduledTaskManager *ScheduledTaskManager
 	remoteInfraOnce      sync.Once // guards ensureRemoteInfra initialization
@@ -294,6 +298,18 @@ func (a *App) initRemoteInfra() {
 		}
 		if ms != nil {
 			a.memoryStore = ms
+			// --- Embedding: only enable if user toggled VectorSearch ON and model exists ---
+			if cfg, err := a.LoadConfig(); err == nil && cfg.VectorSearchEnabled {
+				modelPath := embedding.DefaultModelPath()
+				emb := embedding.NewDefaultEmbedder(modelPath)
+				ms.SetEmbedder(emb)
+			}
+			// Start memory maintenance pipeline (decay → compress).
+			// LLM-dependent components (promoter, reflector) will be nil
+			// until LLM config is available.
+			compressor := memory.NewCompressor(ms, nil, nil)
+			a.memPipeline = memory.NewPipeline(ms, compressor, nil, nil, nil)
+			a.memPipeline.Start()
 		}
 	}
 	if a.configManager == nil {
@@ -612,6 +628,7 @@ func (a *App) startup(ctx context.Context) {
 			// Auto-register on startup: saved email + hub but no machine credentials yet
 			go a.autoRegisterOnStartup(config)
 		}
+		a.refreshWorkstationMode(config)
 		a.refreshPowerOptimizationStateFromConfig(config)
 		// Auto-start memory compression service if enabled in config.
 		if config.MemoryAutoCompress && a.memoryStore != nil {
@@ -646,8 +663,13 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.screenDimCancel != nil {
 		a.screenDimCancel()
 	}
+	// Clean up workstation mode (restore lock screen policy, etc.)
+	a.setWorkstationMode(false, 0)
 	if a.localMCPManager != nil {
 		a.localMCPManager.StopAll()
+	}
+	if a.memPipeline != nil {
+		a.memPipeline.Stop()
 	}
 	if a.memoryStore != nil {
 		a.memoryStore.Stop()
@@ -744,10 +766,15 @@ func (a *App) resolveProjectProxyURL(config AppConfig, projectDir string) string
 		return ""
 	}
 
-	if proxyUsername != "" && proxyPassword != "" {
-		return fmt.Sprintf("http://%s:%s@%s:%s", proxyUsername, proxyPassword, proxyHost, proxyPort)
+	scheme := config.DefaultProxyProtocol
+	if scheme == "" {
+		scheme = "http"
 	}
-	return fmt.Sprintf("http://%s:%s", proxyHost, proxyPort)
+
+	if proxyUsername != "" && proxyPassword != "" {
+		return fmt.Sprintf("%s://%s:%s@%s:%s", scheme, proxyUsername, proxyPassword, proxyHost, proxyPort)
+	}
+	return fmt.Sprintf("%s://%s:%s", scheme, proxyHost, proxyPort)
 }
 
 func (a *App) buildClaudeLaunchEnv(
@@ -803,15 +830,7 @@ func (a *App) buildClaudeLaunchEnv(
 		}
 	}
 
-	if useProxy {
-		proxyURL := a.resolveProjectProxyURL(config, projectDir)
-		if proxyURL != "" {
-			env["HTTP_PROXY"] = proxyURL
-			env["HTTPS_PROXY"] = proxyURL
-			env["http_proxy"] = proxyURL
-			env["https_proxy"] = proxyURL
-		}
-	}
+	a.injectProxyEnv(env, config, projectDir, useProxy)
 
 	if !selectedModel.IsBuiltin {
 		a.clearClaudeConfig()
@@ -856,15 +875,7 @@ func (a *App) buildCodexLaunchEnv(
 		a.restoreToolNativeConfig("codex")
 	}
 
-	if useProxy {
-		proxyURL := a.resolveProjectProxyURL(config, projectDir)
-		if proxyURL != "" {
-			env["HTTP_PROXY"] = proxyURL
-			env["HTTPS_PROXY"] = proxyURL
-			env["http_proxy"] = proxyURL
-			env["https_proxy"] = proxyURL
-		}
-	}
+	a.injectProxyEnv(env, config, projectDir, useProxy)
 
 	return env, nil
 }
@@ -890,15 +901,7 @@ func (a *App) buildOpencodeLaunchEnv(
 		env["OPENCODE_MODEL"] = selectedModel.ModelId
 	}
 
-	if useProxy {
-		proxyURL := a.resolveProjectProxyURL(config, projectDir)
-		if proxyURL != "" {
-			env["HTTP_PROXY"] = proxyURL
-			env["HTTPS_PROXY"] = proxyURL
-			env["http_proxy"] = proxyURL
-			env["https_proxy"] = proxyURL
-		}
-	}
+	a.injectProxyEnv(env, config, projectDir, useProxy)
 
 	return env, nil
 }
@@ -926,15 +929,7 @@ func (a *App) buildIFlowLaunchEnv(
 		env["IFLOW_MODEL"] = selectedModel.ModelId
 	}
 
-	if useProxy {
-		proxyURL := a.resolveProjectProxyURL(config, projectDir)
-		if proxyURL != "" {
-			env["HTTP_PROXY"] = proxyURL
-			env["HTTPS_PROXY"] = proxyURL
-			env["http_proxy"] = proxyURL
-			env["https_proxy"] = proxyURL
-		}
-	}
+	a.injectProxyEnv(env, config, projectDir, useProxy)
 
 	return env, nil
 }
@@ -962,15 +957,7 @@ func (a *App) buildKiloLaunchEnv(
 		env["KILO_MODEL"] = selectedModel.ModelId
 	}
 
-	if useProxy {
-		proxyURL := a.resolveProjectProxyURL(config, projectDir)
-		if proxyURL != "" {
-			env["HTTP_PROXY"] = proxyURL
-			env["HTTPS_PROXY"] = proxyURL
-			env["http_proxy"] = proxyURL
-			env["https_proxy"] = proxyURL
-		}
-	}
+	a.injectProxyEnv(env, config, projectDir, useProxy)
 
 	return env, nil
 }
@@ -1006,15 +993,7 @@ func (a *App) buildGeminiLaunchEnv(
 		a.restoreToolNativeConfig("gemini")
 	}
 
-	if useProxy {
-		proxyURL := a.resolveProjectProxyURL(config, projectDir)
-		if proxyURL != "" {
-			env["HTTP_PROXY"] = proxyURL
-			env["HTTPS_PROXY"] = proxyURL
-			env["http_proxy"] = proxyURL
-			env["https_proxy"] = proxyURL
-		}
-	}
+	a.injectProxyEnv(env, config, projectDir, useProxy)
 
 	return env, nil
 }
@@ -1037,15 +1016,7 @@ func (a *App) buildCursorLaunchEnv(
 		env["CURSOR_BASE_URL"] = selectedModel.ModelUrl
 	}
 
-	if useProxy {
-		proxyURL := a.resolveProjectProxyURL(config, projectDir)
-		if proxyURL != "" {
-			env["HTTP_PROXY"] = proxyURL
-			env["HTTPS_PROXY"] = proxyURL
-			env["http_proxy"] = proxyURL
-			env["https_proxy"] = proxyURL
-		}
-	}
+	a.injectProxyEnv(env, config, projectDir, useProxy)
 
 	return env, nil
 }
@@ -1124,15 +1095,7 @@ func (a *App) buildExtraToolLaunchEnv(
 		}
 	}
 
-	if useProxy {
-		proxyURL := a.resolveProjectProxyURL(config, projectDir)
-		if proxyURL != "" {
-			env["HTTP_PROXY"] = proxyURL
-			env["HTTPS_PROXY"] = proxyURL
-			env["http_proxy"] = proxyURL
-			env["https_proxy"] = proxyURL
-		}
-	}
+	a.injectProxyEnv(env, config, projectDir, useProxy)
 
 	return env, nil
 }
@@ -3546,6 +3509,7 @@ func (a *App) SaveConfig(config AppConfig) error {
 	if err := a.saveToPath(path, config); err != nil {
 		return err
 	}
+	a.refreshWorkstationMode(config)
 	a.refreshPowerOptimizationStateFromConfig(config)
 	// Sync security policy mode if changed.
 	if a.policyEngine != nil && config.SecurityPolicyMode != oldConfig.SecurityPolicyMode {

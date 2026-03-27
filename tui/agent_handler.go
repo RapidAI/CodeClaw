@@ -19,6 +19,7 @@ import (
 	"github.com/RapidAI/CodeClaw/corelib/clawnet"
 	"github.com/RapidAI/CodeClaw/corelib/config"
 	"github.com/RapidAI/CodeClaw/corelib/memory"
+	"github.com/RapidAI/CodeClaw/corelib/remote"
 	"github.com/RapidAI/CodeClaw/corelib/scheduler"
 	"github.com/RapidAI/CodeClaw/corelib/security"
 	"github.com/RapidAI/CodeClaw/corelib/tool"
@@ -66,6 +67,7 @@ type TUIAgentHandler struct {
 	schedulerMgr     *scheduler.Manager
 	clawnetClient    *clawnet.Client
 	auditLog         *security.AuditLog
+	sshMgr           *remote.SSHSessionManager
 	maxIterations    int
 	codingToolHealth *codingToolHealthCache // 编程工具健康状态缓存
 }
@@ -113,6 +115,9 @@ func WithClawnetClient(cc *clawnet.Client) AgentHandlerOption {
 }
 func WithAuditLog(al *security.AuditLog) AgentHandlerOption {
 	return func(h *TUIAgentHandler) { h.auditLog = al }
+}
+func WithSSHManager(sm *remote.SSHSessionManager) AgentHandlerOption {
+	return func(h *TUIAgentHandler) { h.sshMgr = sm }
 }
 func WithMaxIterations(n int) AgentHandlerOption {
 	return func(h *TUIAgentHandler) {
@@ -241,6 +246,26 @@ func (h *TUIAgentHandler) buildSystemPrompt() string {
 你不得自行编写代码来替代编程工具。编程任务（除 craft_tool 外）必须通过编程工具完成。
 如果编程工具不可用，请立即中止编程任务，告知用户具体原因，让用户自行排查和修复。
 不要尝试创建这些工具的会话，也不要使用 bash、write_file 等工具代替编程工具写代码。`, summary)
+		}
+	}
+
+	// 注入 SSH 远程能力提示
+	prompt += `
+
+🖥️ SSH 远程服务器管理：
+你有 ssh 工具，可以连接远程服务器并交互式执行命令。
+当用户提到"登录"、"服务器"、"远程"、"SSH"、"部署"、"运维"等关键词时，使用 ssh 工具。
+用法: ssh(action=connect/exec/list/close)。连接后可多次 exec 执行命令并观察输出。`
+
+	// 注入已配置的 SSH 主机列表
+	if sshHosts := h.loadSSHHosts(); len(sshHosts) > 0 {
+		prompt += "\n\n已配置的 SSH 主机（用户可用标签名引用）:\n"
+		for _, host := range sshHosts {
+			port := host.Port
+			if port == 0 {
+				port = 22
+			}
+			prompt += fmt.Sprintf("  - %s → %s@%s:%d\n", host.Label, host.User, host.Host, port)
 		}
 	}
 
@@ -426,6 +451,8 @@ func (h *TUIAgentHandler) buildBuiltinToolDefinitions() []map[string]interface{}
 			"timeout":   map[string]interface{}{"type": "integer", "description": "超时秒数（可选，默认 30）"},
 		}, []string{"url"}),
 	}
+	// SSH 工具
+	defs = append(defs, sshToolDefinitions()...)
 	return defs
 }
 
@@ -581,6 +608,9 @@ func (h *TUIAgentHandler) dispatchTool(name string, args map[string]interface{})
 		return h.toolWebSearch(args)
 	case "web_fetch":
 		return h.toolWebFetch(args)
+	// --- SSH ---
+	case "ssh":
+		return h.toolSSH(args)
 	default:
 		return fmt.Sprintf("未知工具: %s", name)
 	}

@@ -61,7 +61,7 @@ interface HubSkillMeta {
 }
 
 type Props = {
-    translate: (key: string) => string;
+    localizeText: (en: string, zhHans: string, zhHant: string) => string;
 };
 
 interface SkillDiagEntry {
@@ -80,7 +80,7 @@ const emptySkill: NLSkillDefinition = {
     created_at: "",
 };
 
-export function SkillsManagementPanel({ translate }: Props) {
+export function SkillsManagementPanel({ localizeText }: Props) {
     const [activeTab, setActiveTab] = useState<"local" | "hub" | "learned">("local");
     const [skills, setSkills] = useState<NLSkillDefinition[]>([]);
     const [loading, setLoading] = useState(false);
@@ -343,7 +343,7 @@ export function SkillsManagementPanel({ translate }: Props) {
 
     const handleSubmit = async () => {
         if (!formData.name.trim()) {
-            setFormError("名称不能为空");
+            setFormError(localizeText("Name is required", "名称不能为空", "名稱不能為空"));
             return;
         }
         setBusy(true);
@@ -463,7 +463,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                     }}
                     onClick={() => setActiveTab("local")}
                 >
-                    已安装 Skills
+                    {localizeText("Installed Skills", "已安装 Skills", "已安裝 Skills")}
                 </button>
                 <button
                     style={{
@@ -472,7 +472,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                     }}
                     onClick={() => setActiveTab("hub")}
                 >
-                    技能市场
+                    {localizeText("Skill Market", "技能市场", "技能市場")}
                 </button>
                 <button
                     style={{
@@ -481,7 +481,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                     }}
                     onClick={() => setActiveTab("learned")}
                 >
-                    自学习技能
+                    {localizeText("Learned Skills", "自学习技能", "自學習技能")}
                 </button>
             </div>
 
@@ -491,11 +491,11 @@ export function SkillsManagementPanel({ translate }: Props) {
                     {/* Header with create button */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: "0.78rem", color: "#5a6577" }}>
-                            {installedSkills.length} {translate("skillsRegistered") || "个已注册 Skill"}
+                            {installedSkills.length} {localizeText("skill(s) registered", "个已注册 Skill", "個已註冊 Skill")}
                         </span>
                         <div style={{ display: "flex", gap: "6px" }}>
                             <button className="btn-secondary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={() => { loadData(); setDiagEntries(null); }} disabled={loading}>
-                                {loading ? "刷新中..." : "🔄 刷新"}
+                                {loading ? localizeText("Refreshing...", "刷新中...", "重新整理中...") : localizeText("🔄 Refresh", "🔄 刷新", "🔄 重新整理")}
                             </button>
                             <button className="btn-secondary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={async () => {
                                 setDiagLoading(true);
@@ -508,13 +508,13 @@ export function SkillsManagementPanel({ translate }: Props) {
                                     setDiagLoading(false);
                                 }
                             }} disabled={diagLoading}>
-                                {diagLoading ? "诊断中..." : "🔍 诊断"}
+                                {diagLoading ? localizeText("Diagnosing...", "诊断中...", "診斷中...") : localizeText("🔍 Diagnose", "🔍 诊断", "🔍 診斷")}
                             </button>
                             <button className="btn-secondary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={handleImportZip} disabled={busy || importing}>
-                                {importing ? "导入中..." : "📦 上传 Skill 包"}
+                                {importing ? localizeText("Importing...", "导入中...", "匯入中...") : localizeText("📦 Upload Skill Pack", "📦 上传 Skill 包", "📦 上傳 Skill 包")}
                             </button>
                             <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={openCreateForm} disabled={busy}>
-                                + 新建 Skill
+                                + {localizeText("New Skill", "新建 Skill", "新建 Skill")}
                             </button>
                         </div>
                     </div>
@@ -523,15 +523,15 @@ export function SkillsManagementPanel({ translate }: Props) {
                     {diagEntries && diagEntries.length > 0 && (
                         <div style={{ border: "1px solid #e1e4e8", borderRadius: "6px", padding: "10px", background: "#f9fafb", fontSize: "0.76rem" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                                <span style={{ fontWeight: 500, color: "#24292e" }}>📋 Skill 目录诊断结果</span>
-                                <button className="btn-secondary" style={{ fontSize: "0.7rem", padding: "2px 8px" }} onClick={() => setDiagEntries(null)}>关闭</button>
+                                <span style={{ fontWeight: 500, color: "#24292e" }}>📋 {localizeText("Skill Directory Diagnosis", "Skill 目录诊断结果", "Skill 目錄診斷結果")}</span>
+                                <button className="btn-secondary" style={{ fontSize: "0.7rem", padding: "2px 8px" }} onClick={() => setDiagEntries(null)}>{localizeText("Close", "关闭", "關閉")}</button>
                             </div>
                             {diagEntries.map((d, i) => (
                                 <div key={i} style={{ display: "flex", gap: "6px", alignItems: "baseline", padding: "3px 0", borderTop: i > 0 ? "1px solid #eaecef" : undefined }}>
                                     <span>{d.ok ? "✅" : "❌"}</span>
                                     <span style={{ fontWeight: 500, minWidth: "100px" }}>{d.dir}</span>
                                     {d.ok ? (
-                                        <span style={{ color: "#22863a" }}>加载成功{d.name ? ` → ${d.name}` : ""}</span>
+                                        <span style={{ color: "#22863a" }}>{localizeText("Loaded", "加载成功", "載入成功")}{d.name ? ` → ${d.name}` : ""}</span>
                                     ) : (
                                         <span style={{ color: "#cb2431" }}>{d.reason}</span>
                                     )}
@@ -543,7 +543,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                     {/* Loading */}
                     {loading && (
                         <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>
-                            加载中...
+                            {localizeText("Loading...", "加载中...", "載入中...")}
                         </div>
                     )}
 
@@ -560,12 +560,12 @@ export function SkillsManagementPanel({ translate }: Props) {
                             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.76rem" }}>
                                 <thead>
                                     <tr style={{ background: "#f4f5f7" }}>
-                                        <th style={thStyle}>名称</th>
-                                        <th style={thStyle}>描述</th>
-                                        <th style={thStyle}>触发短语</th>
-                                        <th style={thStyle}>使用统计</th>
-                                        <th style={thStyle}>状态</th>
-                                        <th style={{ ...thStyle, width: "100px" }}>操作</th>
+                                        <th style={thStyle}>{localizeText("Name", "名称", "名稱")}</th>
+                                        <th style={thStyle}>{localizeText("Description", "描述", "描述")}</th>
+                                        <th style={thStyle}>{localizeText("Triggers", "触发短语", "觸發短語")}</th>
+                                        <th style={thStyle}>{localizeText("Usage", "使用统计", "使用統計")}</th>
+                                        <th style={thStyle}>{localizeText("Status", "状态", "狀態")}</th>
+                                        <th style={{ ...thStyle, width: "100px" }}>{localizeText("Actions", "操作", "操作")}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -585,21 +585,21 @@ export function SkillsManagementPanel({ translate }: Props) {
                                             <td style={tdStyle}>
                                                 {(s.usage_count ?? 0) > 0 ? (
                                                     <span style={{ fontSize: "0.72rem", color: "#5a6577" }}>
-                                                        {s.usage_count}次 / {Math.round((s.success_rate ?? 0) * 100)}%
+                                                        {s.usage_count}{localizeText("x", "次", "次")} / {Math.round((s.success_rate ?? 0) * 100)}%
                                                     </span>
                                                 ) : (
-                                                    <span style={{ fontSize: "0.72rem", color: "#b0b8c4" }}>未使用</span>
+                                                    <span style={{ fontSize: "0.72rem", color: "#b0b8c4" }}>{localizeText("Unused", "未使用", "未使用")}</span>
                                                 )}
                                             </td>
                                             <td style={tdStyle}>
                                                 <span style={{ ...statusBadgeStyle, ...(s.status === "active" ? activeBadge : disabledBadge) }}>
-                                                    {s.status === "active" ? "启用" : s.status}
+                                                    {s.status === "active" ? localizeText("Active", "启用", "啟用") : s.status}
                                                 </span>
                                             </td>
                                             <td style={tdStyle}>
                                                 <div style={{ display: "flex", gap: "4px" }}>
-                                                    <button className="btn-secondary" style={smallBtnStyle} onClick={() => openEditForm(s)} disabled={busy}>编辑</button>
-                                                    <button className="btn-secondary btn-danger" style={smallBtnStyle} onClick={() => setDeleteTarget(s.name)} disabled={busy}>删除</button>
+                                                    <button className="btn-secondary" style={smallBtnStyle} onClick={() => openEditForm(s)} disabled={busy}>{localizeText("Edit", "编辑", "編輯")}</button>
+                                                    <button className="btn-secondary btn-danger" style={smallBtnStyle} onClick={() => setDeleteTarget(s.name)} disabled={busy}>{localizeText("Delete", "删除", "刪除")}</button>
                                                 </div>
                                             </td>
                                         </tr>
@@ -611,7 +611,7 @@ export function SkillsManagementPanel({ translate }: Props) {
 
                     {!loading && installedSkills.length === 0 && !error && (
                         <div style={{ textAlign: "center", padding: "20px", fontSize: "0.78rem", color: "#8b95a5" }}>
-                            暂无已注册的 Skill
+                            {localizeText("No registered Skills yet", "暂无已注册的 Skill", "暫無已註冊的 Skill")}
                         </div>
                     )}
                 </>
@@ -627,7 +627,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                             value={hubSearchQuery}
                             onChange={(e) => setHubSearchQuery(e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Enter") handleHubSearch(); }}
-                            placeholder="搜索 Hub Skill..."
+                            placeholder={localizeText("Search Hub Skills...", "搜索 Hub Skill...", "搜尋 Hub Skill...")}
                             spellCheck={false}
                             style={{ flex: 1, fontSize: "0.78rem" }}
                         />
@@ -637,7 +637,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                             disabled={!hubSearchQuery.trim() || hubSearching}
                             onClick={handleHubSearch}
                         >
-                            {hubSearching ? "搜索中..." : "搜索"}
+                            {hubSearching ? localizeText("Searching...", "搜索中...", "搜尋中...") : localizeText("Search", "搜索", "搜尋")}
                         </button>
                     </div>
 
@@ -662,7 +662,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                             alignItems: "center",
                             justifyContent: "center",
                         }}>
-                            正在搜索技能市场...
+                            {localizeText("Searching Skill Market...", "正在搜索技能市场...", "正在搜尋技能市場...")}
                         </div>
                     )}
 
@@ -680,7 +680,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                             alignItems: "center",
                             justifyContent: "center",
                         }}>
-                            无搜索结果
+                            {localizeText("No results found", "无搜索结果", "無搜尋結果")}
                         </div>
                     )}
 
@@ -693,12 +693,12 @@ export function SkillsManagementPanel({ translate }: Props) {
                                             <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
                                                 <span style={{ fontWeight: 600, fontSize: "0.82rem", color: "#1a202c" }}>{skill.name}</span>
                                                 <span style={trustBadgeStyle(skill.trust_level)}>
-                                                    {skill.trust_level === "official" ? "官方" : skill.trust_level === "community" ? "社区" : "未知"}
+                                                    {skill.trust_level === "official" ? localizeText("Official", "官方", "官方") : skill.trust_level === "community" ? localizeText("Community", "社区", "社區") : localizeText("Unknown", "未知", "未知")}
                                                 </span>
                                                 <span style={{ fontSize: "0.68rem", color: "#8b95a5" }}>v{skill.version}</span>
                                             </div>
                                             <div style={{ fontSize: "0.76rem", color: "#5a6577", marginTop: "4px", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }} title={skill.description || undefined}>
-                                                {skill.description || "暂无描述"}
+                                                {skill.description || localizeText("No description", "暂无描述", "暫無描述")}
                                             </div>
                                             <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "6px", flexWrap: "wrap" }}>
                                                 {(skill.tags || []).map((tag, i) => (
@@ -729,7 +729,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                                                         style={{ fontSize: "0.74rem", padding: "4px 14px", flexShrink: 0, alignSelf: "center", opacity: 0.7 }}
                                                         disabled
                                                     >
-                                                        安装中...
+                                                        {localizeText("Installing...", "安装中...", "安裝中...")}
                                                     </button>
                                                 );
                                             }
@@ -741,7 +741,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                                                         disabled={isUpdating}
                                                         onClick={() => handleUpdate(localSkill!.name)}
                                                     >
-                                                        {isUpdating ? "更新中..." : "更新"}
+                                                        {isUpdating ? localizeText("Updating...", "更新中...", "更新中...") : localizeText("Update", "更新", "更新")}
                                                     </button>
                                                 );
                                             }
@@ -752,7 +752,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                                                         style={{ fontSize: "0.74rem", padding: "4px 14px", flexShrink: 0, alignSelf: "center", opacity: 0.6 }}
                                                         disabled
                                                     >
-                                                        已安装
+                                                        {localizeText("Installed", "已安装", "已安裝")}
                                                     </button>
                                                 );
                                             }
@@ -762,7 +762,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                                                     style={{ fontSize: "0.74rem", padding: "4px 14px", flexShrink: 0, alignSelf: "center" }}
                                                     onClick={() => handleInstall(skill)}
                                                 >
-                                                    安装
+                                                    {localizeText("Install", "安装", "安裝")}
                                                 </button>
                                             );
                                         })()}
@@ -786,7 +786,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                             alignItems: "center",
                             justifyContent: "center",
                         }}>
-                            输入关键词搜索技能市场上的 Skill
+                            {localizeText("Enter keywords to search the Skill Market", "输入关键词搜索技能市场上的 Skill", "輸入關鍵詞搜尋技能市場上的 Skill")}
                         </div>
                     )}
                 </>
@@ -798,15 +798,15 @@ export function SkillsManagementPanel({ translate }: Props) {
                     {/* Header with export/import buttons */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: "0.78rem", color: "#5a6577" }}>
-                            {learnedSkills.length} 个自学习技能
-                            {learnedSelected.size > 0 && ` (已选 ${learnedSelected.size})`}
+                            {learnedSkills.length} {localizeText("learned skill(s)", "个自学习技能", "個自學習技能")}
+                            {learnedSelected.size > 0 && ` (${localizeText("selected", "已选", "已選")} ${learnedSelected.size})`}
                         </span>
                         <div style={{ display: "flex", gap: "6px" }}>
                             <button className="btn-secondary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={handleLearnedImport} disabled={learnedImporting}>
-                                {learnedImporting ? "导入中..." : "📦 导入"}
+                                {learnedImporting ? localizeText("Importing...", "导入中...", "匯入中...") : localizeText("📦 Import", "📦 导入", "📦 匯入")}
                             </button>
                             <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={handleLearnedExport} disabled={learnedExporting || learnedSelected.size === 0}>
-                                {learnedExporting ? "导出中..." : `📤 导出${learnedSelected.size > 0 ? ` (${learnedSelected.size})` : ""}`}
+                                {learnedExporting ? localizeText("Exporting...", "导出中...", "匯出中...") : `📤 ${localizeText("Export", "导出", "匯出")}${learnedSelected.size > 0 ? ` (${learnedSelected.size})` : ""}`}
                             </button>
                         </div>
                     </div>
@@ -815,14 +815,14 @@ export function SkillsManagementPanel({ translate }: Props) {
                     {importReport && (
                         <div style={{ fontSize: "0.76rem", padding: "8px 10px", borderRadius: "4px", border: "1px solid #e1e4e8", background: "#f9fafb" }}>
                             <div style={{ marginBottom: "4px", fontWeight: 600 }}>
-                                导入完成：{importReport.restored} 成功，{importReport.skipped} 跳过（重名），{importReport.failed} 失败
+                                {localizeText("Import complete:", "导入完成：", "匯入完成：")} {importReport.restored} {localizeText("succeeded", "成功", "成功")}，{importReport.skipped} {localizeText("skipped (duplicate)", "跳过（重名）", "跳過（重名）")}，{importReport.failed} {localizeText("failed", "失败", "失敗")}
                             </div>
                             {importReport.details.length > 0 && (
                                 <ul style={{ margin: 0, paddingLeft: "16px", color: "#5a6577" }}>
                                     {importReport.details.map((d, i) => <li key={i}>{d}</li>)}
                                 </ul>
                             )}
-                            <button className="btn-secondary" style={{ fontSize: "0.72rem", padding: "2px 8px", marginTop: "6px" }} onClick={() => setImportReport(null)}>关闭</button>
+                            <button className="btn-secondary" style={{ fontSize: "0.72rem", padding: "2px 8px", marginTop: "6px" }} onClick={() => setImportReport(null)}>{localizeText("Close", "关闭", "關閉")}</button>
                         </div>
                     )}
 
@@ -835,7 +835,7 @@ export function SkillsManagementPanel({ translate }: Props) {
 
                     {/* Loading */}
                     {loading && (
-                        <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>加载中...</div>
+                        <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>{localizeText("Loading...", "加载中...", "載入中...")}</div>
                     )}
 
                     {/* Learned skills table */}
@@ -847,12 +847,12 @@ export function SkillsManagementPanel({ translate }: Props) {
                                         <th style={{ ...thStyle, width: "36px", textAlign: "center" }}>
                                             <input type="checkbox" checked={learnedSkills.length > 0 && learnedSelected.size === learnedSkills.length} onChange={toggleLearnedSelectAll} />
                                         </th>
-                                        <th style={thStyle}>名称</th>
-                                        <th style={thStyle}>描述</th>
-                                        <th style={{ ...thStyle, width: "40px", textAlign: "center" }}>来源</th>
-                                        <th style={thStyle}>使用统计</th>
-                                        <th style={thStyle}>状态</th>
-                                        <th style={{ ...thStyle, width: "100px" }}>操作</th>
+                                        <th style={thStyle}>{localizeText("Name", "名称", "名稱")}</th>
+                                        <th style={thStyle}>{localizeText("Description", "描述", "描述")}</th>
+                                        <th style={{ ...thStyle, width: "40px", textAlign: "center" }}>{localizeText("Source", "来源", "來源")}</th>
+                                        <th style={thStyle}>{localizeText("Usage", "使用统计", "使用統計")}</th>
+                                        <th style={thStyle}>{localizeText("Status", "状态", "狀態")}</th>
+                                        <th style={{ ...thStyle, width: "100px" }}>{localizeText("Actions", "操作", "操作")}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -867,7 +867,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                                             </td>
                                             <td style={tdStyle}>
                                                 <span
-                                                    title={s.source === "learned" ? "经验学习" : s.source === "file" ? "文件导入" : "工具制作"}
+                                                    title={s.source === "learned" ? localizeText("Experience learned", "经验学习", "經驗學習") : s.source === "file" ? localizeText("File import", "文件导入", "檔案匯入") : localizeText("Tool crafted", "工具制作", "工具製作")}
                                                     style={{ cursor: "default" }}
                                                 >
                                                     {s.source === "learned" ? "📖" : s.source === "file" ? "📁" : "🔧"}
@@ -876,16 +876,16 @@ export function SkillsManagementPanel({ translate }: Props) {
                                             <td style={tdStyle}>
                                                 {(s.usage_count ?? 0) > 0 ? (
                                                     <span style={{ fontSize: "0.72rem", color: "#5a6577" }}>
-                                                        {s.usage_count}次 / {Math.round((s.success_rate ?? 0) * 100)}%
+                                                        {s.usage_count}{localizeText("x", "次", "次")} / {Math.round((s.success_rate ?? 0) * 100)}%
                                                     </span>
                                                 ) : (
-                                                    <span style={{ fontSize: "0.72rem", color: "#b0b8c4" }}>未使用</span>
+                                                    <span style={{ fontSize: "0.72rem", color: "#b0b8c4" }}>{localizeText("Unused", "未使用", "未使用")}</span>
                                                 )}
                                             </td>
                                             <td style={tdStyle}>
                                                 <span style={statusDotStyle(s.status === "active")}>
                                                     <span style={{ width: 6, height: 6, borderRadius: "50%", background: s.status === "active" ? "#22c55e" : "#d1d5db", flexShrink: 0 }} />
-                                                    {s.status === "active" ? "启用" : "停用"}
+                                                    {s.status === "active" ? localizeText("Active", "启用", "啟用") : localizeText("Disabled", "停用", "停用")}
                                                 </span>
                                             </td>
                                             <td style={tdStyle}>
@@ -898,7 +898,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                                                             setUploadingSkill(s.name);
                                                             try {
                                                                 const sid = await UploadNLSkillToMarket(s.name);
-                                                                setToastMsg({ type: "success", text: `提交ID: ${sid}` });
+                                                                setToastMsg({ type: "success", text: `${localizeText("Submission ID", "提交ID", "提交ID")}: ${sid}` });
                                                                 await loadData();
                                                             } catch (e: any) {
                                                                 setToastMsg({ type: "error", text: `${e?.message || e}` });
@@ -907,9 +907,9 @@ export function SkillsManagementPanel({ translate }: Props) {
                                                             }
                                                         }}
                                                     >
-                                                        {uploadingSkill === s.name ? "上传中..." : s.hub_skill_id ? "⬆ 重新上传" : "⬆ 上传"}
+                                                        {uploadingSkill === s.name ? localizeText("Uploading...", "上传中...", "上傳中...") : s.hub_skill_id ? localizeText("⬆ Re-upload", "⬆ 重新上传", "⬆ 重新上傳") : localizeText("⬆ Upload", "⬆ 上传", "⬆ 上傳")}
                                                     </button>
-                                                    {s.hub_skill_id && <span title="已上传到技能市场" style={{ fontSize: "0.68rem", color: "#16a34a" }}>✅</span>}
+                                                    {s.hub_skill_id && <span title={localizeText("Uploaded to Skill Market", "已上传到技能市场", "已上傳到技能市場")} style={{ fontSize: "0.68rem", color: "#16a34a" }}>✅</span>}
                                                 </div>
                                             </td>
                                         </tr>
@@ -921,7 +921,7 @@ export function SkillsManagementPanel({ translate }: Props) {
 
                     {!loading && learnedSkills.length === 0 && !error && (
                         <div style={{ textAlign: "center", padding: "20px", fontSize: "0.78rem", color: "#8b95a5" }}>
-                            暂无自学习技能。MaClaw 在使用过程中会自动学习并生成技能。
+                            {localizeText("No learned skills yet. MaClaw automatically learns and generates skills during use.", "暂无自学习技能。MaClaw 在使用过程中会自动学习并生成技能。", "暫無自學習技能。MaClaw 在使用過程中會自動學習並生成技能。")}
                         </div>
                     )}
                 </>
@@ -932,7 +932,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                 <div className="modal-backdrop" onClick={() => setToastMsg(null)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: "320px" }}>
                         <div className="modal-header">
-                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{toastMsg.type === "success" ? "上传成功" : "上传失败"}</h3>
+                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{toastMsg.type === "success" ? localizeText("Upload Succeeded", "上传成功", "上傳成功") : localizeText("Upload Failed", "上传失败", "上傳失敗")}</h3>
                             <button className="btn-close" onClick={() => setToastMsg(null)}>×</button>
                         </div>
                         <div className="modal-body">
@@ -941,7 +941,7 @@ export function SkillsManagementPanel({ translate }: Props) {
                             </p>
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 14px" }} onClick={() => setToastMsg(null)}>确定</button>
+                            <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 14px" }} onClick={() => setToastMsg(null)}>{localizeText("OK", "确定", "確定")}</button>
                         </div>
                     </div>
                 </div>
@@ -952,18 +952,18 @@ export function SkillsManagementPanel({ translate }: Props) {
                 <div className="modal-backdrop" onClick={() => setDeleteTarget(null)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: "280px" }}>
                         <div className="modal-header">
-                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>确认删除</h3>
+                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{localizeText("Confirm Delete", "确认删除", "確認刪除")}</h3>
                             <button className="btn-close" onClick={() => setDeleteTarget(null)}>×</button>
                         </div>
                         <div className="modal-body">
                             <p style={{ fontSize: "0.8rem", color: "#5a6577", margin: 0 }}>
-                                确定要删除 Skill「{deleteTarget}」吗？此操作不可撤销。
+                                {localizeText(`Are you sure you want to delete Skill "${deleteTarget}"? This cannot be undone.`, `确定要删除 Skill「${deleteTarget}」吗？此操作不可撤销。`, `確定要刪除 Skill「${deleteTarget}」嗎？此操作不可撤銷。`)}
                             </p>
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-secondary" onClick={() => setDeleteTarget(null)} disabled={busy}>取消</button>
+                            <button className="btn-secondary" onClick={() => setDeleteTarget(null)} disabled={busy}>{localizeText("Cancel", "取消", "取消")}</button>
                             <button className="btn-secondary btn-danger" onClick={() => handleDelete(deleteTarget)} disabled={busy}>
-                                {busy ? "删除中..." : "删除"}
+                                {busy ? localizeText("Deleting...", "删除中...", "刪除中...") : localizeText("Delete", "删除", "刪除")}
                             </button>
                         </div>
                     </div>
@@ -975,12 +975,12 @@ export function SkillsManagementPanel({ translate }: Props) {
                 <div className="modal-backdrop" onClick={closeForm}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: "420px", textAlign: "left" }}>
                         <div className="modal-header">
-                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{editingSkill ? "编辑 Skill" : "新建 Skill"}</h3>
+                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{editingSkill ? localizeText("Edit Skill", "编辑 Skill", "編輯 Skill") : localizeText("New Skill", "新建 Skill", "新建 Skill")}</h3>
                             <button className="btn-close" onClick={closeForm}>×</button>
                         </div>
                         <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">名称</label>
+                                <label className="form-label">{localizeText("Name", "名称", "名稱")}</label>
                                 <input
                                     className="form-input"
                                     value={formData.name}
@@ -991,17 +991,17 @@ export function SkillsManagementPanel({ translate }: Props) {
                                 />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">描述</label>
+                                <label className="form-label">{localizeText("Description", "描述", "描述")}</label>
                                 <input
                                     className="form-input"
                                     value={formData.description}
                                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                                    placeholder="Skill 功能描述"
+                                    placeholder={localizeText("Skill description", "Skill 功能描述", "Skill 功能描述")}
                                     spellCheck={false}
                                 />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">触发短语</label>
+                                <label className="form-label">{localizeText("Triggers", "触发短语", "觸發短語")}</label>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "4px" }}>
                                     {formData.triggers.map((t, i) => (
                                         <span key={i} style={{ ...tagStyle, cursor: "pointer" }} onClick={() => removeTrigger(i)}>
@@ -1015,17 +1015,17 @@ export function SkillsManagementPanel({ translate }: Props) {
                                         value={triggerInput}
                                         onChange={(e) => setTriggerInput(e.target.value)}
                                         onKeyDown={handleTriggerKeyDown}
-                                        placeholder="输入后按 Enter 添加"
+                                        placeholder={localizeText("Type and press Enter to add", "输入后按 Enter 添加", "輸入後按 Enter 添加")}
                                         spellCheck={false}
                                         style={{ flex: 1 }}
                                     />
                                     <button className="btn-secondary" style={{ fontSize: "0.76rem", padding: "3px 8px", flexShrink: 0 }} onClick={addTrigger} type="button">
-                                        添加
+                                        {localizeText("Add", "添加", "添加")}
                                     </button>
                                 </div>
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">操作步骤 (YAML)</label>
+                                <label className="form-label">{localizeText("Steps (YAML)", "操作步骤 (YAML)", "操作步驟 (YAML)")}</label>
                                 <textarea
                                     className="form-input"
                                     value={stepsYaml}
@@ -1042,9 +1042,9 @@ export function SkillsManagementPanel({ translate }: Props) {
                             )}
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-secondary" onClick={closeForm} disabled={busy}>取消</button>
+                            <button className="btn-secondary" onClick={closeForm} disabled={busy}>{localizeText("Cancel", "取消", "取消")}</button>
                             <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 14px" }} onClick={handleSubmit} disabled={busy}>
-                                {busy ? "提交中..." : editingSkill ? "保存" : "创建"}
+                                {busy ? localizeText("Submitting...", "提交中...", "提交中...") : editingSkill ? localizeText("Save", "保存", "儲存") : localizeText("Create", "创建", "建立")}
                             </button>
                         </div>
                     </div>

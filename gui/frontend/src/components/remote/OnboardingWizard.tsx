@@ -715,6 +715,17 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, onClose, onLLMCo
                                             <QRCodeSVG value={wxQrUrl} size={200} style={{
                                                 borderRadius: 8, border: "1px solid #e2e8f0",
                                             }} />
+                                            <div style={{ marginTop: 8 }}>
+                                                <button onClick={startWxQR} disabled={wxLoading} style={{
+                                                    fontSize: "0.72rem", padding: "4px 14px",
+                                                    background: "transparent", color: "#6366f1",
+                                                    border: "1px solid #e2e8f0", borderRadius: 4,
+                                                    cursor: wxLoading ? "default" : "pointer",
+                                                    opacity: wxLoading ? 0.5 : 1,
+                                                }}>
+                                                    🔄 {t("刷新二维码", "Refresh QR Code")}
+                                                </button>
+                                            </div>
                                         </div>
                                     )}
                                     {(wxStatus === "expired" || wxStatus === "error") && (
