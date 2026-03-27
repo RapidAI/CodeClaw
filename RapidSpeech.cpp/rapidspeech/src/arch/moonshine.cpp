@@ -607,3 +607,411 @@ bool MoonshineModel::ComputeCrossKV(MoonshineState& ms, ggml_backend_sched_t sch
     ggml_free(ctx0);
     return true;
 }
+
+// ============================================================
+// Single decoder step with pre-allocated KV cache
+//
+// Decoder uses:
+//   - RMSNorm (not LayerNorm)
+//   - SwiGLU FFN: fc1 outputs 2*intermediate, split into gate+value
+//     gate = silu(first_half), output = gate * second_half, then fc2.
+//   - Causal self-attention with KV cache
+//   - Cross-attention from persistent cache
+// ============================================================
+
+int MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
+                                    ggml_backend_sched_t sched) {
+    const int dim = hparams_.decoder_dim;
+    const int n_layers = hparams_.decoder_depth;
+    const int n_heads = hparams_.decoder_heads;
+    const int head_dim = hparams_.decoder_head_dim;
+    const int enc_frames = ms.encoder_frames;
+    const int kv_entry_floats = head_dim * n_heads;
+
+    const int n_nodes = 65536;
+    struct ggml_context* ctx0 = nullptr;
+    struct ggml_cgraph* gf = nullptr;
+    if (!init_compute_ctx(&ctx0, &gf, n_nodes)) return -1;
+
+    // Inputs
+    ggml_tensor* tok_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+    ggml_set_name(tok_idx, "token_id");
+    ggml_set_input(tok_idx);
+
+    ggml_tensor* rope_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+    ggml_set_name(rope_pos, "rope_pos");
+    ggml_set_input(rope_pos);
+
+    // Token embedding
+    ggml_tensor* x = ggml_get_rows(ctx0, weights_.token_embedding, tok_idx);
+
+    // Collect new K/V for readback
+    std::vector<ggml_tensor*> new_self_k(n_layers);
+    std::vector<ggml_tensor*> new_self_v(n_layers);
+
+    for (int l = 0; l < n_layers; l++) {
+        auto& layer = weights_.decoder_layers[l];
+
+        // --- Self-attention (RMSNorm + causal + KV cache) ---
+        ggml_tensor* residual = x;
+        x = rms_norm(ctx0, x, layer.self_attn_norm_weight);
+
+        ggml_tensor* q     = ggml_mul_mat(ctx0, layer.self_attn_q_weight, x);
+        ggml_tensor* k_new = ggml_mul_mat(ctx0, layer.self_attn_k_weight, x);
+        ggml_tensor* v_new = ggml_mul_mat(ctx0, layer.self_attn_v_weight, x);
+
+        // Reshape to [head_dim, n_heads, 1]
+        q     = ggml_reshape_3d(ctx0, q,     head_dim, n_heads, 1);
+        k_new = ggml_reshape_3d(ctx0, k_new, head_dim, n_heads, 1);
+        v_new = ggml_reshape_3d(ctx0, v_new, head_dim, n_heads, 1);
+
+        // RoPE with explicit position
+        q     = apply_rope(ctx0, q,     rope_pos, head_dim, hparams_.rope_theta);
+        k_new = apply_rope(ctx0, k_new, rope_pos, head_dim, hparams_.rope_theta);
+
+        // Mark new k/v for readback BEFORE any permute.
+        // k_new/v_new are [head_dim, n_heads, 1] = kv_entry_floats elements.
+        char name[64];
+        snprintf(name, sizeof(name), "new_sk_%d", l);
+        ggml_set_name(k_new, name); ggml_set_output(k_new);
+        snprintf(name, sizeof(name), "new_sv_%d", l);
+        ggml_set_name(v_new, name); ggml_set_output(v_new);
+        new_self_k[l] = k_new;
+        new_self_v[l] = v_new;
+
+        // Build full K/V for attention.
+        // Cache layout: [head_dim, n_heads, max_seq].
+        // k_new/v_new: [head_dim, n_heads, 1].
+        // Concat on dim2 (the seq dim) gives [head_dim, n_heads, step+1].
+        ggml_tensor* k_full;
+        ggml_tensor* v_full;
+        if (step > 0) {
+            size_t nb1 = head_dim * sizeof(float);
+            size_t nb2 = head_dim * n_heads * sizeof(float);
+            ggml_tensor* k_cached = ggml_view_3d(ctx0, ms.dec_cache.self_k[l],
+                                                  head_dim, n_heads, step,
+                                                  nb1, nb2, 0);
+            ggml_tensor* v_cached = ggml_view_3d(ctx0, ms.dec_cache.self_v[l],
+                                                  head_dim, n_heads, step,
+                                                  nb1, nb2, 0);
+            k_full = ggml_concat(ctx0, k_cached, k_new, 2);
+            v_full = ggml_concat(ctx0, v_cached, v_new, 2);
+        } else {
+            k_full = k_new;
+            v_full = v_new;
+        }
+
+        // sdpa_attention expects [head_dim, n_heads, seq] — matches our layout
+        ggml_tensor* self_attn = sdpa_attention(ctx0, q, k_full, v_full,
+                                                 head_dim, n_heads, 1, step + 1);
+
+        // Output projection + residual
+        self_attn = ggml_mul_mat(ctx0, layer.self_attn_out_weight, self_attn);
+        x = ggml_add(ctx0, residual, self_attn);
+
+        // --- Cross-attention (RMSNorm + persistent cross KV) ---
+        residual = x;
+        x = rms_norm(ctx0, x, layer.cross_attn_norm_weight);
+
+        ggml_tensor* cq = ggml_mul_mat(ctx0, layer.cross_attn_q_weight, x);
+        cq = ggml_reshape_3d(ctx0, cq, head_dim, n_heads, 1);
+
+        // Cross K/V from cache: [head_dim, n_heads, enc_frames]
+        size_t cnb1 = head_dim * sizeof(float);
+        size_t cnb2 = head_dim * n_heads * sizeof(float);
+        ggml_tensor* ck = ggml_view_3d(ctx0, ms.dec_cache.cross_k[l],
+                                        head_dim, n_heads, enc_frames,
+                                        cnb1, cnb2, 0);
+        ggml_tensor* cv = ggml_view_3d(ctx0, ms.dec_cache.cross_v[l],
+                                        head_dim, n_heads, enc_frames,
+                                        cnb1, cnb2, 0);
+
+        // sdpa_attention expects [head_dim, n_heads, seq] — matches cache layout
+        ggml_tensor* cross_attn = sdpa_attention(ctx0, cq, ck, cv,
+                                                  head_dim, n_heads, 1, enc_frames);
+
+        cross_attn = ggml_mul_mat(ctx0, layer.cross_attn_out_weight, cross_attn);
+        x = ggml_add(ctx0, residual, cross_attn);
+
+        // --- FFN: RMSNorm + SwiGLU ---
+        // fc1 outputs [2*intermediate, 1]. Split into gate and value halves.
+        // gate = silu(first_half), output = gate * second_half, then fc2.
+        residual = x;
+        x = rms_norm(ctx0, x, layer.ff_norm_weight);
+
+        ggml_tensor* fc1_out = ggml_mul_mat(ctx0, layer.ff_up_weight, x);
+        if (layer.ff_up_bias) {
+            ggml_tensor* bias_2d = ggml_reshape_2d(ctx0, layer.ff_up_bias,
+                                                    (int)layer.ff_up_bias->ne[0], 1);
+            fc1_out = ggml_add(ctx0, fc1_out, bias_2d);
+        }
+        fc1_out = ggml_cont(ctx0, fc1_out);  // ensure contiguous for view
+
+        int intermediate_2x = (int)fc1_out->ne[0];
+        int intermediate = intermediate_2x / 2;
+
+        // SwiGLU split via view_1d + reshape_2d
+        ggml_tensor* gate_part = ggml_view_1d(ctx0, fc1_out, intermediate, 0);
+        gate_part = ggml_reshape_2d(ctx0, gate_part, intermediate, 1);
+        ggml_tensor* value_part = ggml_view_1d(ctx0, fc1_out, intermediate,
+                                                intermediate * sizeof(float));
+        value_part = ggml_reshape_2d(ctx0, value_part, intermediate, 1);
+
+        gate_part = ggml_silu(ctx0, gate_part);
+        x = ggml_mul(ctx0, gate_part, value_part);
+
+        x = ggml_mul_mat(ctx0, layer.ff_down_weight, x);
+        if (layer.ff_down_bias) {
+            ggml_tensor* dbias_2d = ggml_reshape_2d(ctx0, layer.ff_down_bias,
+                                                     (int)layer.ff_down_bias->ne[0], 1);
+            x = ggml_add(ctx0, x, dbias_2d);
+        }
+        x = ggml_add(ctx0, residual, x);
+    }
+
+    // Final norm + LM head
+    x = rms_norm(ctx0, x, weights_.decoder_final_norm_weight);
+    ggml_tensor* lm_weight = weights_.lm_head_weight ? weights_.lm_head_weight
+                                                      : weights_.token_embedding;
+    x = ggml_mul_mat(ctx0, lm_weight, x);
+    if (weights_.lm_head_bias) x = ggml_add(ctx0, x, weights_.lm_head_bias);
+
+    ggml_set_name(x, "logits");
+    ggml_set_output(x);
+    ggml_build_forward_expand(gf, x);
+    for (int l = 0; l < n_layers; l++) {
+        ggml_build_forward_expand(gf, new_self_k[l]);
+        ggml_build_forward_expand(gf, new_self_v[l]);
+    }
+
+    // Allocate and set inputs
+    ggml_backend_sched_reset(sched);
+    if (!ggml_backend_sched_alloc_graph(sched, gf)) {
+        RS_LOG_ERR("Moonshine: decoder step %d alloc failed", step);
+        ggml_free(ctx0);
+        return -1;
+    }
+
+    ggml_backend_tensor_set(tok_idx, &cur_token, 0, sizeof(int32_t));
+    int32_t step_i32 = (int32_t)step;
+    ggml_backend_tensor_set(rope_pos, &step_i32, 0, sizeof(int32_t));
+
+    if (ggml_backend_sched_graph_compute(sched, gf) != GGML_STATUS_SUCCESS) {
+        RS_LOG_ERR("Moonshine: decoder step %d compute failed", step);
+        ggml_free(ctx0);
+        return -1;
+    }
+
+    // Write new self K/V to persistent cache at position [step]
+    // Cache layout: [head_dim, n_heads, max_seq], k_new is [head_dim, n_heads, 1]
+    // Offset = step * kv_entry_floats * sizeof(float)
+    std::vector<float> kv_tmp(kv_entry_floats);
+    size_t offset = (size_t)step * kv_entry_floats * sizeof(float);
+    for (int l = 0; l < n_layers; l++) {
+        ggml_backend_tensor_get(new_self_k[l], kv_tmp.data(), 0,
+                                kv_entry_floats * sizeof(float));
+        ggml_backend_tensor_set(ms.dec_cache.self_k[l], kv_tmp.data(),
+                                offset, kv_entry_floats * sizeof(float));
+
+        ggml_backend_tensor_get(new_self_v[l], kv_tmp.data(), 0,
+                                kv_entry_floats * sizeof(float));
+        ggml_backend_tensor_set(ms.dec_cache.self_v[l], kv_tmp.data(),
+                                offset, kv_entry_floats * sizeof(float));
+    }
+    ms.dec_cache.self_seq_len = step + 1;
+
+    // Greedy argmax
+    std::vector<float> logit_buf(hparams_.vocab_size);
+    ggml_backend_tensor_get(x, logit_buf.data(), 0,
+                            hparams_.vocab_size * sizeof(float));
+
+    int best_id = 0;
+    float best_val = logit_buf[0];
+    for (int i = 1; i < hparams_.vocab_size; i++) {
+        if (logit_buf[i] > best_val) {
+            best_val = logit_buf[i];
+            best_id = i;
+        }
+    }
+
+    ggml_free(ctx0);
+    return best_id;
+}
+
+// ============================================================
+// Decode: autoregressive generation with persistent KV cache
+// ============================================================
+
+bool MoonshineModel::Decode(RSState& state, ggml_backend_sched_t sched) {
+    auto& ms = dynamic_cast<MoonshineState&>(state);
+
+    if (ms.encoder_out.empty() || ms.encoder_frames == 0) {
+        RS_LOG_ERR("Moonshine: no encoder output for decoding");
+        return false;
+    }
+
+    const int max_len = hparams_.max_seq_len;
+    const int enc_frames = ms.encoder_frames;
+
+    ggml_backend_t backend = ggml_backend_sched_get_backend(sched, 0);
+
+    if (!AllocDecoderCache(ms, enc_frames, backend)) return false;
+    if (!ComputeCrossKV(ms, sched)) return false;
+
+    ms.tokens.clear();
+    ms.tokens.push_back(hparams_.bos_id);
+
+    for (int step = 0; step < max_len; step++) {
+        int cur_token = ms.tokens.back();
+        int next_id = RunDecoderStep(ms, step, cur_token, sched);
+        if (next_id < 0) return false;
+        if (next_id == hparams_.eos_id) break;
+        ms.tokens.push_back(next_id);
+    }
+
+    RS_LOG_INFO("Moonshine: decoded %zu tokens", ms.tokens.size());
+    return true;
+}
+
+// ============================================================
+// GetTranscription: token IDs -> text
+// ============================================================
+
+std::string MoonshineModel::GetTranscription(RSState& state) {
+    auto& ms = dynamic_cast<MoonshineState&>(state);
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < ms.tokens.size(); i++) {
+        int tid = ms.tokens[i];
+        if (tid == hparams_.bos_id || tid == hparams_.eos_id) continue;
+        auto it = vocab_.find(tid);
+        if (it != vocab_.end()) {
+            oss << it->second;
+        } else {
+            oss << "<" << tid << ">";
+        }
+    }
+
+    ms.text_result = oss.str();
+    return ms.text_result;
+}
+
+// ============================================================
+// Streaming encoder: incremental encoding
+// ============================================================
+
+int MoonshineModel::PushStreamingAudio(RSState& state, const float* audio,
+                                        int n_samples,
+                                        ggml_backend_sched_t sched) {
+    auto& ms = dynamic_cast<MoonshineState&>(state);
+
+    ms.sample_buffer.insert(ms.sample_buffer.end(), audio, audio + n_samples);
+
+    int chunk_size = hparams_.sample_rate;
+    if (hparams_.is_streaming) {
+        chunk_size = hparams_.frame_len * 10;
+        if (chunk_size < 160) chunk_size = 160;
+    }
+
+    int new_frames = 0;
+
+    while ((int)ms.sample_buffer.size() >= chunk_size) {
+        std::vector<float> chunk(ms.sample_buffer.begin(),
+                                  ms.sample_buffer.begin() + chunk_size);
+        ms.sample_buffer.erase(ms.sample_buffer.begin(),
+                                ms.sample_buffer.begin() + chunk_size);
+
+        if (hparams_.is_streaming) {
+            const int n_nodes = 16384;
+            struct ggml_context* ctx0 = nullptr;
+            struct ggml_cgraph* gf = nullptr;
+            if (!init_compute_ctx(&ctx0, &gf, n_nodes)) break;
+
+            int n_chunk = (int)chunk.size();
+            ggml_tensor* audio_in = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_chunk);
+            ggml_set_name(audio_in, "stream_pcm");
+            ggml_set_input(audio_in);
+
+            ggml_tensor* enc_out = BuildEncoder(ctx0, audio_in, n_chunk, true, nullptr);
+            if (!enc_out) { ggml_free(ctx0); break; }
+            ggml_set_name(enc_out, "stream_enc_out");
+            ggml_set_output(enc_out);
+            ggml_build_forward_expand(gf, enc_out);
+
+            ggml_backend_sched_reset(sched);
+            if (!ggml_backend_sched_alloc_graph(sched, gf)) {
+                RS_LOG_ERR("Moonshine: streaming encoder alloc failed");
+                ggml_free(ctx0);
+                break;
+            }
+
+            ggml_backend_tensor_set(audio_in, chunk.data(), 0,
+                                    n_chunk * sizeof(float));
+
+            if (ggml_backend_sched_graph_compute(sched, gf) != GGML_STATUS_SUCCESS) {
+                RS_LOG_ERR("Moonshine: streaming encoder compute failed");
+                ggml_free(ctx0);
+                break;
+            }
+
+            int enc_dim = hparams_.encoder_dim;
+            int chunk_frames = (int)(ggml_nelements(enc_out) / enc_dim);
+
+            std::vector<float> chunk_enc(enc_dim * chunk_frames);
+            ggml_backend_tensor_get(enc_out, chunk_enc.data(), 0,
+                                    chunk_enc.size() * sizeof(float));
+
+            ms.encoder_out.insert(ms.encoder_out.end(),
+                                   chunk_enc.begin(), chunk_enc.end());
+            ms.encoder_frames += chunk_frames;
+            ms.streaming_enc_frames += chunk_frames;
+            new_frames += chunk_frames;
+
+            ggml_free(ctx0);
+        } else {
+            // Non-streaming fallback: re-encode accumulated audio
+            std::vector<float> prev_enc = ms.encoder_out;
+            int prev_frames = ms.encoder_frames;
+
+            ggml_backend_sched_reset(sched);
+            if (Encode(chunk, state, sched)) {
+                if (prev_frames > 0) {
+                    std::vector<float> combined;
+                    combined.reserve(prev_enc.size() + ms.encoder_out.size());
+                    combined.insert(combined.end(), prev_enc.begin(), prev_enc.end());
+                    combined.insert(combined.end(), ms.encoder_out.begin(),
+                                    ms.encoder_out.end());
+                    ms.encoder_out = std::move(combined);
+                    ms.encoder_frames = prev_frames + ms.encoder_frames;
+                }
+                new_frames += ms.encoder_frames - prev_frames;
+            }
+        }
+    }
+
+    return new_frames;
+}
+
+// ============================================================
+// BuildCausalEncoder stub (reserved for sliding-window)
+// ============================================================
+
+ggml_tensor* MoonshineModel::BuildCausalEncoder(ggml_context* /*ctx0*/,
+                                                 ggml_tensor* /*audio_features*/,
+                                                 int /*n_new_frames*/,
+                                                 int /*n_prev_frames*/) {
+    // TODO: sliding-window causal encoder with conv state carry-over
+    return nullptr;
+}
+
+// ============================================================
+// Auto-register architecture
+// ============================================================
+
+static struct MoonshineRegistrar {
+    MoonshineRegistrar() {
+        rs_register_model_arch("moonshine", []() -> std::shared_ptr<ISpeechModel> {
+            return std::make_shared<MoonshineModel>();
+        });
+    }
+} s_moonshine_registrar;
