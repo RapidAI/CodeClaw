@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -769,6 +769,10 @@ type IMMessageHandler struct {
 	// agentActivity is a process-local shared store that lets the GUI AI
 	// assistant and IM channels see each other's active tasks.
 	agentActivity *AgentActivityStore
+
+	// lastScreenshotAt records the time of the last successful screenshot
+	// to enforce a cooldown period and prevent accidental rapid-fire captures.
+	lastScreenshotAt time.Time
 }
 
 // NewIMMessageHandler creates a new handler.
@@ -2477,7 +2481,8 @@ c) 每个任务的 TDD 验收测试用例（测试名称、测试步骤、预期
 - 中断或终止会话用 control_session（action: interrupt/kill）
 - 配置管理用 manage_config（action: get/update/batch_update/list_schema/export/import）
 - 简单文件/命令操作直接用 bash/read_file/write_file/list_directory，不要绕道创建会话
-- 截屏直接调用 screenshot，无需活跃会话也能截取本机桌面
+- 截屏直接调用 screenshot（仅在用户明确要求或需要确认操作结果时使用，最小间隔 30 秒），无需活跃会话也能截取本机桌面
+- ⚠️ 截屏规则：仅在用户明确要求截屏、或用户通过 IM 远程监督需要确认操作结果时才调用 screenshot。不要在用户没有要求时主动截屏。连续截屏最小间隔 30 秒。
 - 用 send_file 通过 IM 通道直接发送文件给用户（支持图片、文档等任意文件类型）。在桌面端默认只保存到本地；如果用户要求发到飞书/微信/QQ，需设置 forward_to_im=true
 - ⚠️ 发送本地磁盘上的文件/图片给用户时，必须用 send_file 工具——会话内的工具无法直接投递文件到 IM。SDK 会话中产生的截图会自动推送给用户，无需额外操作。
 - ⚠️ 桌面端用户说"发到飞书"、"发到微信"、"发到QQ"、"发到 IM"时，必须在 send_file 中设置 forward_to_im=true，否则文件只会保存到本地而不会发送到 IM 平台。
@@ -2761,7 +2766,7 @@ func (h *IMMessageHandler) buildToolDefinitions() []map[string]interface{} {
 			map[string]interface{}{
 				"session_id": map[string]string{"type": "string", "description": "会话 ID"},
 			}, []string{"session_id"}),
-		toolDef("screenshot", "截取屏幕截图并发送给用户。如果有活跃会话可指定 session_id，没有活跃会话时会直接截取本机桌面屏幕（不需要创建会话）。",
+		toolDef("screenshot", "截取屏幕截图并发送给用户。仅在以下情况使用：(1) 用户明确要求截屏；(2) 用户通过 IM 远程监督，需要确认操作结果。不要在用户未要求时主动截屏。最小间隔 30 秒。",
 			map[string]interface{}{
 				"session_id": map[string]string{"type": "string", "description": "会话 ID（可选，只有一个会话时自动选择）"},
 			}, nil),
@@ -3792,7 +3797,17 @@ func (h *IMMessageHandler) toolManageConfig(args map[string]interface{}) string 
 	}
 }
 
+// screenshotCooldown is the minimum interval between consecutive screenshots
+// to prevent accidental rapid-fire captures by the LLM.
+const screenshotCooldown = 30 * time.Second
+
 func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {
+	// Enforce cooldown to prevent accidental repeated screenshots.
+	if !h.lastScreenshotAt.IsZero() && time.Since(h.lastScreenshotAt) < screenshotCooldown {
+		remaining := screenshotCooldown - time.Since(h.lastScreenshotAt)
+		return fmt.Sprintf("截屏冷却中，请等待 %d 秒后再试", int(remaining.Seconds())+1)
+	}
+
 	sessionID, _ := args["session_id"].(string)
 
 	// 如果未指定 session_id，自动选择唯一活跃会话
@@ -3816,6 +3831,7 @@ func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {
 			if err != nil {
 				return fmt.Sprintf("截图失败: %s", err.Error())
 			}
+			h.lastScreenshotAt = time.Now()
 			return fmt.Sprintf("[screenshot_base64]%s", base64Data)
 		}
 	}
@@ -3838,6 +3854,7 @@ func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {
 		if err != nil {
 			return fmt.Sprintf("截图失败: %s", err.Error())
 		}
+		h.lastScreenshotAt = time.Now()
 		return fmt.Sprintf("[screenshot_base64]%s", base64Data)
 	}
 
@@ -3846,6 +3863,7 @@ func (h *IMMessageHandler) toolScreenshot(args map[string]interface{}) string {
 	}
 	// 截图已通过 session.image 通道直接发送给用户，
 	// 返回特殊标记让 runAgentLoop 立即终止，避免 Agent 继续推理导致重复发图。
+	h.lastScreenshotAt = time.Now()
 	return "[screenshot_sent]"
 }
 

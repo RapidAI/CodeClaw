@@ -566,6 +566,33 @@ func (a *App) ContinueBackgroundLoop(loopID string, additionalRounds int) error 
 	return hubClient.imHandler.bgManager.SendContinue(loopID, additionalRounds)
 }
 
+// GetBackgroundLoopOutput returns the terminal output lines for a background
+// loop's associated session. For SSH-type loops, it reads from the SSH session
+// manager; for other types, it falls back to the remote session manager.
+func (a *App) GetBackgroundLoopOutput(sessionID string) []string {
+	if sessionID == "" {
+		return nil
+	}
+	// Try SSH session manager first (SSH loops store sessions there).
+	hubClient := a.hubClient()
+	if hubClient != nil && hubClient.imHandler != nil && hubClient.imHandler.sshMgr != nil {
+		if sess, ok := hubClient.imHandler.sshMgr.Get(sessionID); ok {
+			return sess.PreviewTail(2000)
+		}
+	}
+	// Fall back to remote session manager.
+	if a.remoteSessions != nil {
+		if sess, ok := a.remoteSessions.Get(sessionID); ok {
+			sess.mu.RLock()
+			out := make([]string, len(sess.RawOutputLines))
+			copy(out, sess.RawOutputLines)
+			sess.mu.RUnlock()
+			return out
+		}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Agent Skill compatibility Wails bindings
 // ---------------------------------------------------------------------------

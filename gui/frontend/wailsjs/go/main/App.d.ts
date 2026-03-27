@@ -405,6 +405,8 @@ export function StopBackgroundLoop(arg1:string):Promise<void>;
 
 export function ContinueBackgroundLoop(arg1:string, arg2:number):Promise<void>;
 
+export function GetBackgroundLoopOutput(arg1:string):Promise<Array<string>>;
+
 // Agent Skill compatibility bindings
 export function ImportAgentSkillDir(arg1:string):Promise<string>;
 

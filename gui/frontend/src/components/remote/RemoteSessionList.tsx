@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useCallback, type Dispatch, type S
 import { colors, radius } from "./styles";
 import { TERMINAL_SESSION_STATUSES, type RemoteSessionView } from "./types";
 import { RemoteSessionConsole } from "./RemoteSessionConsole";
-import { ListBackgroundLoops, StopBackgroundLoop, ContinueBackgroundLoop } from "../../../wailsjs/go/main/App";
+import { ListBackgroundLoops, StopBackgroundLoop, ContinueBackgroundLoop, GetBackgroundLoopOutput } from "../../../wailsjs/go/main/App";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime";
 
 // Strip ANSI escape sequences and non-printable control characters from terminal output
@@ -93,6 +93,8 @@ export function RemoteSessionList(props: Props) {
     const [consoleReadOnly, setConsoleReadOnly] = useState(false);
     const [previewSessionIds, setPreviewSessionIds] = useState<Set<string>>(new Set());
     const [bgLoops, setBgLoops] = useState<BackgroundLoopView[]>([]);
+    // SSH/background loop output lines (polled when console is open for a non-remote session)
+    const [bgLoopOutputLines, setBgLoopOutputLines] = useState<string[]>([]);
 
     // Fetch background loops
     const refreshBgLoops = useCallback(async () => {
@@ -112,6 +114,26 @@ export function RemoteSessionList(props: Props) {
             clearInterval(timer);
         };
     }, [refreshBgLoops]);
+
+    // Poll SSH/background loop output when the console is open for a session
+    // that doesn't exist in remoteSessions (i.e. an SSH background loop).
+    const isBgLoopConsole = consoleSessionId != null && !remoteSessions.some((s) => s.id === consoleSessionId);
+    useEffect(() => {
+        if (!isBgLoopConsole || !consoleSessionId) {
+            setBgLoopOutputLines([]);
+            return;
+        }
+        let cancelled = false;
+        const poll = async () => {
+            try {
+                const lines = await GetBackgroundLoopOutput(consoleSessionId);
+                if (!cancelled) setBgLoopOutputLines(lines || []);
+            } catch { /* ignore */ }
+        };
+        poll();
+        const timer = setInterval(poll, 1000);
+        return () => { cancelled = true; clearInterval(timer); };
+    }, [isBgLoopConsole, consoleSessionId]);
 
     // Remote sessions = non-AI sessions
     const remoteSess = useMemo(
@@ -188,6 +210,7 @@ export function RemoteSessionList(props: Props) {
     };
 
     const openConsole = (sessionId: string, readOnly: boolean) => {
+        setBgLoopOutputLines([]);
         setConsoleSessionId(sessionId);
         setConsoleReadOnly(readOnly);
     };
@@ -614,8 +637,22 @@ export function RemoteSessionList(props: Props) {
 
             {/* Console modal */}
             {consoleSessionId && (() => {
-                const session = remoteSessions.find((s) => s.id === consoleSessionId);
-                if (!session) return null;
+                let session = remoteSessions.find((s) => s.id === consoleSessionId);
+                // Fallback: if the session isn't in remoteSessions (e.g. background
+                // loop whose session hasn't synced yet), build a minimal view from
+                // the bgLoops data so the console can still open.
+                if (!session) {
+                    const loop = bgLoops.find((l) => l.session_id === consoleSessionId);
+                    if (!loop) return null;
+                    session = {
+                        id: loop.session_id,
+                        tool: loop.slot_kind || "ssh",
+                        title: loop.description || `Agent Loop ${loop.id}`,
+                        project_path: "",
+                        status: loop.status === "running" ? "running" : loop.status,
+                        raw_output_lines: bgLoopOutputLines,
+                    };
+                }
                 return (
                     <RemoteSessionConsole
                         session={session}

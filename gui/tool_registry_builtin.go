@@ -145,7 +145,7 @@ func registerBuiltinTools(registry *ToolRegistry, h *IMMessageHandler) {
 		}, []string{"action"},
 		func(args map[string]interface{}) string { return h.toolManageConfig(args) })
 
-	reg("screenshot", "截取屏幕截图并发送给用户。如果有活跃会话可指定 session_id，没有活跃会话时会直接截取本机桌面屏幕（不需要创建会话）。",
+	reg("screenshot", "截取屏幕截图并发送给用户。仅在以下情况使用：(1) 用户明确要求截屏；(2) 用户通过 IM 远程监督，需要确认操作结果。不要在用户未要求时主动截屏。最小间隔 30 秒。",
 		ToolCategoryBuiltin, []string{"session", "screenshot", "capture"},
 		map[string]interface{}{
 			"session_id": map[string]string{"type": "string", "description": "会话 ID（可选，只有一个会话时自动选择）"},

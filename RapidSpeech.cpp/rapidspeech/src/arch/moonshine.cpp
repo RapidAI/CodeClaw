@@ -57,6 +57,19 @@ static ggml_tensor* apply_rope(ggml_context* ctx, ggml_tensor* x,
                          rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 }
 
+// ---- F32 conv1d (avoids F16 im2col precision loss) ----
+// Replicates ggml_conv_1d but uses GGML_TYPE_F32 for im2col intermediate.
+static ggml_tensor* conv_1d_f32(ggml_context* ctx, ggml_tensor* kernel,
+                                 ggml_tensor* input, int stride, int pad, int dilation) {
+    ggml_tensor* im2col = ggml_im2col(ctx, kernel, input, stride, 0, pad, 0, dilation, 0,
+                                       false, GGML_TYPE_F32);
+    ggml_tensor* result = ggml_mul_mat(ctx,
+        ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
+        ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
+    result = ggml_reshape_3d(ctx, result, im2col->ne[1], kernel->ne[2], im2col->ne[2]);
+    return result;
+}
+
 // ---- Scaled dot-product attention (F32) ----
 // q: [head_dim, n_heads, seq_q]
 // k: [head_dim, n_heads, seq_k]
@@ -322,10 +335,8 @@ ggml_tensor* MoonshineModel::BuildEncoder(ggml_context* ctx0,
         return ggml_add(ctx0, out, b);
     };
 
-    // conv1: stride=64, no bias, Tanh
-    // ggml conv_1d im2col requires kernel in F16
-    x = ggml_conv_1d(ctx0, ggml_cast(ctx0, weights_.frontend_conv1_weight, GGML_TYPE_F16),
-                     x, 64, 0, 1);
+    // conv1: stride=64, no bias, Tanh (F32 precision)
+    x = conv_1d_f32(ctx0, weights_.frontend_conv1_weight, x, 64, 0, 1);
     x = ggml_reshape_2d(ctx0, x, (int)x->ne[0], (int)x->ne[1]);
     x = add_bias(x, weights_.frontend_conv1_bias);
     x = ggml_tanh(ctx0, x);
@@ -334,16 +345,14 @@ ggml_tensor* MoonshineModel::BuildEncoder(ggml_context* ctx0,
     x = group_norm_1(ctx0, x, weights_.frontend_groupnorm_weight,
                      weights_.frontend_groupnorm_bias);
 
-    // conv2: stride=3, GELU
-    x = ggml_conv_1d(ctx0, ggml_cast(ctx0, weights_.frontend_conv2_weight, GGML_TYPE_F16),
-                     x, 3, 0, 1);
+    // conv2: stride=3, GELU (F32 precision)
+    x = conv_1d_f32(ctx0, weights_.frontend_conv2_weight, x, 3, 0, 1);
     x = ggml_reshape_2d(ctx0, x, (int)x->ne[0], (int)x->ne[1]);
     x = add_bias(x, weights_.frontend_conv2_bias);
     x = ggml_gelu(ctx0, x);
 
-    // conv3: stride=2, GELU
-    x = ggml_conv_1d(ctx0, ggml_cast(ctx0, weights_.frontend_conv3_weight, GGML_TYPE_F16),
-                     x, 2, 0, 1);
+    // conv3: stride=2, GELU (F32 precision)
+    x = conv_1d_f32(ctx0, weights_.frontend_conv3_weight, x, 2, 0, 1);
     x = ggml_reshape_2d(ctx0, x, (int)x->ne[0], (int)x->ne[1]);
     x = add_bias(x, weights_.frontend_conv3_bias);
     x = ggml_gelu(ctx0, x);
@@ -466,15 +475,6 @@ bool MoonshineModel::Encode(const std::vector<float>& input_frames,
     ggml_backend_tensor_get(enc_out, ms.encoder_out.data(), 0,
                             ms.encoder_out.size() * sizeof(float));
     ms.encoder_frames = enc_frames;
-
-    // Debug: dump first few encoder output values for comparison with PyTorch reference
-    if (enc_frames > 0 && enc_dim >= 5) {
-        // PyTorch output is [1, seq, dim], ggml is [dim, seq]
-        // First frame's first 5 values: indices 0,1,2,3,4 in ggml [dim, seq] layout
-        RS_LOG_INFO("Moonshine: enc_out[0:5] = %.6f %.6f %.6f %.6f %.6f",
-            ms.encoder_out[0], ms.encoder_out[1], ms.encoder_out[2],
-            ms.encoder_out[3], ms.encoder_out[4]);
-    }
 
     ggml_free(ctx0);
     RS_LOG_INFO("Moonshine: encoded %d samples -> %d frames", n_samples, enc_frames);

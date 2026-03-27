@@ -924,6 +924,10 @@ export function ContinueBackgroundLoop(arg1, arg2) {
   return window['go']['main']['App']['ContinueBackgroundLoop'](arg1, arg2);
 }
 
+export function GetBackgroundLoopOutput(arg1) {
+  return window['go']['main']['App']['GetBackgroundLoopOutput'](arg1);
+}
+
 export function ImportAgentSkillDir(arg1) {
   return window['go']['main']['App']['ImportAgentSkillDir'](arg1);
 }

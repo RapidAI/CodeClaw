@@ -95,13 +95,29 @@ def detect_config(model_dir: Path):
     if config_path.exists():
         with open(config_path, "r") as f:
             cfg = json.load(f)
+
+        # Try to get dim from config, or infer from weights
+        enc_dim = cfg.get("d_model", cfg.get("encoder_dim", None))
+        if enc_dim is None:
+            # Infer from conv1 weight shape
+            try:
+                if (model_dir / "model.safetensors").exists() and safe_open is not None:
+                    with safe_open(str(model_dir / "model.safetensors"), framework="numpy") as f:
+                        conv1 = f.get_tensor("model.encoder.conv1.weight")
+                        enc_dim = conv1.shape[0]
+                        print(f"Inferred encoder_dim={enc_dim} from conv1 weight shape")
+            except Exception:
+                pass
+            if enc_dim is None:
+                enc_dim = 288  # default
+
         return {
-            "encoder_dim": cfg.get("d_model", cfg.get("encoder_dim", 288)),
-            "encoder_depth": cfg.get("encoder_num_layers", cfg.get("encoder_depth", 6)),
-            "encoder_heads": cfg.get("encoder_attention_heads", cfg.get("encoder_heads", 8)),
-            "decoder_dim": cfg.get("d_model", cfg.get("decoder_dim", 288)),
-            "decoder_depth": cfg.get("decoder_num_layers", cfg.get("decoder_depth", 6)),
-            "decoder_heads": cfg.get("decoder_attention_heads", cfg.get("decoder_heads", 8)),
+            "encoder_dim": enc_dim,
+            "encoder_depth": cfg.get("encoder_num_hidden_layers", cfg.get("encoder_num_layers", cfg.get("encoder_depth", 6))),
+            "encoder_heads": cfg.get("encoder_num_attention_heads", cfg.get("encoder_attention_heads", cfg.get("encoder_heads", 8))),
+            "decoder_dim": enc_dim,  # same as encoder for moonshine
+            "decoder_depth": cfg.get("decoder_num_hidden_layers", cfg.get("decoder_num_layers", cfg.get("decoder_depth", 6))),
+            "decoder_heads": cfg.get("decoder_num_attention_heads", cfg.get("decoder_attention_heads", cfg.get("decoder_heads", 8))),
             "vocab_size": cfg.get("vocab_size", 32768),
         }
 

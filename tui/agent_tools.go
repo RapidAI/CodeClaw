@@ -1242,6 +1242,15 @@ func (h *TUIAgentHandler) toolRecommendTool(args map[string]interface{}) string 
 }
 
 func (h *TUIAgentHandler) toolScreenshot() string {
+	// Enforce cooldown to prevent accidental repeated screenshots.
+	if !h.lastScreenshotAt.IsZero() {
+		elapsed := time.Since(h.lastScreenshotAt)
+		if elapsed < 30*time.Second {
+			remaining := 30*time.Second - elapsed
+			return fmt.Sprintf("截屏冷却中，请等待 %d 秒后再试", int(remaining.Seconds())+1)
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var cmd *exec.Cmd
@@ -1269,6 +1278,7 @@ func (h *TUIAgentHandler) toolScreenshot() string {
 	}
 	// 缩小到合理大小
 	b64, _ = remote.DownsizeScreenshotBase64(b64, 200*1024)
+	h.lastScreenshotAt = time.Now()
 	return fmt.Sprintf("截图已获取 (base64, %d 字符)", len(b64))
 }
 

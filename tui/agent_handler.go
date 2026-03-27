@@ -70,6 +70,10 @@ type TUIAgentHandler struct {
 	sshMgr           *remote.SSHSessionManager
 	maxIterations    int
 	codingToolHealth *codingToolHealthCache // 编程工具健康状态缓存
+
+	// lastScreenshotAt records the time of the last successful screenshot
+	// to enforce a cooldown period and prevent accidental rapid-fire captures.
+	lastScreenshotAt time.Time
 }
 
 // NewTUIAgentHandler 创建 Agent 处理器。
@@ -438,7 +442,7 @@ func (h *TUIAgentHandler) buildBuiltinToolDefinitions() []map[string]interface{}
 		toolDef("recommend_tool", "推荐最佳编程工具", map[string]interface{}{
 			"task_description": map[string]interface{}{"type": "string", "description": "任务描述"},
 		}, []string{"task_description"}),
-		toolDef("screenshot", "截取屏幕截图", map[string]interface{}{}, nil),
+		toolDef("screenshot", "截取屏幕截图。仅在用户明确要求截屏、或需要确认操作结果时使用。最小间隔 30 秒。", map[string]interface{}{}, nil),
 		// --- Web search & fetch ---
 		toolDef("web_search", "搜索互联网内容，返回搜索结果列表（标题、URL、摘要）", map[string]interface{}{
 			"query":       map[string]interface{}{"type": "string", "description": "搜索关键词"},
