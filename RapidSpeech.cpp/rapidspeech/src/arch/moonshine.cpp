@@ -891,48 +891,49 @@ std::pair<int, float> MoonshineModel::SampleToken(const std::vector<float>& logi
                                                     std::mt19937& rng) {
     const int n = (int)logits.size();
 
-    if (temperature <= 0.0f) {
-        // Greedy argmax
-        int best_id = 0;
-        float best_val = logits[0];
-        for (int i = 1; i < n; i++) {
-            if (logits[i] > best_val) {
-                best_val = logits[i];
-                best_id = i;
-            }
+    // Find max among valid (non-suppressed) logits
+    int best_id = -1;
+    float max_val = -INFINITY;
+    for (int i = 0; i < n; i++) {
+        if (logits[i] > max_val) {
+            max_val = logits[i];
+            best_id = i;
         }
-        // Compute log-softmax for the chosen token
-        float max_val = best_val;
+    }
+    // Fallback: all logits suppressed — return EOS-like signal
+    if (best_id < 0 || max_val <= -1e9f) {
+        return {0, -100.0f};
+    }
+
+    if (temperature <= 0.0f) {
+        // Greedy argmax + compute log-softmax for the chosen token
         double sum_exp = 0.0;
         for (int i = 0; i < n; i++) {
             if (logits[i] > -1e9f) sum_exp += std::exp((double)(logits[i] - max_val));
         }
-        float logprob = 0.0f - (float)std::log(sum_exp);  // log(exp(0)/sum) = -log(sum)
+        float logprob = (sum_exp > 0.0) ? -(float)std::log(sum_exp) : 0.0f;
         return {best_id, logprob};
     }
 
     // Temperature-scaled softmax sampling
-    std::vector<float> scaled(n);
-    float max_val = *std::max_element(logits.begin(), logits.end());
     double sum_exp = 0.0;
+    std::vector<double> probs(n, 0.0);
     for (int i = 0; i < n; i++) {
         if (logits[i] > -1e9f) {
-            scaled[i] = (logits[i] - max_val) / temperature;
-            sum_exp += std::exp((double)scaled[i]);
-        } else {
-            scaled[i] = -INFINITY;
+            probs[i] = std::exp((double)(logits[i] - max_val) / (double)temperature);
+            sum_exp += probs[i];
         }
     }
+    if (sum_exp <= 0.0) return {best_id, -100.0f};
 
-    // Build CDF and sample
-    double log_sum = std::log(sum_exp);
-    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    float u = dist(rng);
+    // Normalize and sample via CDF
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    double u = dist(rng);
     double cumulative = 0.0;
-    int sampled_id = 0;
+    int sampled_id = best_id;  // fallback to argmax
     for (int i = 0; i < n; i++) {
-        if (scaled[i] > -1e9f) {
-            cumulative += std::exp((double)scaled[i]) / sum_exp;
+        if (probs[i] > 0.0) {
+            cumulative += probs[i] / sum_exp;
             if (u <= cumulative) {
                 sampled_id = i;
                 break;
@@ -940,7 +941,7 @@ std::pair<int, float> MoonshineModel::SampleToken(const std::vector<float>& logi
         }
     }
 
-    float logprob = scaled[sampled_id] - (float)log_sum;
+    float logprob = (float)(std::log(probs[sampled_id]) - std::log(sum_exp));
     return {sampled_id, logprob};
 }
 
@@ -962,12 +963,13 @@ float MoonshineModel::ComputeCompressionRatio(const std::vector<int>& tokens) {
 
 // ============================================================
 // DecodeWithTemperature: single attempt at given temperature
+// Returns: 1 = success, 0 = quality rejected, -1 = compute error
 // ============================================================
 
-bool MoonshineModel::DecodeWithTemperature(MoonshineState& ms,
-                                            ggml_backend_sched_t sched,
-                                            float temperature,
-                                            ggml_backend_t backend) {
+int MoonshineModel::DecodeWithTemperature(MoonshineState& ms,
+                                           ggml_backend_sched_t sched,
+                                           float temperature,
+                                           ggml_backend_t backend) {
     const int max_len = gen_config.max_new_tokens > 0
                             ? gen_config.max_new_tokens
                             : hparams_.max_seq_len;
@@ -984,7 +986,7 @@ bool MoonshineModel::DecodeWithTemperature(MoonshineState& ms,
 
     for (int step = 0; step < max_len; step++) {
         int cur_token = ms.tokens.back();
-        if (!RunDecoderStep(ms, step, cur_token, sched, logits)) return false;
+        if (!RunDecoderStep(ms, step, cur_token, sched, logits)) return -1;
 
         // Logit processing pipeline
         ApplySuppressTokens(logits, gen_config.suppress_tokens);
@@ -1003,9 +1005,9 @@ bool MoonshineModel::DecodeWithTemperature(MoonshineState& ms,
         ms.sum_logprob += logprob;
     }
 
-    // Quality checks (skip for last fallback temperature)
+    // Quality checks
     int n_gen = (int)ms.tokens.size() - 1;  // exclude BOS
-    if (n_gen == 0) return true;  // empty output is valid (silence)
+    if (n_gen == 0) return 1;  // empty output is valid (silence)
 
     float avg_logprob = ms.sum_logprob / (float)n_gen;
     float comp_ratio = ComputeCompressionRatio(
@@ -1014,7 +1016,6 @@ bool MoonshineModel::DecodeWithTemperature(MoonshineState& ms,
     RS_LOG_INFO("Moonshine: temp=%.1f, %d tokens, avg_logprob=%.3f, comp_ratio=%.2f",
                 temperature, n_gen, avg_logprob, comp_ratio);
 
-    // Check thresholds
     bool quality_ok = true;
     if (comp_ratio > gen_config.compression_ratio_threshold) {
         RS_LOG_INFO("Moonshine: compression ratio %.2f > %.2f, rejecting",
@@ -1027,7 +1028,7 @@ bool MoonshineModel::DecodeWithTemperature(MoonshineState& ms,
         quality_ok = false;
     }
 
-    return quality_ok;
+    return quality_ok ? 1 : 0;
 }
 
 // ============================================================
@@ -1052,20 +1053,22 @@ bool MoonshineModel::Decode(RSState& state, ggml_backend_sched_t sched) {
     const auto& temps = gen_config.temperature_fallback;
     if (temps.empty()) {
         // No fallback configured — single greedy attempt
-        if (!DecodeWithTemperature(ms, sched, 0.0f, backend)) return false;
+        int rc = DecodeWithTemperature(ms, sched, 0.0f, backend);
+        if (rc < 0) return false;  // compute error
     } else {
         bool accepted = false;
         for (size_t ti = 0; ti < temps.size(); ti++) {
             bool is_last = (ti == temps.size() - 1);
-            bool ok = DecodeWithTemperature(ms, sched, temps[ti], backend);
-            if (!ok && is_last) {
-                // Last attempt — accept whatever we got
-                RS_LOG_INFO("Moonshine: last fallback temp=%.1f, accepting result",
-                            temps[ti]);
+            int rc = DecodeWithTemperature(ms, sched, temps[ti], backend);
+            if (rc < 0) return false;  // compute error — abort immediately
+            if (rc > 0) {
                 accepted = true;
                 break;
             }
-            if (ok) {
+            // rc == 0: quality rejected
+            if (is_last) {
+                RS_LOG_INFO("Moonshine: last fallback temp=%.1f, accepting result",
+                            temps[ti]);
                 accepted = true;
                 break;
             }

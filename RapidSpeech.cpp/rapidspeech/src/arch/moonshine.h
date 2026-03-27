@@ -5,7 +5,6 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <random>
 
 /**
@@ -292,9 +291,9 @@ private:
     float ComputeCompressionRatio(const std::vector<int>& tokens);
 
     // Run a single decode attempt with given temperature.
-    // Returns true if decode succeeded and passed quality checks.
-    bool DecodeWithTemperature(MoonshineState& ms, ggml_backend_sched_t sched,
-                               float temperature, ggml_backend_t backend);
+    // Returns: 1 = success (quality ok), 0 = quality rejected, -1 = compute error.
+    int DecodeWithTemperature(MoonshineState& ms, ggml_backend_sched_t sched,
+                              float temperature, ggml_backend_t backend);
 
     // Build encoder computation graph
     // out_positions: if non-null, receives the position tensor that caller must fill
