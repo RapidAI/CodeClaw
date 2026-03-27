@@ -144,22 +144,53 @@ func (h *IMMessageHandler) sshExec(args map[string]interface{}) string {
 		return fmt.Sprintf("错误: SSH 会话 %s 不存在", sessionID)
 	}
 
-	linesBefore := session.LineCount()
+	reconnectNote := ""
 
-	if err := mgr.WriteInput(sessionID, command); err != nil {
-		return fmt.Sprintf("发送命令失败: %v", err)
+	// 检查会话是否已断开，如果是则自动重连
+	status, _ := mgr.GetSessionStatus(sessionID)
+	sessionDead := status == remote.SessionExited || status == remote.SessionError
+
+	if sessionDead {
+		if err := mgr.ReconnectByID(sessionID); err != nil {
+			return fmt.Sprintf("SSH 会话已断开，自动重连失败: %v", err)
+		}
+		reconnectNote = "⚠️ 连接已断开并自动重连\n"
+		// 等 shell 初始化
+		time.Sleep(2 * time.Second)
 	}
 
+	linesBefore := session.LineCount()
+
+	if sessionDead {
+		// 已经重连过，直接写入
+		if err := mgr.WriteInput(sessionID, command); err != nil {
+			return fmt.Sprintf("%s发送命令失败: %v", reconnectNote, err)
+		}
+	} else {
+		// 使用带健康检查的写入，支持自动重连
+		reconnected, err := mgr.WriteInputChecked(sessionID, command)
+		if err != nil {
+			return fmt.Sprintf("发送命令失败: %v", err)
+		}
+		if reconnected {
+			reconnectNote = "⚠️ 连接已断开并自动重连\n"
+			// 重连后等 shell 初始化，重新获取行号基线
+			time.Sleep(2 * time.Second)
+			linesBefore = session.LineCount()
+		}
+	}
+
+	// 智能等待：检测输出稳定而非盲等
 	waitSec := 5
 	if w, ok := args["wait_seconds"].(float64); ok && w > 0 {
 		waitSec = int(w)
 	}
-	if waitSec > 60 {
-		waitSec = 60
+	if waitSec > 120 {
+		waitSec = 120
 	}
-	time.Sleep(time.Duration(waitSec) * time.Second)
+	maxWait := time.Duration(waitSec) * time.Second
 
-	newLines, status := session.NewLinesSince(linesBefore)
+	newLines, status := mgr.WaitForOutput(sessionID, linesBefore, maxWait)
 
 	output := strings.Join(newLines, "\n")
 	if output == "" {
@@ -172,7 +203,7 @@ func (h *IMMessageHandler) sshExec(args map[string]interface{}) string {
 	// Update background loop iteration count.
 	h.bumpSSHLoopIteration(sessionID)
 
-	return fmt.Sprintf("[%s] 状态: %s\n$ %s\n%s", sessionID, string(status), command, output)
+	return fmt.Sprintf("%s[%s] 状态: %s\n$ %s\n%s", reconnectNote, sessionID, string(status), command, output)
 }
 
 func (h *IMMessageHandler) sshList() string {

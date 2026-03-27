@@ -148,22 +148,88 @@ func (p *SSHPool) Stats() map[string]int {
 	return stats
 }
 
+// IsAlive 检查指定主机的连接是否存活。
+func (p *SSHPool) IsAlive(cfg SSHHostConfig) bool {
+	cfg.Defaults()
+	hostID := cfg.SSHHostID()
+
+	p.mu.Lock()
+	entry, found := p.conns[hostID]
+	p.mu.Unlock()
+
+	if !found || entry.client == nil {
+		return false
+	}
+	_, _, err := entry.client.SendRequest("keepalive@openssh.com", true, nil)
+	return err == nil
+}
+
+// Reconnect 强制断开旧连接并重新建立到指定主机的连接。
+// 返回新的 ssh.Client。
+func (p *SSHPool) Reconnect(cfg SSHHostConfig) (*ssh.Client, error) {
+	cfg.Defaults()
+	hostID := cfg.SSHHostID()
+
+	// 清理旧连接
+	p.mu.Lock()
+	old, found := p.conns[hostID]
+	if found {
+		delete(p.conns, hostID)
+	}
+	p.mu.Unlock()
+	if found && old.client != nil {
+		_ = old.client.Close()
+	}
+
+	// 新建连接
+	client, err := dialSSH(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("ssh reconnect %s: %w", hostID, err)
+	}
+
+	p.mu.Lock()
+	// 再次检查是否有并发创建的连接
+	if e, ok := p.conns[hostID]; ok {
+		e.refCount++
+		p.mu.Unlock()
+		_ = client.Close()
+		return e.client, nil
+	}
+	p.conns[hostID] = &poolEntry{
+		client:    client,
+		hostID:    hostID,
+		createdAt: time.Now(),
+		refCount:  1,
+	}
+	p.mu.Unlock()
+
+	go p.keepalive(hostID, client, cfg.KeepaliveInterval)
+	return client, nil
+}
+
 func (p *SSHPool) keepalive(hostID string, client *ssh.Client, interval time.Duration) {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	failCount := 0
 	for range ticker.C {
 		_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
 		if err != nil {
-			p.mu.Lock()
-			if entry, ok := p.conns[hostID]; ok && entry.client == client {
-				delete(p.conns, hostID)
+			failCount++
+			// 容忍 1 次瞬时失败，连续 2 次才判定断连
+			if failCount >= 2 {
+				p.mu.Lock()
+				if entry, ok := p.conns[hostID]; ok && entry.client == client {
+					delete(p.conns, hostID)
+				}
+				p.mu.Unlock()
+				_ = client.Close()
+				return
 			}
-			p.mu.Unlock()
-			_ = client.Close()
-			return
+		} else {
+			failCount = 0
 		}
 	}
 }

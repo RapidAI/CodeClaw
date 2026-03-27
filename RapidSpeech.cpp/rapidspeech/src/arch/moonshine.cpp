@@ -190,6 +190,8 @@ bool MoonshineModel::MapTensors(ggml_context* gguf_data) {
         layer.ff_norm_bias   = nullptr;
     }
     weights_.decoder_final_norm_weight = get("decoder.layer_norm.weight");
+    if (!weights_.decoder_final_norm_weight)
+        weights_.decoder_final_norm_weight = get("decoder.norm.weight");
     weights_.decoder_final_norm_bias   = nullptr;
 
     weights_.token_embedding = get("decoder.embed_tokens.weight");
@@ -464,6 +466,15 @@ bool MoonshineModel::Encode(const std::vector<float>& input_frames,
     ggml_backend_tensor_get(enc_out, ms.encoder_out.data(), 0,
                             ms.encoder_out.size() * sizeof(float));
     ms.encoder_frames = enc_frames;
+
+    // Debug: dump first few encoder output values for comparison with PyTorch reference
+    if (enc_frames > 0 && enc_dim >= 5) {
+        // PyTorch output is [1, seq, dim], ggml is [dim, seq]
+        // First frame's first 5 values: indices 0,1,2,3,4 in ggml [dim, seq] layout
+        RS_LOG_INFO("Moonshine: enc_out[0:5] = %.6f %.6f %.6f %.6f %.6f",
+            ms.encoder_out[0], ms.encoder_out[1], ms.encoder_out[2],
+            ms.encoder_out[3], ms.encoder_out[4]);
+    }
 
     ggml_free(ctx0);
     RS_LOG_INFO("Moonshine: encoded %d samples -> %d frames", n_samples, enc_frames);
@@ -886,13 +897,30 @@ std::string MoonshineModel::GetTranscription(RSState& state) {
         if (tid == hparams_.bos_id || tid == hparams_.eos_id) continue;
         auto it = vocab_.find(tid);
         if (it != vocab_.end()) {
-            oss << it->second;
+            std::string tok = it->second;
+            // SentencePiece: replace ▁ (U+2581, UTF-8: E2 96 81) with space
+            std::string sp = "\xe2\x96\x81";
+            size_t pos = 0;
+            while ((pos = tok.find(sp, pos)) != std::string::npos) {
+                tok.replace(pos, sp.size(), " ");
+                pos += 1;
+            }
+            // Skip byte tokens like <0xNN>
+            if (tok.size() >= 6 && tok[0] == '<' && tok[1] == '0' && tok[2] == 'x') {
+                continue;
+            }
+            oss << tok;
         } else {
             oss << "<" << tid << ">";
         }
     }
 
     ms.text_result = oss.str();
+    // Trim leading/trailing whitespace
+    size_t start = ms.text_result.find_first_not_of(' ');
+    size_t end = ms.text_result.find_last_not_of(' ');
+    if (start != std::string::npos)
+        ms.text_result = ms.text_result.substr(start, end - start + 1);
     return ms.text_result;
 }
 

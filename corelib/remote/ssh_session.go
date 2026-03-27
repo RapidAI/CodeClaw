@@ -113,6 +113,20 @@ func (s *SSHPTYSession) Start(spec SSHSessionSpec) error {
 // PID 返回 0（远程进程无本地 PID）。
 func (s *SSHPTYSession) PID() int { return 0 }
 
+// IsAlive 检查 SSH 会话是否仍然存活。
+func (s *SSHPTYSession) IsAlive() bool {
+	s.mu.Lock()
+	if !s.started || s.closed || s.client == nil {
+		s.mu.Unlock()
+		return false
+	}
+	client := s.client
+	s.mu.Unlock()
+	// 在锁外做网络 I/O，避免阻塞其他操作
+	_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+	return err == nil
+}
+
 // Write 向远程 shell 写入数据。
 func (s *SSHPTYSession) Write(data []byte) error {
 	s.mu.Lock()

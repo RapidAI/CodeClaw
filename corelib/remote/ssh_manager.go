@@ -181,6 +181,142 @@ func (m *SSHSessionManager) WriteInput(sessionID, text string) error {
 	return s.Handle.Write([]byte(text + "\n"))
 }
 
+// WriteInputChecked 向 SSH 会话写入命令，写入前检查连接存活。
+// 如果连接已断，尝试自动重连。返回是否发生了重连。
+func (m *SSHSessionManager) WriteInputChecked(sessionID, text string) (reconnected bool, err error) {
+	s, ok := m.Get(sessionID)
+	if !ok {
+		return false, fmt.Errorf("ssh session %s not found", sessionID)
+	}
+	if s.Handle == nil {
+		return false, fmt.Errorf("ssh session %s has no handle", sessionID)
+	}
+
+	// 先尝试直接写入
+	writeErr := s.Handle.Write([]byte(text + "\n"))
+	if writeErr == nil {
+		return false, nil
+	}
+
+	// 写入失败，检查连接是否存活
+	if s.Handle.IsAlive() {
+		return false, writeErr
+	}
+
+	// 连接已断，尝试重连
+	if err := m.reconnectSession(s); err != nil {
+		return false, fmt.Errorf("自动重连失败: %w (原始错误: %v)", err, writeErr)
+	}
+
+	// 重连成功，重试写入
+	if err := s.Handle.Write([]byte(text + "\n")); err != nil {
+		return true, fmt.Errorf("重连后写入失败: %w", err)
+	}
+	return true, nil
+}
+
+// reconnectSession 对已断开的会话执行重连：重新建立 SSH 连接和 PTY 会话。
+func (m *SSHSessionManager) reconnectSession(s *SSHManagedSession) error {
+	s.mu.Lock()
+	spec := s.Spec
+	s.mu.Unlock()
+
+	spec.HostConfig.Defaults()
+
+	// 关闭旧 handle
+	if s.Handle != nil {
+		_ = s.Handle.Close()
+	}
+
+	// 通过连接池重连
+	client, err := m.pool.Reconnect(spec.HostConfig)
+	if err != nil {
+		return err
+	}
+
+	hostID := spec.HostConfig.SSHHostID()
+	ptySession := NewSSHPTYSession(client, hostID)
+	if err := ptySession.Start(spec); err != nil {
+		m.pool.Release(spec.HostConfig)
+		return fmt.Errorf("restart ssh pty: %w", err)
+	}
+
+	s.mu.Lock()
+	s.Handle = ptySession
+	s.Status = SessionRunning
+	s.Summary.Status = string(SessionRunning)
+	s.Summary.UpdatedAt = time.Now().Unix()
+	s.ExitCode = nil
+	// 清空旧输出，避免重连后行号错乱
+	s.PreviewLines = s.PreviewLines[:0]
+	s.mu.Unlock()
+
+	go m.runOutputLoop(s)
+	go m.runExitLoop(s, spec.HostConfig)
+
+	return nil
+}
+
+// ReconnectByID 通过会话 ID 执行重连。
+// 适用于会话已处于 exited/error 状态时，由上层调用恢复会话。
+func (m *SSHSessionManager) ReconnectByID(sessionID string) error {
+	s, ok := m.Get(sessionID)
+	if !ok {
+		return fmt.Errorf("ssh session %s not found", sessionID)
+	}
+	return m.reconnectSession(s)
+}
+
+// WaitForOutput 智能等待命令输出完成。
+// 不再盲等固定秒数，而是检测输出是否稳定（连续 stableRounds 次轮询无新输出即认为完成）。
+// maxWait 是最大等待时间上限。
+func (m *SSHSessionManager) WaitForOutput(sessionID string, afterLine int, maxWait time.Duration) ([]string, SessionStatus) {
+	s, ok := m.Get(sessionID)
+	if !ok {
+		return nil, SessionError
+	}
+
+	if maxWait <= 0 {
+		maxWait = 30 * time.Second
+	}
+
+	const pollInterval = 300 * time.Millisecond
+	const stableThreshold = 3 // 连续 3 次无新输出视为完成
+
+	deadline := time.Now().Add(maxWait)
+	stableCount := 0
+	lastLineCount := afterLine
+
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+
+		currentCount := s.LineCount()
+
+		// 检查会话是否已退出
+		s.mu.Lock()
+		status := s.Status
+		s.mu.Unlock()
+		if status == SessionExited || status == SessionError {
+			lines, st := s.NewLinesSince(afterLine)
+			return lines, st
+		}
+
+		if currentCount > lastLineCount {
+			// 有新输出，重置稳定计数
+			stableCount = 0
+			lastLineCount = currentCount
+		} else {
+			stableCount++
+			if stableCount >= stableThreshold {
+				// 输出已稳定
+				break
+			}
+		}
+	}
+
+	return s.NewLinesSince(afterLine)
+}
+
 // Interrupt 向 SSH 会话发送 Ctrl+C。
 func (m *SSHSessionManager) Interrupt(sessionID string) error {
 	s, ok := m.Get(sessionID)
