@@ -4,10 +4,9 @@
 package embedding
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../RapidSpeech.cpp/include
+#cgo CFLAGS: -I${SRCDIR}/../../RapidSpeech.cpp/include -DRAPIDSPEECH_BUILD
 #cgo LDFLAGS: -L${SRCDIR}/../../RapidSpeech.cpp/build -lrapidspeech_static
-#cgo LDFLAGS: -L${SRCDIR}/../../RapidSpeech.cpp/build/ggml/src -lggml
-#cgo LDFLAGS: -L${SRCDIR}/../../RapidSpeech.cpp/build/ggml/src/ggml-cpu -lggml-cpu
+#cgo LDFLAGS: -L${SRCDIR}/../../RapidSpeech.cpp/build/ggml/src -lggml -lggml-base -lggml-cpu
 #cgo LDFLAGS: -lstdc++ -lm
 #cgo windows LDFLAGS: -lws2_32
 #cgo darwin LDFLAGS: -framework Accelerate
