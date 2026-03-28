@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,6 +38,7 @@ type Compressor struct {
 	emitter       corelib.EventEmitter
 	minContentLen int
 	maxBackups    int
+	gcThreshold   int
 
 	mu         sync.Mutex
 	running    bool
@@ -53,7 +55,13 @@ func NewCompressor(store *Store, llm LLMChatCaller, emitter corelib.EventEmitter
 		llm:           llm,
 		emitter:       emitter,
 		minContentLen: 200,
+		gcThreshold:   450,
 	}
+}
+
+// SetGCThreshold sets the active entry count threshold that triggers GC.
+func (mc *Compressor) SetGCThreshold(n int) {
+	mc.gcThreshold = n
 }
 
 // Compress performs dedup then LLM compression on long entries.
@@ -86,6 +94,9 @@ func (mc *Compressor) Compress(ctx context.Context) (*CompressResult, error) {
 		var candidates []Entry
 		for _, e := range mc.store.entries {
 			if e.Category.IsProtected() {
+				continue
+			}
+			if e.Pinned {
 				continue
 			}
 			if len([]rune(e.Content)) >= mc.minContentLen {
@@ -148,11 +159,11 @@ func (mc *Compressor) dedup() int {
 	remove := make(map[int]bool)
 
 	for i := 0; i < n; i++ {
-		if remove[i] {
+		if remove[i] || mc.store.entries[i].Pinned {
 			continue
 		}
 		for j := i + 1; j < n; j++ {
-			if remove[j] {
+			if remove[j] || mc.store.entries[j].Pinned {
 				continue
 			}
 			if !isDuplicateLower(mc.store.entries[i], mc.store.entries[j], lower[i], lower[j]) {
@@ -246,7 +257,7 @@ func (mc *Compressor) mergeSemanticDuplicates(ctx context.Context) (int, error) 
 		mc.store.mu.RLock()
 		var entries []Entry
 		for _, e := range mc.store.entries {
-			if e.Category == cat {
+			if e.Category == cat && !e.Pinned {
 				entries = append(entries, e)
 			}
 		}
@@ -461,6 +472,7 @@ func (mc *Compressor) Status() CompressorStatus {
 }
 
 func (mc *Compressor) loop(ctx context.Context) {
+	mc.maybeRunGC(ctx)
 	mc.runOnce(ctx)
 
 	ticker := time.NewTicker(6 * time.Hour)
@@ -473,8 +485,16 @@ func (mc *Compressor) loop(ctx context.Context) {
 			if refresher, ok := mc.llm.(LLMConfigRefresher); ok {
 				refresher.RefreshConfig()
 			}
+			mc.maybeRunGC(ctx)
 			mc.runOnce(ctx)
 		}
+	}
+}
+
+// maybeRunGC checks if active entry count >= gcThreshold and runs GC if so.
+func (mc *Compressor) maybeRunGC(ctx context.Context) {
+	if mc.store.ActiveCount() >= mc.gcThreshold {
+		_, _ = mc.RunGC(ctx)
 	}
 }
 
@@ -532,6 +552,164 @@ func (mc *Compressor) entryCount() int {
 	mc.store.mu.RLock()
 	defer mc.store.mu.RUnlock()
 	return len(mc.store.entries)
+}
+
+// RunGC performs an intelligent garbage collection cycle:
+// 1. Skip pinned and protected entries
+// 2. Sort remaining by LRU (lowest AccessCount, oldest UpdatedAt)
+// 3. Archive low-priority entries to bring count below threshold
+// 4. Scan archive for entries relevant to top-20 recently accessed active entries
+// 5. Revive matching archived entries (limit 10 per cycle)
+// 6. Emit memory:gc event with GCResult
+func (mc *Compressor) RunGC(ctx context.Context) (*GCResult, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	mc.store.mu.Lock()
+
+	result := &GCResult{
+		ActiveBefore: len(mc.store.entries),
+	}
+
+	// Separate protected/pinned from evictable.
+	var protected []Entry
+	var evictable []Entry
+	for _, e := range mc.store.entries {
+		if e.Pinned || e.Category.IsProtected() {
+			protected = append(protected, e)
+			result.SkippedPinned++
+		} else {
+			evictable = append(evictable, e)
+		}
+	}
+
+	// Sort evictable by LRU: lowest AccessCount first, then oldest UpdatedAt.
+	sort.SliceStable(evictable, func(i, j int) bool {
+		if evictable[i].AccessCount != evictable[j].AccessCount {
+			return evictable[i].AccessCount < evictable[j].AccessCount
+		}
+		return evictable[i].UpdatedAt.Before(evictable[j].UpdatedAt)
+	})
+
+	// Determine how many to archive to bring count below threshold.
+	target := mc.gcThreshold - len(protected)
+	if target < 0 {
+		target = 0
+	}
+
+	var toArchive []Entry
+	var kept []Entry
+	if len(evictable) > target {
+		excess := len(evictable) - target
+		toArchive = evictable[:excess]
+		kept = evictable[excess:]
+	} else {
+		kept = evictable
+	}
+
+	// Rebuild active entries.
+	newEntries := make([]Entry, 0, len(protected)+len(kept))
+	newEntries = append(newEntries, protected...)
+	newEntries = append(newEntries, kept...)
+	mc.store.entries = newEntries
+	mc.store.dirty = true
+	mc.store.bm25.rebuild(newEntries)
+	mc.store.vecIndex.rebuild(newEntries)
+	mc.store.graph.rebuild(newEntries)
+
+	mc.store.mu.Unlock()
+	mc.store.signalSave()
+
+	// Archive evicted entries.
+	if mc.store.archive != nil && len(toArchive) > 0 {
+		_ = mc.store.archive.Add(toArchive...)
+	}
+	result.ArchivedCount = len(toArchive)
+
+	// Revive relevant archived entries (limit 10).
+	if mc.store.archive != nil {
+		// Collect tags and categories from top-20 most recently accessed active entries.
+		mc.store.mu.RLock()
+		active := make([]Entry, len(mc.store.entries))
+		copy(active, mc.store.entries)
+		mc.store.mu.RUnlock()
+
+		// Sort by AccessCount desc, then UpdatedAt desc to find top-20.
+		sort.SliceStable(active, func(i, j int) bool {
+			if active[i].AccessCount != active[j].AccessCount {
+				return active[i].AccessCount > active[j].AccessCount
+			}
+			return active[i].UpdatedAt.After(active[j].UpdatedAt)
+		})
+		topN := 20
+		if len(active) < topN {
+			topN = len(active)
+		}
+		top := active[:topN]
+
+		tagSet := make(map[string]bool)
+		catSet := make(map[Category]bool)
+		for _, e := range top {
+			for _, tag := range e.Tags {
+				tagSet[tag] = true
+			}
+			catSet[e.Category] = true
+		}
+
+		tags := make([]string, 0, len(tagSet))
+		for t := range tagSet {
+			tags = append(tags, t)
+		}
+		cats := make([]Category, 0, len(catSet))
+		for c := range catSet {
+			cats = append(cats, c)
+		}
+
+		relevant := mc.store.archive.FindRelevant(tags, cats, 10)
+		var revived []Entry
+		for _, re := range relevant {
+			if len(revived) >= 10 {
+				break
+			}
+			removed, err := mc.store.archive.Remove(re.ID)
+			if err != nil {
+				continue
+			}
+			removed.UpdatedAt = time.Now()
+			removed.AccessCount = 1
+			revived = append(revived, *removed)
+		}
+
+		if len(revived) > 0 {
+			mc.store.mu.Lock()
+			for _, r := range revived {
+				mc.store.entries = append(mc.store.entries, r)
+				mc.store.bm25.addEntry(r)
+				mc.store.vecIndex.add(r.ID, r.Embedding)
+			}
+			mc.store.dirty = true
+			mc.store.mu.Unlock()
+			mc.store.signalSave()
+		}
+		result.RevivedCount = len(revived)
+	}
+
+	mc.store.mu.RLock()
+	result.ActiveAfter = len(mc.store.entries)
+	mc.store.mu.RUnlock()
+
+	// Emit memory:gc event.
+	if mc.emitter != nil {
+		mc.emitter.Emit("memory:gc", result)
+	}
+
+	log.Printf("[memory_gc] archived=%d revived=%d active: %d→%d skipped_pinned=%d",
+		result.ArchivedCount, result.RevivedCount, result.ActiveBefore, result.ActiveAfter, result.SkippedPinned)
+
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------

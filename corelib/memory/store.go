@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -29,6 +30,7 @@ type Store struct {
 	vecIndex *vectorIndex
 	graph    *memoryGraph
 	embedder embedding.Embedder // nil until SetEmbedder is called
+	archive  *ArchiveStore      // cold storage for evicted entries
 }
 
 // NewStore creates a Store that persists to the given path.
@@ -57,6 +59,14 @@ func NewStore(path string) (*Store, error) {
 	s.bm25.rebuild(s.entries)
 	s.vecIndex.rebuild(s.entries)
 	s.graph.rebuild(s.entries)
+
+	// Initialize archive store in the same directory.
+	archivePath := filepath.Join(filepath.Dir(absPath), "archive.json")
+	archive, err := NewArchiveStore(archivePath)
+	if err != nil {
+		return nil, fmt.Errorf("memory_store: init archive: %w", err)
+	}
+	s.archive = archive
 
 	go s.persistLoop()
 	return s, nil
@@ -617,7 +627,7 @@ func (s *Store) RecallDynamic(query string, category Category, projectPath strin
 	return result
 }
 
-// Stop gracefully shuts down the persistence loop.
+// Stop gracefully shuts down the persistence loop and the archive store.
 func (s *Store) Stop() {
 	s.stopOnce.Do(func() {
 		s.mu.RLock()
@@ -632,7 +642,51 @@ func (s *Store) Stop() {
 		}
 
 		close(s.stopCh)
+
+		if s.archive != nil {
+			s.archive.Stop()
+		}
 	})
+}
+
+// Archive returns the ArchiveStore for direct access.
+func (s *Store) Archive() *ArchiveStore { return s.archive }
+
+// ListArchive returns archived entries filtered by category and keyword.
+func (s *Store) ListArchive(category Category, keyword string) []Entry {
+	if s.archive == nil {
+		return nil
+	}
+	return s.archive.List(category, keyword)
+}
+
+// RestoreFromArchive removes an entry from the archive and adds it back to
+// active memory with UpdatedAt=now and AccessCount=1. If active memory is
+// full, evictLRU runs first (which archives the lowest priority entry).
+func (s *Store) RestoreFromArchive(id string) error {
+	if s.archive == nil {
+		return fmt.Errorf("memory_store: archive not initialized")
+	}
+
+	entry, err := s.archive.Remove(id)
+	if err != nil {
+		return fmt.Errorf("memory_store: %w", err)
+	}
+
+	now := time.Now()
+	entry.UpdatedAt = now
+	entry.AccessCount = 1
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.entries = append(s.entries, *entry)
+	s.bm25.addEntry(*entry)
+	s.vecIndex.add(entry.ID, entry.Embedding)
+	s.evictLRU()
+	s.dirty = true
+	s.signalSave()
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -909,16 +963,57 @@ func (s *Store) GraphNeighbors(id string) map[string]float64 {
 }
 
 
+// PinEntry sets Pinned=true for the entry with the given ID.
+func (s *Store) PinEntry(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, e := range s.entries {
+		if e.ID == id {
+			s.entries[i].Pinned = true
+			s.entries[i].UpdatedAt = time.Now()
+			s.dirty = true
+			s.signalSave()
+			return nil
+		}
+	}
+	return fmt.Errorf("entry %q not found", id)
+}
+
+// UnpinEntry sets Pinned=false for the entry with the given ID.
+func (s *Store) UnpinEntry(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, e := range s.entries {
+		if e.ID == id {
+			s.entries[i].Pinned = false
+			s.entries[i].UpdatedAt = time.Now()
+			s.dirty = true
+			s.signalSave()
+			return nil
+		}
+	}
+	return fmt.Errorf("entry %q not found", id)
+}
+
+// ActiveCount returns the number of active entries in the store.
+func (s *Store) ActiveCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.entries)
+}
+
 func (s *Store) evictLRU() {
 	if len(s.entries) <= s.maxItems {
 		return
 	}
 
-	// Separate protected (self_identity) entries — they are never evicted.
+	// Separate protected (self_identity) and pinned entries — they are never evicted.
 	var protectedEntries []Entry
 	var evictable []Entry
 	for _, e := range s.entries {
-		if e.Category.IsProtected() {
+		if e.Category.IsProtected() || e.Pinned {
 			protectedEntries = append(protectedEntries, e)
 		} else {
 			evictable = append(evictable, e)
@@ -928,7 +1023,7 @@ func (s *Store) evictLRU() {
 	target := s.maxItems - len(protectedEntries)
 	if target < 0 {
 		// Protected entries alone exceed maxItems — nothing else can be kept.
-		fmt.Printf("[memory_store] WARNING: %d protected entries exceed maxItems (%d)\n", len(protectedEntries), s.maxItems)
+		log.Printf("[memory_store] WARNING: %d protected entries exceed maxItems (%d)", len(protectedEntries), s.maxItems)
 		target = 0
 	}
 	if len(evictable) <= target {
@@ -953,10 +1048,14 @@ func (s *Store) evictLRU() {
 		remove[indices[i]] = struct{}{}
 	}
 
+	// Collect evicted entries for archiving.
+	var evicted []Entry
 	kept := make([]Entry, 0, s.maxItems)
 	kept = append(kept, protectedEntries...)
 	for i, e := range evictable {
-		if _, ok := remove[i]; !ok {
+		if _, ok := remove[i]; ok {
+			evicted = append(evicted, e)
+		} else {
 			kept = append(kept, e)
 		}
 	}
@@ -964,6 +1063,11 @@ func (s *Store) evictLRU() {
 	s.bm25.rebuild(kept)
 	s.vecIndex.rebuild(kept)
 	s.graph.rebuild(kept)
+
+	// Archive evicted entries instead of discarding them.
+	if s.archive != nil && len(evicted) > 0 {
+		_ = s.archive.Add(evicted...)
+	}
 }
 
 func (s *Store) persistLoop() {

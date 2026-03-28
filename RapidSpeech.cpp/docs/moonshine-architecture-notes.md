@@ -29,12 +29,12 @@ model.encoder.groupnorm.weight      [288]
 model.encoder.groupnorm.bias        [288]
 model.encoder.layer_norm.weight     [288]            (final encoder norm)
 
-model.encoder.layers.{i}.input_layernorm.weight              [288]  (RMSNorm, no bias)
+model.encoder.layers.{i}.input_layernorm.weight              [288]  (LayerNorm, no bias)
 model.encoder.layers.{i}.self_attn.q_proj.weight             [288, 288]
 model.encoder.layers.{i}.self_attn.k_proj.weight             [288, 288]
 model.encoder.layers.{i}.self_attn.v_proj.weight             [288, 288]
 model.encoder.layers.{i}.self_attn.o_proj.weight             [288, 288]
-model.encoder.layers.{i}.post_attention_layernorm.weight     [288]  (RMSNorm)
+model.encoder.layers.{i}.post_attention_layernorm.weight     [288]  (LayerNorm)
 model.encoder.layers.{i}.mlp.fc1.weight                      [288, 1152]
 model.encoder.layers.{i}.mlp.fc1.bias                        [1152]
 model.encoder.layers.{i}.mlp.fc2.weight                      [1152, 288]
@@ -59,13 +59,18 @@ model.decoder.layers.{i}.mlp.fc2.bias                        [288]
 ```
 
 ### Key Architecture Details
-- Encoder: RMSNorm (no bias), separate Q/K/V, GELU FFN, no attention bias
-- Decoder: RMSNorm, separate Q/K/V, SiLU/SwiGLU FFN, causal self-attn
+- Encoder: LayerNorm (no bias), separate Q/K/V, GELU FFN, no attention bias
+- Decoder: LayerNorm (no bias), separate Q/K/V, SiLU/SwiGLU FFN, causal self-attn
 - Decoder uses SwiGLU: fc1 output is 2*intermediate, split into gate+value
-- RoPE: partial_rotary_factor=0.9, theta=10000
+- RoPE: partial_rotary_factor=0.9, theta=10000, interleaved mode (NOT split-half)
+  - HF rotate_half: x1=x[...,0::2], x2=x[...,1::2] → interleaved pairs
+  - ggml: mode=0 (default), NOT mode=2 (NeoX split-half)
 - No attention bias anywhere
 - Vocab: 32768, BOS=1, EOS=2
 - Tiny: dim=288, enc_depth=6, dec_depth=6, heads=8, head_dim=36
+- No lm_head weight — uses weight tying (embed_tokens = lm_head)
+- PCM input must be normalized to [-1, 1] (int16 / 32768.0)
+- HF processor (Wav2Vec2FeatureExtractor) does NOT normalize (do_normalize=False)
 
 ### ggml conv_1d Notes
 - `ggml_conv_1d(ctx, kernel, input, stride, padding, dilation)`
@@ -74,8 +79,33 @@ model.decoder.layers.{i}.mlp.fc2.bias                        [288]
 - output: 3D [OL, OC, N], needs reshape_2d to [OL, OC]
 - Bias add: bias [OC] needs reshape to [1, OC] for broadcasting with [OL, OC]
 
-### Known Issues from Previous Attempt
-- GroupNorm crash: `layer_norm(x[288,499], weight[288])` crashed silently
-  - Possibly ggml_norm on transposed tensor issue
-  - Try: use ggml_group_norm if available, or apply norm on [OL, dim] directly
-- Debug log patches made the file unmaintainable -> full rewrite needed
+### Bugs Fixed (verified against HF transformers)
+1. GroupNorm(1, dim): was using transpose→ggml_norm→transpose (per-timestep norm), fixed to ggml_group_norm(n_groups=1) (whole-plane norm)
+2. PCM normalization: load_wav_file was not dividing int16 by 32768.0
+3. Norm type: was using RMSNorm, fixed to LayerNorm (matching HF's nn.LayerNorm)
+4. RoPE mode: was using mode=2 (NeoX split-half), fixed to mode=0 (interleaved), matching HF's rotate_half
+5. SwiGLU gate/value order: HF does `hidden_states, gate = fc1.chunk(2)` then `silu(gate) * hidden_states`.
+   So first half of fc1 output = value (no activation), second half = gate (through silu).
+   Was incorrectly reversed (first half = gate). Fixed in both C++ and Python reference scripts.
+6. Python reference scripts RoPE: was using split-half (x[:dp], x[dp:]) instead of interleaved (x[0::2], x[1::2]).
+   Fixed to match HF's rotate_half. C++ was already correct (ggml mode=0).
+
+### Current Status
+- Encoder output matches HF to ~1e-3 precision
+- Bug 5 (SwiGLU gate/value order) fixed — was the root cause of decoder logit mismatch
+- Need to rebuild and verify decoder step 0 logits match HF (expected top1=450)
+- If still mismatched after SwiGLU fix, check: decoder norm type consistency, cross-attn RoPE (should NOT apply RoPE to cross-attn Q)
+
+### HF Official Transformers Implementation Reference
+- Source: github.com/huggingface/transformers/blob/main/src/transformers/models/moonshine/modeling_moonshine.py
+- MoonshineDecoderMLP.forward:
+  ```python
+  hidden_states = self.fc1(hidden_states)
+  hidden_states, gate = hidden_states.chunk(2, dim=-1)
+  hidden_states = self.activation_fn(gate) * hidden_states  # silu(second_half) * first_half
+  hidden_states = self.fc2(hidden_states)
+  ```
+- rotate_half is interleaved: x1 = x[..., 0::2], x2 = x[..., 1::2] → ggml mode=0
+- All norms are nn.LayerNorm(bias=False)
+- Cross-attention does NOT apply RoPE (only self-attention does)
+- Weight tying: proj_out.weight = model.decoder.embed_tokens.weight

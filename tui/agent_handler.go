@@ -273,6 +273,21 @@ func (h *TUIAgentHandler) buildSystemPrompt() string {
 		}
 	}
 
+	// 注入主动记忆指令 — 引导 Agent 在会话中主动保存非显而易见的技术发现
+	if h.memoryStore != nil {
+		prompt += `
+
+## 主动记忆
+当你在会话中发现以下类型的非显而易见信息时，应主动使用 memory(action=save) 保存：
+- 调试过程中发现的 workaround 或未文档化行为
+- 配置细节、环境特殊性
+- 用户项目的架构决策或约定
+- 重要的错误原因和解决方案
+
+保存时使用 category=project_knowledge 或 instruction，并添加 tag "proactive"。
+每次会话最多主动保存 5 条。保存后在回复中简要提示：💾 已主动记录: <摘要>`
+	}
+
 	return prompt
 }
 
@@ -376,8 +391,8 @@ func (h *TUIAgentHandler) buildBuiltinToolDefinitions() []map[string]interface{}
 			"updates": map[string]interface{}{"type": "object", "description": "要更新的字段"},
 		}, []string{"task_id", "updates"}),
 		// --- 记忆 ---
-		toolDef("memory", "记忆管理（save/list/search/delete）", map[string]interface{}{
-			"action":   map[string]interface{}{"type": "string", "description": "操作: save/list/search/delete"},
+		toolDef("memory", "记忆管理（save/list/search/delete/pin/unpin/list_archive/restore）", map[string]interface{}{
+			"action":   map[string]interface{}{"type": "string", "description": "操作: save/list/search/delete/pin/unpin/list_archive/restore"},
 			"content":  map[string]interface{}{"type": "string", "description": "记忆内容（save 时必填）"},
 			"category": map[string]interface{}{"type": "string", "description": "分类: user_fact/preference/project_knowledge/instruction"},
 			"tags":     map[string]interface{}{"type": "array", "description": "标签列表", "items": map[string]interface{}{"type": "string"}},

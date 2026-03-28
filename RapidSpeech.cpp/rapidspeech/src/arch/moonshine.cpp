@@ -16,13 +16,13 @@
 // Moonshine ASR — ggml native encoder-decoder transformer
 //
 // Architecture (arxiv 2410.15608, usefulsensors/moonshine-tiny):
-//   Audio -> Conv frontend -> Encoder (RMSNorm + RoPE + GELU FFN)
-//         -> Decoder (RMSNorm + RoPE + SwiGLU FFN + cross-attn)
+//   Audio -> Conv frontend -> Encoder (LayerNorm + RoPE + GELU FFN)
+//         -> Decoder (LayerNorm + RoPE + SwiGLU FFN + cross-attn)
 //         -> Token logits
 //
-// Encoder: RMSNorm, separate Q/K/V, GELU FFN, no attention bias
-// Decoder: RMSNorm, separate Q/K/V, SwiGLU FFN, causal self-attn
-// RoPE: partial_rotary_factor=0.9, theta=10000, NeoX-style (split-half)
+// Encoder: LayerNorm (no bias), separate Q/K/V, GELU FFN, no attention bias
+// Decoder: LayerNorm (no bias), separate Q/K/V, SwiGLU FFN, causal self-attn
+// RoPE: partial_rotary_factor=0.9, theta=10000, interleaved (mode=0)
 // ============================================================
 
 // ---- Norm helpers ----
@@ -43,17 +43,33 @@ static ggml_tensor* layer_norm(ggml_context* ctx, ggml_tensor* x,
     return x;
 }
 
-// GroupNorm(1, dim) = LayerNorm over the channel dimension.
-// Input x: [time, channels] from conv1d output.
-// ggml_norm normalizes over dim0, so we transpose to [channels, time],
-// apply norm (normalizes each time-step's channel vector), then transpose back.
+// GroupNorm(1, dim) — normalize over the entire [channels, time] plane.
+// PyTorch GroupNorm(1, C) on [B, C, T] computes a single mean/var across all C*T elements.
+// ggml_group_norm expects ne[2]=channels, normalizes over ne[0]*ne[1]*channels_per_group.
+// So we reshape x:[time, channels] -> [time, 1, channels], apply group_norm(n_groups=1),
+// then reshape back. This gives normalization over time*1*channels = entire plane.
 static ggml_tensor* group_norm_1(ggml_context* ctx, ggml_tensor* x,
                                   ggml_tensor* weight, ggml_tensor* bias) {
-    ggml_tensor* xt = ggml_cont(ctx, ggml_transpose(ctx, x));
-    xt = ggml_norm(ctx, xt, 1e-5f);
-    if (weight) xt = ggml_mul(ctx, xt, weight);
-    if (bias) xt = ggml_add(ctx, xt, bias);
-    return ggml_cont(ctx, ggml_transpose(ctx, xt));
+    int n_time = (int)x->ne[0];
+    int n_channels = (int)x->ne[1];
+
+    // Reshape to 3D: [time, 1, channels] so ggml_group_norm sees ne[2]=channels
+    ggml_tensor* x3 = ggml_reshape_3d(ctx, x, n_time, 1, n_channels);
+    x3 = ggml_group_norm(ctx, x3, 1, 1e-5f);
+
+    // Reshape back to 2D: [time, channels]
+    x3 = ggml_reshape_2d(ctx, x3, n_time, n_channels);
+
+    // Affine: weight [channels] and bias [channels] broadcast over time (dim0)
+    if (weight) {
+        ggml_tensor* w2 = ggml_reshape_2d(ctx, weight, 1, n_channels);
+        x3 = ggml_mul(ctx, x3, w2);
+    }
+    if (bias) {
+        ggml_tensor* b2 = ggml_reshape_2d(ctx, bias, 1, n_channels);
+        x3 = ggml_add(ctx, x3, b2);
+    }
+    return x3;
 }
 
 // ---- RoPE helper ----
@@ -63,9 +79,9 @@ static ggml_tensor* apply_rope(ggml_context* ctx, ggml_tensor* x,
                                 float rope_theta, float partial_rotary_factor = 0.9f) {
     int rotary_dim = (int)(head_dim * partial_rotary_factor);
     rotary_dim -= rotary_dim % 2;  // must be even
-    // mode=2: NeoX-style (split-half) RoPE, matching HF Moonshine's rotate_half
-    // HF rotate_half splits into (x[..., :d/2], x[..., d/2:]) which is GGML_ROPE_TYPE_NEOX
-    return ggml_rope_ext(ctx, x, pos, nullptr, rotary_dim, 2, 0,
+    // mode=0: standard interleaved RoPE (pairs are (x[0],x[1]), (x[2],x[3]), ...)
+    // This matches HF Moonshine's rotate_half which uses x[..., 0::2] and x[..., 1::2]
+    return ggml_rope_ext(ctx, x, pos, nullptr, rotary_dim, 0, 0,
                          rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 }
 
@@ -82,7 +98,7 @@ static ggml_tensor* conv_1d_f32(ggml_context* ctx, ggml_tensor* kernel,
     return result;
 }
 
-// ---- Scaled dot-product attention (F32) ----
+// ---- Scaled dot-product attention using ggml_flash_attn_ext ----
 // q: [head_dim, n_heads, seq_q]
 // k: [head_dim, n_heads, seq_k]
 // v: [head_dim, n_heads, seq_k]
@@ -94,25 +110,21 @@ static ggml_tensor* sdpa_attention(ggml_context* ctx,
                                     int head_dim, int n_heads,
                                     int seq_q, int seq_k) {
     float scale = 1.0f / sqrtf((float)head_dim);
-    q = ggml_scale(ctx, q, scale);
 
-    // Permute all to [head_dim, seq, n_heads] (swap dim1 and dim2)
+    // ggml_flash_attn_ext expects:
+    //   q: [head_dim, seq_q, n_heads]  (ne0=head_dim, ne1=seq_q, ne2=n_heads)
+    //   k: [head_dim, seq_k, n_heads]
+    //   v: [head_dim, seq_k, n_heads]  (NOT transposed)
+    // Our inputs are [head_dim, n_heads, seq], so permute dim1 and dim2.
     ggml_tensor* qp = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
     ggml_tensor* kp = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
     ggml_tensor* vp = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
 
-    // scores = mul_mat(kp, qp) -> [seq_k, seq_q, n_heads]
-    ggml_tensor* scores = ggml_mul_mat(ctx, kp, qp);
-    scores = ggml_soft_max(ctx, scores);
+    ggml_tensor* attn_out = ggml_flash_attn_ext(ctx, qp, kp, vp,
+                                                 nullptr, scale, 0.0f, 0.0f);
+    ggml_flash_attn_ext_set_prec(attn_out, GGML_PREC_F32);
 
-    // vp_t = permute(vp, 1,0,2,3) -> [seq_k, head_dim, n_heads]
-    ggml_tensor* vp_t = ggml_cont(ctx, ggml_permute(ctx, vp, 1, 0, 2, 3));
-
-    // attn_out = mul_mat(vp_t, scores) -> [head_dim, seq_q, n_heads]
-    ggml_tensor* attn_out = ggml_mul_mat(ctx, vp_t, scores);
-
-    // Permute back to [head_dim, n_heads, seq_q], reshape to [dim, seq_q]
-    attn_out = ggml_cont(ctx, ggml_permute(ctx, attn_out, 0, 2, 1, 3));
+    // Reshape from [head_dim, seq_q, n_heads] to [dim, seq_q]
     int dim = head_dim * n_heads;
     attn_out = ggml_reshape_2d(ctx, attn_out, dim, seq_q);
     return attn_out;
@@ -153,7 +165,7 @@ bool MoonshineModel::MapTensors(ggml_context* gguf_data) {
     weights_.frontend_groupnorm_weight = get("encoder.groupnorm.weight");
     weights_.frontend_groupnorm_bias   = get("encoder.groupnorm.bias");
 
-    // Encoder layers — separate Q/K/V, RMSNorm, GELU FFN
+    // Encoder layers — separate Q/K/V, LayerNorm, GELU FFN
     weights_.encoder_layers.resize(hparams_.encoder_depth);
     for (int i = 0; i < hparams_.encoder_depth; i++) {
         auto& layer = weights_.encoder_layers[i];
@@ -183,7 +195,7 @@ bool MoonshineModel::MapTensors(ggml_context* gguf_data) {
     weights_.encoder_final_norm_weight = get("encoder.layer_norm.weight");
     weights_.encoder_final_norm_bias   = nullptr;
 
-    // Decoder layers — separate Q/K/V, RMSNorm, SwiGLU FFN
+    // Decoder layers — separate Q/K/V, LayerNorm, SwiGLU FFN
     weights_.decoder_layers.resize(hparams_.decoder_depth);
     for (int i = 0; i < hparams_.decoder_depth; i++) {
         auto& layer = weights_.decoder_layers[i];
@@ -371,9 +383,17 @@ ggml_tensor* MoonshineModel::BuildEncoder(ggml_context* ctx0,
     x = add_bias(x, weights_.frontend_conv3_bias);
     x = ggml_gelu(ctx0, x);
 
+    // Debug: mark pre-transpose output for readback
+    ggml_set_name(x, "frontend_pre_transpose");
+    ggml_set_output(x);
+
     // Transpose to [dim, n_frames] for transformer (ggml matmul convention)
     int n_frames = (int)x->ne[0];
     x = ggml_cont(ctx0, ggml_transpose(ctx0, x));
+
+    // Debug: mark post-transpose output for readback
+    ggml_set_name(x, "frontend_post_transpose");
+    ggml_set_output(x);
 
     // Create position tensor for encoder RoPE: [0, 1, 2, ..., n_frames-1]
     ggml_tensor* enc_positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_frames);
@@ -423,7 +443,7 @@ ggml_tensor* MoonshineModel::BuildEncoder(ggml_context* ctx0,
         x = ggml_add(ctx0, residual, x);
     }
 
-    // Final encoder norm
+    // Final encoder norm (LayerNorm)
     x = layer_norm(ctx0, x, weights_.encoder_final_norm_weight);
     return x;
 }
@@ -483,17 +503,25 @@ bool MoonshineModel::Encode(const std::vector<float>& input_frames,
         return false;
     }
 
-    // Debug: read conv3 output
+    // Debug: read frontend intermediate values
     {
-        ggml_tensor* c3 = ggml_get_tensor(ctx0, "conv3_out");
-        if (c3) {
-            int c3_n = (int)ggml_nelements(c3);
-            std::vector<float> c3_data(std::min(c3_n, 20));
-            ggml_backend_tensor_get(c3, c3_data.data(), 0, c3_data.size() * sizeof(float));
-            RS_LOG_INFO("Moonshine: conv3_out ne=[%d,%d] first10 = %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f",
-                        (int)c3->ne[0], (int)c3->ne[1],
-                        c3_data[0], c3_data[1], c3_data[2], c3_data[3], c3_data[4],
-                        c3_data[5], c3_data[6], c3_data[7], c3_data[8], c3_data[9]);
+        ggml_tensor* pre = ggml_get_tensor(ctx0, "frontend_pre_transpose");
+        if (pre) {
+            int nf = (int)pre->ne[0];
+            int nd = (int)pre->ne[1];
+            std::vector<float> all(nf * nd);
+            ggml_backend_tensor_get(pre, all.data(), 0, all.size() * sizeof(float));
+            RS_LOG_INFO("Moonshine: pre_transpose ne=[%d,%d] frame0_ch0-4 = %.6f %.6f %.6f %.6f %.6f",
+                        nf, nd,
+                        all[0], all[nf], all[2*nf], all[3*nf], all[4*nf]);
+        }
+        ggml_tensor* post = ggml_get_tensor(ctx0, "frontend_post_transpose");
+        if (post) {
+            std::vector<float> first10(10);
+            ggml_backend_tensor_get(post, first10.data(), 0, 10 * sizeof(float));
+            RS_LOG_INFO("Moonshine: post_transpose ne=[%d,%d] frame0_first5 = %.6f %.6f %.6f %.6f %.6f",
+                        (int)post->ne[0], (int)post->ne[1],
+                        first10[0], first10[1], first10[2], first10[3], first10[4]);
         }
     }
 
@@ -503,6 +531,19 @@ bool MoonshineModel::Encode(const std::vector<float>& input_frames,
     ggml_backend_tensor_get(enc_out, ms.encoder_out.data(), 0,
                             ms.encoder_out.size() * sizeof(float));
     ms.encoder_frames = enc_frames;
+
+    // Debug: print first few encoder output values for comparison with Python
+    if (enc_frames > 0 && enc_dim >= 5) {
+        RS_LOG_INFO("Moonshine: enc_out[0,:5] = %.6f %.6f %.6f %.6f %.6f",
+                    ms.encoder_out[0], ms.encoder_out[1], ms.encoder_out[2],
+                    ms.encoder_out[3], ms.encoder_out[4]);
+        if (enc_frames > 1) {
+            RS_LOG_INFO("Moonshine: enc_out[1,:5] = %.6f %.6f %.6f %.6f %.6f",
+                        ms.encoder_out[enc_dim], ms.encoder_out[enc_dim+1],
+                        ms.encoder_out[enc_dim+2], ms.encoder_out[enc_dim+3],
+                        ms.encoder_out[enc_dim+4]);
+        }
+    }
 
     ggml_free(ctx0);
     RS_LOG_INFO("Moonshine: encoded %d samples -> %d frames", n_samples, enc_frames);
@@ -651,11 +692,12 @@ bool MoonshineModel::ComputeCrossKV(MoonshineState& ms, ggml_backend_sched_t sch
 // Single decoder step with pre-allocated KV cache
 //
 // Decoder uses:
-//   - RMSNorm (not LayerNorm)
-//   - SwiGLU FFN: fc1 outputs 2*intermediate, split into gate+value
-//     gate = silu(first_half), output = gate * second_half, then fc2.
-//   - Causal self-attention with KV cache
-//   - Cross-attention from persistent cache
+//   - LayerNorm (no bias), matching HF nn.LayerNorm(bias=False)
+//   - SwiGLU FFN: fc1 outputs 2*intermediate, split into value+gate
+//     HF: hidden_states, gate = chunk(2) → silu(gate) * hidden_states
+//     So: first half = value (no activation), second half = gate (silu)
+//   - Causal self-attention with KV cache (RoPE on self-attn only)
+//   - Cross-attention from persistent cache (no RoPE)
 // ============================================================
 
 bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
@@ -689,6 +731,45 @@ bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
     std::vector<ggml_tensor*> new_self_k(n_layers);
     std::vector<ggml_tensor*> new_self_v(n_layers);
 
+    // Create input tensors for cached K/V (step > 0)
+    // These will be filled with data from the persistent cache before compute.
+    std::vector<ggml_tensor*> cached_k_inputs(n_layers, nullptr);
+    std::vector<ggml_tensor*> cached_v_inputs(n_layers, nullptr);
+    if (step > 0) {
+        for (int l = 0; l < n_layers; l++) {
+            char name[64];
+            snprintf(name, sizeof(name), "cached_k_%d", l);
+            cached_k_inputs[l] = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32,
+                                                      head_dim, n_heads, step);
+            ggml_set_name(cached_k_inputs[l], name);
+            ggml_set_input(cached_k_inputs[l]);
+
+            snprintf(name, sizeof(name), "cached_v_%d", l);
+            cached_v_inputs[l] = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32,
+                                                      head_dim, n_heads, step);
+            ggml_set_name(cached_v_inputs[l], name);
+            ggml_set_input(cached_v_inputs[l]);
+        }
+    }
+
+    // Create input tensors for cross K/V (same for all steps, from persistent cache)
+    std::vector<ggml_tensor*> cross_k_inputs(n_layers);
+    std::vector<ggml_tensor*> cross_v_inputs(n_layers);
+    for (int l = 0; l < n_layers; l++) {
+        char name[64];
+        snprintf(name, sizeof(name), "cross_k_%d", l);
+        cross_k_inputs[l] = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32,
+                                                 head_dim, n_heads, enc_frames);
+        ggml_set_name(cross_k_inputs[l], name);
+        ggml_set_input(cross_k_inputs[l]);
+
+        snprintf(name, sizeof(name), "cross_v_%d", l);
+        cross_v_inputs[l] = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32,
+                                                 head_dim, n_heads, enc_frames);
+        ggml_set_name(cross_v_inputs[l], name);
+        ggml_set_input(cross_v_inputs[l]);
+    }
+
     for (int l = 0; l < n_layers; l++) {
         auto& layer = weights_.decoder_layers[l];
 
@@ -720,22 +801,11 @@ bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
         new_self_v[l] = v_new;
 
         // Build full K/V for attention.
-        // Cache layout: [head_dim, n_heads, max_seq].
-        // k_new/v_new: [head_dim, n_heads, 1].
-        // Concat on dim2 (the seq dim) gives [head_dim, n_heads, step+1].
         ggml_tensor* k_full;
         ggml_tensor* v_full;
         if (step > 0) {
-            size_t nb1 = head_dim * sizeof(float);
-            size_t nb2 = head_dim * n_heads * sizeof(float);
-            ggml_tensor* k_cached = ggml_view_3d(ctx0, ms.dec_cache.self_k[l],
-                                                  head_dim, n_heads, step,
-                                                  nb1, nb2, 0);
-            ggml_tensor* v_cached = ggml_view_3d(ctx0, ms.dec_cache.self_v[l],
-                                                  head_dim, n_heads, step,
-                                                  nb1, nb2, 0);
-            k_full = ggml_concat(ctx0, k_cached, k_new, 2);
-            v_full = ggml_concat(ctx0, v_cached, v_new, 2);
+            k_full = ggml_concat(ctx0, cached_k_inputs[l], k_new, 2);
+            v_full = ggml_concat(ctx0, cached_v_inputs[l], v_new, 2);
         } else {
             k_full = k_new;
             v_full = v_new;
@@ -756,15 +826,9 @@ bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
         ggml_tensor* cq = ggml_mul_mat(ctx0, layer.cross_attn_q_weight, x);
         cq = ggml_reshape_3d(ctx0, cq, head_dim, n_heads, 1);
 
-        // Cross K/V from cache: [head_dim, n_heads, enc_frames]
-        size_t cnb1 = head_dim * sizeof(float);
-        size_t cnb2 = head_dim * n_heads * sizeof(float);
-        ggml_tensor* ck = ggml_view_3d(ctx0, ms.dec_cache.cross_k[l],
-                                        head_dim, n_heads, enc_frames,
-                                        cnb1, cnb2, 0);
-        ggml_tensor* cv = ggml_view_3d(ctx0, ms.dec_cache.cross_v[l],
-                                        head_dim, n_heads, enc_frames,
-                                        cnb1, cnb2, 0);
+        // Cross K/V from input tensors (filled from persistent cache before compute)
+        ggml_tensor* ck = cross_k_inputs[l];
+        ggml_tensor* cv = cross_v_inputs[l];
 
         // sdpa_attention expects [head_dim, n_heads, seq] — matches cache layout
         ggml_tensor* cross_attn = sdpa_attention(ctx0, cq, ck, cv,
@@ -774,8 +838,8 @@ bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
         x = ggml_add(ctx0, residual, cross_attn);
 
         // --- FFN: LayerNorm + SwiGLU ---
-        // fc1 outputs [2*intermediate, 1]. Split into gate and value halves.
-        // HF Moonshine: gate = first_half, value = second_half
+        // fc1 outputs [2*intermediate, 1]. Split into value and gate halves.
+        // HF: hidden_states, gate = chunk(2) → silu(gate) * hidden_states
         // output = silu(gate) * value, then fc2.
         residual = x;
         x = layer_norm(ctx0, x, layer.ff_norm_weight);
@@ -791,12 +855,13 @@ bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
         int intermediate_2x = (int)fc1_out->ne[0];
         int intermediate = intermediate_2x / 2;
 
-        // SwiGLU: first half = gate, second half = value (matching HF order)
-        ggml_tensor* gate_part = ggml_view_1d(ctx0, fc1_out, intermediate, 0);
-        gate_part = ggml_reshape_2d(ctx0, gate_part, intermediate, 1);
-        ggml_tensor* value_part = ggml_view_1d(ctx0, fc1_out, intermediate,
-                                                intermediate * sizeof(float));
+        // SwiGLU: HF does hidden_states, gate = chunk(2) → silu(gate) * hidden_states
+        // So: first half = value (no activation), second half = gate (through silu)
+        ggml_tensor* value_part = ggml_view_1d(ctx0, fc1_out, intermediate, 0);
         value_part = ggml_reshape_2d(ctx0, value_part, intermediate, 1);
+        ggml_tensor* gate_part = ggml_view_1d(ctx0, fc1_out, intermediate,
+                                               intermediate * sizeof(float));
+        gate_part = ggml_reshape_2d(ctx0, gate_part, intermediate, 1);
 
         gate_part = ggml_silu(ctx0, gate_part);
         x = ggml_mul(ctx0, gate_part, value_part);
@@ -810,7 +875,7 @@ bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
         x = ggml_add(ctx0, residual, x);
     }
 
-    // Final norm + LM head
+    // Final norm + LM head (LayerNorm)
     x = layer_norm(ctx0, x, weights_.decoder_final_norm_weight);
     ggml_tensor* lm_weight = weights_.lm_head_weight ? weights_.lm_head_weight
                                                       : weights_.token_embedding;
@@ -836,6 +901,32 @@ bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
     ggml_backend_tensor_set(tok_idx, &cur_token, 0, sizeof(int32_t));
     int32_t step_i32 = (int32_t)step;
     ggml_backend_tensor_set(rope_pos, &step_i32, 0, sizeof(int32_t));
+
+    // Fill cached K/V input tensors from persistent cache
+    if (step > 0) {
+        size_t cached_bytes = (size_t)step * kv_entry_floats * sizeof(float);
+        std::vector<float> kv_buf(step * kv_entry_floats);
+        for (int l = 0; l < n_layers; l++) {
+            ggml_backend_tensor_get(ms.dec_cache.self_k[l], kv_buf.data(), 0, cached_bytes);
+            ggml_backend_tensor_set(cached_k_inputs[l], kv_buf.data(), 0, cached_bytes);
+
+            ggml_backend_tensor_get(ms.dec_cache.self_v[l], kv_buf.data(), 0, cached_bytes);
+            ggml_backend_tensor_set(cached_v_inputs[l], kv_buf.data(), 0, cached_bytes);
+        }
+    }
+
+    // Fill cross K/V input tensors from persistent cache
+    {
+        size_t cross_bytes = (size_t)enc_frames * kv_entry_floats * sizeof(float);
+        std::vector<float> cross_buf(enc_frames * kv_entry_floats);
+        for (int l = 0; l < n_layers; l++) {
+            ggml_backend_tensor_get(ms.dec_cache.cross_k[l], cross_buf.data(), 0, cross_bytes);
+            ggml_backend_tensor_set(cross_k_inputs[l], cross_buf.data(), 0, cross_bytes);
+
+            ggml_backend_tensor_get(ms.dec_cache.cross_v[l], cross_buf.data(), 0, cross_bytes);
+            ggml_backend_tensor_set(cross_v_inputs[l], cross_buf.data(), 0, cross_bytes);
+        }
+    }
 
     if (ggml_backend_sched_graph_compute(sched, gf) != GGML_STATUS_SUCCESS) {
         RS_LOG_ERR("Moonshine: decoder step %d compute failed", step);
@@ -1015,6 +1106,19 @@ int MoonshineModel::DecodeWithTemperature(MoonshineState& ms,
     for (int step = 0; step < max_len; step++) {
         int cur_token = ms.tokens.back();
         if (!RunDecoderStep(ms, step, cur_token, sched, logits)) return -1;
+
+        // Debug: print raw logits top5 at each step before any processing
+        {
+            std::vector<std::pair<float, int>> top;
+            for (int i = 0; i < (int)logits.size(); i++) top.push_back({logits[i], i});
+            std::partial_sort(top.begin(), top.begin() + 5, top.end(),
+                              [](auto& a, auto& b) { return a.first > b.first; });
+            RS_LOG_INFO("Moonshine: step%d tok=%d raw top5: [%d]=%.3f [%d]=%.3f [%d]=%.3f [%d]=%.3f [%d]=%.3f",
+                        step, cur_token,
+                        top[0].second, top[0].first, top[1].second, top[1].first,
+                        top[2].second, top[2].first, top[3].second, top[3].first,
+                        top[4].second, top[4].first);
+        }
 
         // Logit processing pipeline
         ApplySuppressTokens(logits, gen_config.suppress_tokens);

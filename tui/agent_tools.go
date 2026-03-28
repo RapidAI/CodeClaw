@@ -639,7 +639,11 @@ func (h *TUIAgentHandler) toolMemory(args map[string]interface{}) string {
 		}
 		var sb strings.Builder
 		for _, e := range entries {
-			sb.WriteString(fmt.Sprintf("[%s] %s: %s (tags: %s)\n", e.ID, e.Category, scheduler.TruncateStr(e.Content, 80), strings.Join(e.Tags, ",")))
+			prefix := ""
+			if e.Pinned {
+				prefix = "📌 "
+			}
+			sb.WriteString(fmt.Sprintf("%s[%s] %s: %s (tags: %s)\n", prefix, e.ID, e.Category, scheduler.TruncateStr(e.Content, 80), strings.Join(e.Tags, ",")))
 		}
 		return sb.String()
 	case "search":
@@ -651,7 +655,11 @@ func (h *TUIAgentHandler) toolMemory(args map[string]interface{}) string {
 		}
 		var sb strings.Builder
 		for _, e := range entries {
-			sb.WriteString(fmt.Sprintf("[%s] %s: %s\n", e.ID, e.Category, scheduler.TruncateStr(e.Content, 100)))
+			prefix := ""
+			if e.Pinned {
+				prefix = "📌 "
+			}
+			sb.WriteString(fmt.Sprintf("%s[%s] %s: %s\n", prefix, e.ID, e.Category, scheduler.TruncateStr(e.Content, 100)))
 		}
 		return sb.String()
 	case "delete":
@@ -663,8 +671,47 @@ func (h *TUIAgentHandler) toolMemory(args map[string]interface{}) string {
 			return fmt.Sprintf("删除失败: %v", err)
 		}
 		return "记忆已删除"
+	case "pin":
+		id := stringArg(args, "id")
+		if id == "" {
+			return "错误: 缺少 id"
+		}
+		if err := h.memoryStore.PinEntry(id); err != nil {
+			return fmt.Sprintf("钉住失败: %v", err)
+		}
+		return fmt.Sprintf("📌 已钉住记忆 %s", id)
+	case "unpin":
+		id := stringArg(args, "id")
+		if id == "" {
+			return "错误: 缺少 id"
+		}
+		if err := h.memoryStore.UnpinEntry(id); err != nil {
+			return fmt.Sprintf("取消钉住失败: %v", err)
+		}
+		return fmt.Sprintf("已取消钉住记忆 %s", id)
+	case "list_archive":
+		cat := memory.Category(stringArg(args, "category"))
+		keyword := stringArg(args, "keyword")
+		entries := h.memoryStore.ListArchive(cat, keyword)
+		if len(entries) == 0 {
+			return "无归档记忆"
+		}
+		var sb strings.Builder
+		for _, e := range entries {
+			sb.WriteString(fmt.Sprintf("[%s] %s: %s (tags: %s)\n", e.ID, e.Category, scheduler.TruncateStr(e.Content, 80), strings.Join(e.Tags, ",")))
+		}
+		return sb.String()
+	case "restore":
+		id := stringArg(args, "id")
+		if id == "" {
+			return "错误: 缺少 id"
+		}
+		if err := h.memoryStore.RestoreFromArchive(id); err != nil {
+			return fmt.Sprintf("恢复失败: %v", err)
+		}
+		return fmt.Sprintf("已从归档恢复记忆 %s", id)
 	default:
-		return "错误: action 必须是 save/list/search/delete"
+		return "错误: action 必须是 save/list/search/delete/pin/unpin/list_archive/restore"
 	}
 }
 

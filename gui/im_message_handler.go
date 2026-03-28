@@ -243,6 +243,18 @@ func (cm *conversationMemory) clear(userID string) {
 	delete(sh.sessions, userID)
 }
 
+// lastAccessTime returns the last access time for a user's conversation session.
+// Returns zero time if no session exists.
+func (cm *conversationMemory) lastAccessTime(userID string) time.Time {
+	sh := cm.shard(userID)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	if s, ok := sh.sessions[userID]; ok {
+		return s.lastAccess
+	}
+	return time.Time{}
+}
+
 func estimateTokens(entries []conversationEntry) int {
 	total := 0
 	for _, e := range entries {
@@ -790,6 +802,10 @@ type IMMessageHandler struct {
 	// lastScreenshotAt records the time of the last successful screenshot
 	// to enforce a cooldown period and prevent accidental rapid-fire captures.
 	lastScreenshotAt time.Time
+
+	// topicDetector automatically detects topic switches and clears stale
+	// conversation context so users don't need to manually /new.
+	topicDetector *topicSwitchDetector
 }
 
 // NewIMMessageHandler creates a new handler.
@@ -834,6 +850,12 @@ func NewIMMessageHandler(app *App, manager *RemoteSessionManager) *IMMessageHand
 	// Register browser automation tools (CDP-based).
 	registerBrowserTools(h.registry)
 	h.toolBuilder = NewDynamicToolBuilder(h.registry)
+
+	// Initialize automatic topic switch detector.
+	h.topicDetector = newTopicSwitchDetector(func() (*http.Client, MaclawLLMConfig) {
+		return h.client, h.app.GetMaclawLLMConfig()
+	})
+
 	return h
 }
 
@@ -1102,6 +1124,26 @@ func (h *IMMessageHandler) HandleIMMessageWithProgressAndStream(msg IMUserMessag
 	httpClient := h.client
 	if msg.IsBackground {
 		httpClient = h.taskClient
+	}
+
+	// --- Automatic topic switch detection ---
+	// For interactive (non-background) messages, detect if the user has
+	// switched topics and auto-clear stale conversation context.
+	if !msg.IsBackground && h.topicDetector != nil {
+		if h.topicDetector.detect(trimmed, msg.UserID, h.memory) == TopicNew {
+			// Archive a one-line summary before clearing.
+			if h.memoryStore != nil {
+				entries := h.memory.load(msg.UserID)
+				if summary := buildQuickSummary(entries); summary != "" {
+					_ = h.memoryStore.Save(MemoryEntry{
+						Content:  summary,
+						Category: "conversation_summary",
+					})
+				}
+			}
+			h.memory.clear(msg.UserID)
+			log.Printf("[TopicDetector] auto-cleared context for user %s", msg.UserID)
+		}
 	}
 
 	// --- Background routing: delegate to BackgroundLoopManager ---
@@ -2192,6 +2234,29 @@ func buildUserContent(userText string, attachments []MessageAttachment, protocol
 					fileDescriptions = append(fileDescriptions, fmt.Sprintf("[用户发送了图片 %s，已保存到 %s，当前模型不支持图片理解]", displayName, path))
 				}
 			}
+		} else if att.Type == "voice" {
+			// Voice attachment: convert to WAV for ASR, then save locally.
+			decoded, decErr := base64.StdEncoding.DecodeString(att.Data)
+			if decErr != nil {
+				log.Printf("[IM] decode voice attachment %q failed: %v", att.FileName, decErr)
+				fileDescriptions = append(fileDescriptions, fmt.Sprintf("[语音: %s (解码失败: %v)]", att.FileName, decErr))
+				continue
+			}
+			wavData, wavName, _ := convertVoiceToWAV(decoded, att.FileName)
+			wavAtt := &MessageAttachment{
+				Type:     "voice",
+				FileName: wavName,
+				MimeType: "audio/wav",
+				Data:     base64.StdEncoding.EncodeToString(wavData),
+				Size:     int64(len(wavData)),
+			}
+			path, err := saveAttachmentToLocal(wavAtt)
+			if err != nil {
+				log.Printf("[IM] save voice %q failed: %v", att.FileName, err)
+				fileDescriptions = append(fileDescriptions, fmt.Sprintf("[语音: %s (保存失败: %v)]", att.FileName, err))
+			} else {
+				fileDescriptions = append(fileDescriptions, fmt.Sprintf("[语音: %s → 已转换为WAV并保存到 %s，请使用ASR工具进行语音识别]", att.FileName, path))
+			}
 		} else {
 			// Save non-image files to local disk so the agent can operate on them.
 			path, err := saveAttachmentToLocal(att)
@@ -2722,6 +2787,18 @@ func (h *IMMessageHandler) buildSystemPromptWithMemory(userMessage string, isFir
 	// section so it doesn't get truncated.
 	b.WriteString(h.buildNicknameInstruction())
 	h.appendMemorySection(&b, true)
+	// Inject proactive memory instruction — guides the Agent to save
+	// non-obvious technical discoveries during the session.
+	b.WriteString(`
+## 主动记忆
+当你在会话中发现以下类型的非显而易见信息时，应主动使用 memory(action=save) 保存：
+- 调试过程中发现的 workaround 或未文档化行为
+- 配置细节、环境特殊性
+- 用户项目的架构决策或约定
+- 重要的错误原因和解决方案
+
+保存时使用 category=project_knowledge 或 instruction，并添加 tag "proactive"。
+每次会话最多主动保存 5 条。保存后在回复中简要提示：💾 已主动记录: <摘要>`)
 	return b.String()
 }
 

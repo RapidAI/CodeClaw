@@ -67,7 +67,7 @@ bool load_wav_file(const char* filename, std::vector<float>& data, int* sample_r
     for (int i = 0; i < num_samples; ++i) {
         int16_t sample = 0;
         file.read(reinterpret_cast<char*>(&sample), sizeof(int16_t));
-        data[i] = static_cast<float>(sample);
+        data[i] = static_cast<float>(sample) / 32768.0f;
 
         // Correctly skip the remaining channels for multi-channel files
         if (num_channels > 1) {

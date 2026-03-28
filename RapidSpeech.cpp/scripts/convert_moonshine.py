@@ -166,7 +166,15 @@ def main():
     writer.add_int32("moonshine.sample_rate", 16000)
     writer.add_bool("moonshine.is_streaming", args.streaming)
     writer.add_float32("moonshine.rope_theta", 10000.0)
-    writer.add_float32("moonshine.partial_rotary_factor", 0.9)
+
+    # Read partial_rotary_factor from config.json if available
+    prf = 0.9  # default for moonshine-tiny
+    config_path = model_dir / "config.json"
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            cfg_data = json.load(f)
+        prf = cfg_data.get("partial_rotary_factor", 0.9)
+    writer.add_float32("moonshine.partial_rotary_factor", prf)
 
     # Load and write vocabulary
     tokens = load_tokenizer(model_dir)

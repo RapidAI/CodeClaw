@@ -4,25 +4,33 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/RapidAI/CodeClaw/corelib/memory"
 )
 
 // ConversationArchiver extracts key information from expiring conversations
 // and stores them as long-term memories via MemoryStore.
 type ConversationArchiver struct {
-	memoryStore *MemoryStore
-	app         *App
+	memoryStore          *MemoryStore
+	app                  *App
+	knowledgeExtractor   *memory.KnowledgeExtractor
 }
 
 // NewConversationArchiver creates a ConversationArchiver that uses the given
 // MemoryStore for persistence and the App to access LLM configuration.
 func NewConversationArchiver(memoryStore *MemoryStore, app *App) *ConversationArchiver {
-	return &ConversationArchiver{
+	ca := &ConversationArchiver{
 		memoryStore: memoryStore,
 		app:         app,
 	}
+	// Initialize KnowledgeExtractor with a GUI LLM adapter.
+	llmAdapter := &archiverLLMCaller{app: app}
+	ca.knowledgeExtractor = memory.NewKnowledgeExtractor(memoryStore, llmAdapter)
+	return ca
 }
 
 // Archive analyses the conversation entries for a user and stores a summary
@@ -82,7 +90,30 @@ func (a *ConversationArchiver) Archive(userID string, entries []conversationEntr
 			now.Format("2006-01-02"),
 		},
 	}
-	return a.memoryStore.Save(entry)
+	if err := a.memoryStore.Save(entry); err != nil {
+		return err
+	}
+
+	// Post-session knowledge extraction: convert entries to ConversationMessages
+	// and run the KnowledgeExtractor. Errors are logged but do not fail Archive.
+	if a.knowledgeExtractor != nil {
+		var msgs []memory.ConversationMessage
+		for _, e := range entries {
+			contentStr := formatEntryContent(e.Content)
+			if contentStr == "" {
+				continue
+			}
+			msgs = append(msgs, memory.ConversationMessage{
+				Role:    e.Role,
+				Content: contentStr,
+			})
+		}
+		if err := a.knowledgeExtractor.Extract(userID, msgs); err != nil {
+			log.Printf("[conversation_archiver] knowledge extraction error: %v", err)
+		}
+	}
+
+	return nil
 }
 
 // callLLMForSummary sends the conversation text to the configured LLM and
@@ -119,4 +150,28 @@ func formatEntryContent(content interface{}) string {
 		}
 		return string(data)
 	}
+}
+
+// archiverLLMCaller adapts the GUI's LLM calling to memory.LLMChatCaller.
+type archiverLLMCaller struct {
+	app *App
+}
+
+func (c *archiverLLMCaller) ChatCall(messages []map[string]string) (string, error) {
+	cfg := c.app.GetMaclawLLMConfig()
+	// Convert []map[string]string to []interface{} for doSimpleLLMRequest.
+	ifaces := make([]interface{}, len(messages))
+	for i, m := range messages {
+		ifaces[i] = m
+	}
+	client := &http.Client{Timeout: 60 * time.Second}
+	result, err := doSimpleLLMRequest(context.Background(), cfg, ifaces, client, 60*time.Second)
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
+}
+
+func (c *archiverLLMCaller) IsConfigured() bool {
+	return c.app.isMaclawLLMConfigured()
 }

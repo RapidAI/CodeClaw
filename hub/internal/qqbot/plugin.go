@@ -1236,7 +1236,9 @@ func qqContentTypeToAttType(ct string) string {
 		return "image"
 	case strings.HasPrefix(ct, "video/"):
 		return "video"
-	case ct == "voice" || strings.HasPrefix(ct, "audio/"):
+	case ct == "voice" || ct == "audio/silk" || ct == "audio/amr":
+		return "voice"
+	case strings.HasPrefix(ct, "audio/"):
 		return "audio"
 	default:
 		return "file"

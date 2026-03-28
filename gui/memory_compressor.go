@@ -102,6 +102,9 @@ func (mc *MemoryCompressor) Compress(ctx context.Context) (*CompressResult, erro
 		mc.store.RLock()
 		var candidates []MemoryEntry
 		for _, e := range mc.store.Entries() {
+			if e.Pinned {
+				continue
+			}
 			if len([]rune(e.Content)) >= mc.minContentLen {
 				candidates = append(candidates, e)
 			}
@@ -171,11 +174,11 @@ func (mc *MemoryCompressor) dedup() int {
 	remove := make(map[int]bool)
 
 	for i := 0; i < n; i++ {
-		if remove[i] {
+		if remove[i] || entries[i].Pinned {
 			continue
 		}
 		for j := i + 1; j < n; j++ {
-			if remove[j] {
+			if remove[j] || entries[j].Pinned {
 				continue
 			}
 			if !mc.isDuplicateLower(entries[i], entries[j], lower[i], lower[j]) {
@@ -300,7 +303,7 @@ func (mc *MemoryCompressor) mergeSemanticDuplicates(ctx context.Context) (int, e
 		mc.store.RLock()
 		var entries []MemoryEntry
 		for _, e := range mc.store.Entries() {
-			if e.Category == cat {
+			if e.Category == cat && !e.Pinned {
 				entries = append(entries, e)
 			}
 		}

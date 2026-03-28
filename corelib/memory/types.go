@@ -84,6 +84,8 @@ type Entry struct {
 	Status Status `json:"status,omitempty"`
 	// --- F7: Cross-project scope ---
 	Scope Scope `json:"scope,omitempty"`
+	// --- Pin mechanism ---
+	Pinned bool `json:"pinned,omitempty"`
 }
 
 // IsActive returns true if the entry participates in normal recall.
@@ -117,4 +119,13 @@ type CompressorStatus struct {
 	LastRun    string          `json:"last_run,omitempty"`
 	LastResult *CompressResult `json:"last_result,omitempty"`
 	LastError  string          `json:"last_error,omitempty"`
+}
+
+// GCResult records the outcome of an intelligent GC cycle.
+type GCResult struct {
+	ArchivedCount int `json:"archived_count"`
+	RevivedCount  int `json:"revived_count"`
+	ActiveBefore  int `json:"active_before"`
+	ActiveAfter   int `json:"active_after"`
+	SkippedPinned int `json:"skipped_pinned"`
 }
