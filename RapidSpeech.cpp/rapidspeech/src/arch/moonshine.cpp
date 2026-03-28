@@ -792,13 +792,17 @@ bool MoonshineModel::RunDecoderStep(MoonshineState& ms, int step, int cur_token,
 
         // Mark new k/v for readback BEFORE any permute.
         // k_new/v_new are [head_dim, n_heads, 1] = kv_entry_floats elements.
+        // Use ggml_cont to ensure we get a separate copy for readback,
+        // since reshape shares memory and flash_attn may permute the data.
         char name[64];
+        ggml_tensor* k_save = ggml_cont(ctx0, k_new);
+        ggml_tensor* v_save = ggml_cont(ctx0, v_new);
         snprintf(name, sizeof(name), "new_sk_%d", l);
-        ggml_set_name(k_new, name); ggml_set_output(k_new);
+        ggml_set_name(k_save, name); ggml_set_output(k_save);
         snprintf(name, sizeof(name), "new_sv_%d", l);
-        ggml_set_name(v_new, name); ggml_set_output(v_new);
-        new_self_k[l] = k_new;
-        new_self_v[l] = v_new;
+        ggml_set_name(v_save, name); ggml_set_output(v_save);
+        new_self_k[l] = k_save;
+        new_self_v[l] = v_save;
 
         // Build full K/V for attention.
         ggml_tensor* k_full;
@@ -1234,8 +1238,13 @@ std::string MoonshineModel::GetTranscription(RSState& state) {
                 tok.replace(pos, sp.size(), " ");
                 pos += 1;
             }
-            // Skip byte tokens like <0xNN>
+            // Decode byte tokens like <0xNN> to actual bytes
             if (tok.size() >= 6 && tok[0] == '<' && tok[1] == '0' && tok[2] == 'x') {
+                // Parse hex value from <0xNN>
+                unsigned int byte_val = 0;
+                if (sscanf(tok.c_str(), "<0x%x>", &byte_val) == 1 && byte_val <= 0xFF) {
+                    oss << (char)(unsigned char)byte_val;
+                }
                 continue;
             }
             oss << tok;

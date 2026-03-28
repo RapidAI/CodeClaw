@@ -57,7 +57,7 @@ struct MoonshineGenerationConfig {
 
     // No-repeat n-gram: if > 0, any n-gram of this size that already
     // appeared in the generated sequence is forbidden.
-    int no_repeat_ngram_size = 3;
+    int no_repeat_ngram_size = 0;
 
     // Temperature fallback schedule.
     // Decode is attempted with each temperature in order.
