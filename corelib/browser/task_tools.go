@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/RapidAI/CodeClaw/corelib/agent"
 	"github.com/RapidAI/CodeClaw/corelib/tool"
 )
 
 // RegisterTaskTools registers browser task supervisor tools into the registry.
-// Call this after the supervisor is initialized (e.g. in GUI/TUI bootstrap).
-func RegisterTaskTools(registry *tool.Registry, supervisor *BrowserTaskSupervisor) {
+// loopMgr may be nil; when non-nil, browser_task_status can query background tasks.
+func RegisterTaskTools(registry *tool.Registry, supervisor *BrowserTaskSupervisor, loopMgr *agent.BackgroundLoopManager) {
 	tools := []tool.RegisteredTool{
 		{
 			Name:        "browser_task_run",
@@ -89,25 +90,62 @@ func RegisterTaskTools(registry *tool.Registry, supervisor *BrowserTaskSuperviso
 		},
 		{
 			Name:        "browser_task_status",
-			Description: "查询浏览器任务的当前状态和进度。",
+			Description: "查询浏览器任务的当前状态和进度。支持查询后台回放任务。",
 			Category:    tool.CategoryBuiltin,
-			Tags:        []string{"browser", "task", "status", "浏览器", "任务", "状态"},
+			Tags:        []string{"browser", "task", "status", "浏览器", "任务", "状态", "回放", "进度"},
 			Priority:    4,
 			Required:    []string{"task_id"},
 			InputSchema: map[string]interface{}{
-				"task_id": map[string]interface{}{"type": "string", "description": "任务 ID"},
+				"task_id": map[string]interface{}{"type": "string", "description": "任务 ID（留空则列出所有浏览器后台任务）"},
 			},
 			Handler: func(args map[string]interface{}) string {
 				taskID, _ := args["task_id"].(string)
-				if taskID == "" {
-					return "缺少 task_id 参数"
+
+				// If task_id provided, try supervisor first
+				if taskID != "" {
+					state, ok := supervisor.GetState(taskID)
+					if ok {
+						result, _ := json.Marshal(state)
+						return string(result)
+					}
 				}
-				state, ok := supervisor.GetState(taskID)
-				if !ok {
+
+				// Try BackgroundLoopManager for background replay tasks
+				if loopMgr != nil {
+					if taskID != "" {
+						ctx := loopMgr.Get(taskID)
+						if ctx == nil {
+							return fmt.Sprintf("任务 %s 不存在或已完成", taskID)
+						}
+						result, _ := json.Marshal(map[string]interface{}{
+							"task_id":     ctx.ID,
+							"description": ctx.Description,
+							"status":      ctx.State(),
+							"iteration":   ctx.Iteration(),
+							"max_iter":    ctx.MaxIterations(),
+							"started_at":  ctx.StartedAt.Format("2006-01-02 15:04:05"),
+						})
+						return string(result)
+					}
+					// List all browser background tasks
+					views := loopMgr.ListViews()
+					var browserViews []agent.BackgroundLoopView
+					for _, v := range views {
+						if v.SlotKind == "browser" {
+							browserViews = append(browserViews, v)
+						}
+					}
+					if len(browserViews) == 0 {
+						return "当前没有浏览器后台任务"
+					}
+					result, _ := json.Marshal(browserViews)
+					return string(result)
+				}
+
+				if taskID != "" {
 					return fmt.Sprintf("任务 %s 不存在", taskID)
 				}
-				result, _ := json.Marshal(state)
-				return string(result)
+				return "当前没有浏览器后台任务"
 			},
 		},
 		{
@@ -207,7 +245,9 @@ func intVal(args map[string]interface{}, key string, fallback int) int {
 }
 
 // RegisterRecorderTools registers browser recording and replay tools.
-func RegisterRecorderTools(registry *tool.Registry, recorder *BrowserRecorder, replayer *FlowReplayer) {
+// loopMgr and activityStore may be nil; when non-nil, replay runs in background.
+func RegisterRecorderTools(registry *tool.Registry, recorder *BrowserRecorder, replayer *FlowReplayer,
+	loopMgr *agent.BackgroundLoopManager, activityStore ActivityUpdater, statusC chan agent.StatusEvent, logger func(string)) {
 	tools := []tool.RegisteredTool{
 		{
 			Name:        "browser_record_start",
@@ -249,7 +289,7 @@ func RegisterRecorderTools(registry *tool.Registry, recorder *BrowserRecorder, r
 		},
 		{
 			Name:        "browser_task_replay",
-			Description: "回放录制的浏览器操作流程。支持参数覆盖（如替换用户名密码）。页面变化时会自动调整。",
+			Description: "回放录制的浏览器操作流程。支持参数覆盖（如替换用户名密码）。提交后在后台异步执行，立即返回任务 ID。",
 			Category:    tool.CategoryBuiltin,
 			Tags:        []string{"browser", "replay", "automation", "浏览器", "回放", "自动化", "网页"},
 			Priority:    5,
@@ -278,6 +318,37 @@ func RegisterRecorderTools(registry *tool.Registry, recorder *BrowserRecorder, r
 					}
 				}
 
+				// If BackgroundLoopManager is available, run async
+				if loopMgr != nil {
+					desc := fmt.Sprintf("回放: %s", flow.Name)
+					loopCtx, waitCh := loopMgr.SpawnOrQueue(agent.SlotKindBrowser, "", desc, 1)
+					if loopCtx != nil {
+						// Slot available — run in background
+						bgLoopMgr := &bgLoopManagerAdapter{mgr: loopMgr}
+						go RunReplayInBackground(loopCtx, flow, overrides, replayer, activityStore, statusC, bgLoopMgr, logger)
+						result, _ := json.Marshal(map[string]interface{}{
+							"status":  "submitted",
+							"task_id": loopCtx.ID,
+							"message": fmt.Sprintf("回放 [%s] 已提交后台执行", flow.Name),
+						})
+						return string(result)
+					}
+					// Slot full — queued
+					queuePos := loopMgr.QueueLength(agent.SlotKindBrowser)
+					go func() {
+						ctx := <-waitCh
+						bgLoopMgr := &bgLoopManagerAdapter{mgr: loopMgr}
+						RunReplayInBackground(ctx, flow, overrides, replayer, activityStore, statusC, bgLoopMgr, logger)
+					}()
+					result, _ := json.Marshal(map[string]interface{}{
+						"status":         "queued",
+						"queue_position": queuePos,
+						"message":        fmt.Sprintf("浏览器 slot 已满，回放 [%s] 已排队（位置 %d）", flow.Name, queuePos),
+					})
+					return string(result)
+				}
+
+				// Fallback: synchronous execution (no BackgroundLoopManager)
 				state, err := replayer.Replay(flow, overrides)
 				if err != nil {
 					errResp := map[string]interface{}{
@@ -332,3 +403,11 @@ func RegisterRecorderTools(registry *tool.Registry, recorder *BrowserRecorder, r
 		registry.Register(t)
 	}
 }
+
+// bgLoopManagerAdapter wraps *agent.BackgroundLoopManager to satisfy LoopManager interface.
+type bgLoopManagerAdapter struct {
+	mgr *agent.BackgroundLoopManager
+}
+
+func (a *bgLoopManagerAdapter) Complete(loopID string) { a.mgr.Complete(loopID) }
+func (a *bgLoopManagerAdapter) Stop(loopID string)     { a.mgr.Stop(loopID) }

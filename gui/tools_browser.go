@@ -1,11 +1,31 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/RapidAI/CodeClaw/corelib/browser"
 	"github.com/RapidAI/CodeClaw/corelib/tool"
 )
+
+// replayActivityAdapter wraps AgentActivityStore to satisfy browser.ActivityUpdater.
+type replayActivityAdapter struct {
+	store *AgentActivityStore
+}
+
+func (a *replayActivityAdapter) UpdateReplay(flowName string, currentStep, totalSteps int, status string) {
+	a.store.Update(&AgentActivity{
+		Source:      "browser_replay",
+		Task:        fmt.Sprintf("回放: %s", flowName),
+		Iteration:   currentStep,
+		MaxIter:     totalSteps,
+		LastSummary: status,
+	})
+}
+
+func (a *replayActivityAdapter) ClearReplay() {
+	a.store.Clear("browser_replay")
+}
 
 // registerBrowserTools registers browser automation tools (CDP-based) into the gui ToolRegistry.
 // The tool definitions live in corelib/browser/tools.go (single source of truth).
@@ -30,7 +50,7 @@ func registerBrowserTools(registry *ToolRegistry) {
 	})
 
 	// Register task supervisor tools
-	browser.RegisterTaskTools(coreReg, supervisor)
+	browser.RegisterTaskTools(coreReg, supervisor, nil)
 
 	// Register OCR tool
 	browser.RegisterOCRTool(coreReg, compositeOCR, sessionFn)
@@ -40,7 +60,9 @@ func registerBrowserTools(registry *ToolRegistry) {
 		log.Printf("[browser-record] %s", msg)
 	})
 	replayer := browser.NewFlowReplayer(supervisor, compositeOCR, nil)
-	browser.RegisterRecorderTools(coreReg, recorder, replayer)
+	browser.RegisterRecorderTools(coreReg, recorder, replayer, nil, nil, nil, func(msg string) {
+		log.Printf("[browser-replay] %s", msg)
+	})
 
 	// Bridge all corelib browser tools into the gui registry.
 	for _, ct := range coreReg.ListAvailable() {

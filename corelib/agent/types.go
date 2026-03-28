@@ -56,6 +56,7 @@ type StatusEvent struct {
 	SessionID string // related coding session (if any)
 	Message   string // human-readable description
 	Remaining int    // remaining iterations (for ApproachingLimit)
+	Extra     map[string]string // optional key-value metadata (e.g. screenshot)
 }
 
 // ProgressCallback is a function that receives progress updates.

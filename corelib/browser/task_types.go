@@ -43,6 +43,7 @@ const (
 	TaskStatusPaused    TaskStatus = "paused"
 	TaskStatusCompleted TaskStatus = "completed"
 	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusCancelled TaskStatus = "cancelled"
 )
 
 // TaskState holds the runtime state of a browser task execution.

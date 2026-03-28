@@ -28,8 +28,10 @@ type BrowserTaskSupervisor struct {
 
 // taskEntry wraps TaskState with a cancel function for interruption.
 type taskEntry struct {
-	state  *TaskState
-	cancel context.CancelFunc
+	state   *TaskState
+	cancel  context.CancelFunc
+	pauseC  chan struct{} // signal to pause after current step
+	resumeC chan struct{} // signal to resume from paused state
 }
 
 // NewBrowserTaskSupervisor creates a supervisor.
@@ -77,7 +79,7 @@ func (s *BrowserTaskSupervisor) Execute(spec TaskSpec) (*TaskState, error) {
 		TotalSteps: len(spec.Steps),
 		StartedAt:  time.Now(),
 	}
-	s.tasks[spec.ID] = &taskEntry{state: state, cancel: cancel}
+	s.tasks[spec.ID] = &taskEntry{state: state, cancel: cancel, pauseC: make(chan struct{}, 1), resumeC: make(chan struct{}, 1)}
 	s.mu.Unlock()
 
 	s.log("browser task %s started: %s (%d steps)", spec.ID, spec.Description, len(spec.Steps))
@@ -87,7 +89,7 @@ func (s *BrowserTaskSupervisor) Execute(spec TaskSpec) (*TaskState, error) {
 	for i, step := range spec.Steps {
 		// Check cancellation
 		if err := ctx.Err(); err != nil {
-			state.Status = TaskStatusFailed
+			state.Status = TaskStatusCancelled
 			state.LastError = "cancelled by user"
 			return state, fmt.Errorf("cancelled")
 		}
@@ -106,6 +108,32 @@ func (s *BrowserTaskSupervisor) Execute(spec TaskSpec) (*TaskState, error) {
 
 		// Take checkpoint after each step
 		s.takeCheckpoint(state, i)
+
+		// Check for pause signal after step completion
+		s.mu.RLock()
+		entry := s.tasks[spec.ID]
+		s.mu.RUnlock()
+		if entry != nil {
+			select {
+			case <-entry.pauseC:
+				state.Status = TaskStatusPaused
+				s.log("browser task %s paused after step %d", spec.ID, i+1)
+				s.emitProgress(spec.ID, fmt.Sprintf("paused after step %d", i+1), i+1, len(spec.Steps))
+				// Block until resume or cancel
+				select {
+				case <-entry.resumeC:
+					state.Status = TaskStatusRunning
+					s.log("browser task %s resumed", spec.ID)
+					s.emitProgress(spec.ID, "resumed", i+1, len(spec.Steps))
+				case <-ctx.Done():
+					state.Status = TaskStatusCancelled
+					state.LastError = "cancelled while paused"
+					return state, fmt.Errorf("cancelled while paused")
+				}
+			default:
+				// not paused, continue
+			}
+		}
 	}
 
 	// Final success criteria verification
@@ -144,7 +172,7 @@ func (s *BrowserTaskSupervisor) GetState(taskID string) (*TaskState, bool) {
 	return entry.state, true
 }
 
-// Cancel cancels a running task.
+// Cancel cancels a running or paused task.
 func (s *BrowserTaskSupervisor) Cancel(taskID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,10 +180,48 @@ func (s *BrowserTaskSupervisor) Cancel(taskID string) error {
 	if !ok {
 		return fmt.Errorf("task %s not found", taskID)
 	}
+	st := entry.state.Status
+	if st != TaskStatusRunning && st != TaskStatusPaused {
+		return fmt.Errorf("task %s is not running or paused (status=%s)", taskID, st)
+	}
+	entry.cancel() // signal the context
+	return nil
+}
+
+// Pause requests a running task to pause after the current step completes.
+func (s *BrowserTaskSupervisor) Pause(taskID string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task %s not found", taskID)
+	}
 	if entry.state.Status != TaskStatusRunning {
 		return fmt.Errorf("task %s is not running (status=%s)", taskID, entry.state.Status)
 	}
-	entry.cancel() // signal the context
+	select {
+	case entry.pauseC <- struct{}{}:
+	default:
+		// already signalled
+	}
+	return nil
+}
+
+// Resume resumes a paused task.
+func (s *BrowserTaskSupervisor) Resume(taskID string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+	if entry.state.Status != TaskStatusPaused {
+		return fmt.Errorf("task %s is not paused (status=%s)", taskID, entry.state.Status)
+	}
+	select {
+	case entry.resumeC <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
