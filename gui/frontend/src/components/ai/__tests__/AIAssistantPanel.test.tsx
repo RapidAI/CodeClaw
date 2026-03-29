@@ -96,6 +96,7 @@ describe('AIAssistantPanel property tests', () => {
                             sendMessage={async () => {}}
                             clearHistory={async () => {}}
                             executeAction={async () => {}}
+                            refreshNews={() => {}}
                         />
                     );
 

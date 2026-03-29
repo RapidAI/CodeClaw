@@ -106,11 +106,8 @@ export function useAIAssistant() {
         };
     }, [messages]);
 
-    // Fetch latest news from Hub Center on mount and prepend as system messages.
-    const newsFetchedRef = useRef(false);
-    useEffect(() => {
-        if (newsFetchedRef.current) return;
-        newsFetchedRef.current = true;
+    // Fetch latest news from Hub Center and prepend as system messages.
+    const doFetchNews = useCallback(() => {
         FetchNews().then((articles: any[]) => {
             if (!articles || articles.length === 0) return;
             const catIcons: Record<string, string> = { notice: '📢', update: '🚀', tip: '💡', alert: '⚠️' };
@@ -121,12 +118,23 @@ export function useAIAssistant() {
                 timestamp: Date.now(),
             }));
             setMessages(prev => {
-                // Remove old news system messages, then prepend new ones
                 const filtered = prev.filter(m => !m.id.startsWith('news-'));
                 return [...sysMsgs, ...filtered];
             });
         }).catch(() => { /* silently ignore news fetch failures */ });
     }, []);
+
+    // Fetch on mount + refresh every 6 hours.
+    const newsFetchedRef = useRef(false);
+    useEffect(() => {
+        if (!newsFetchedRef.current) {
+            newsFetchedRef.current = true;
+            doFetchNews();
+        }
+        const SIX_HOURS = 6 * 60 * 60 * 1000;
+        const timer = setInterval(doFetchNews, SIX_HOURS);
+        return () => clearInterval(timer);
+    }, [doFetchNews]);
 
     // Listen for streaming token events — append delta to current streaming message.
     useEffect(() => {
@@ -315,7 +323,7 @@ export function useAIAssistant() {
         };
     }, []);
 
-    return { messages, sending, streaming, ready, sendMessage, clearHistory, executeAction };
+    return { messages, sending, streaming, ready, sendMessage, clearHistory, executeAction, refreshNews: doFetchNews };
 }
 
 // Polyfill for Array.findLastIndex (not available in all environments)

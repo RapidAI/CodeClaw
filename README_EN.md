@@ -125,7 +125,7 @@ On first launch, MaClaw performs an environment self-check and auto-installs mis
 
 ## About
 
-*   **Version**: V5.2.2.9710
+*   **Version**: V5.3.0.9800
 *   **Author**: Dr. Daniel
 *   **GitHub**: [RapidAI/MaClaw](https://github.com/rapidai/maclaw)
 *   **Website**: [maclaw.top](https://maclaw.top)

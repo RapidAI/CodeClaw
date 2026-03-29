@@ -1021,7 +1021,7 @@ body {
     align-items: center;
     justify-content: center;
     text-align: center;
-    padding: 3px 2px;
+    padding: 2px 2px;
     gap: 1px;
     border-left: none;
     border-radius: var(--radius-sm);
@@ -1037,10 +1037,17 @@ body {
     margin-top: 0;
 }
 
+.tool-grid .sidebar-item .sidebar-icon img {
+    width: 1.26em !important;
+    height: 1.26em !important;
+}
+
 .tool-grid .sidebar-item span:last-child {
-    font-size: 0.66rem;
+    font-size: 0.6rem;
     line-height: 1;
     word-break: break-word;
+    font-family: 'Segoe UI', 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    letter-spacing: 0.01em;
 }
 
 /* Modal Helpers */

@@ -142,7 +142,7 @@ const recommendedModels: { [provider: string]: { id: string; note?: string }[] }
         { id: "glm-4.7" },
     ],
 };
-const APP_VERSION = "5.2.2.9710"
+const APP_VERSION = "5.3.0.9800"
 
 // Tool name constants to avoid repeated string arrays
 const TOOL_NAMES = ['claude', 'gemini', 'codex', 'opencode', 'codebuddy', 'cursor', 'iflow', 'kilo'] as const;
@@ -1751,7 +1751,6 @@ function App() {
     const [showToast, setShowToast] = useState(false);
     const [skills, setSkills] = useState<main.Skill[]>([]);
     const [showAddSkillModal, setShowAddSkillModal] = useState(false);
-    const [showHelpMenu, setShowHelpMenu] = useState(false);
     const [gossipAllowed, setGossipAllowed] = useState(true);
     const aiAssistant = useAIAssistant();
     const [showRemoteActivationModal, setShowRemoteActivationModal] = useState(false);
@@ -2073,13 +2072,8 @@ function App() {
                 setSelectedProjectForLaunch(cfg.projects[0].id);
             }
             if (cfg) {
-                // In lite mode, default to AI assistant panel; in pro mode, default to message tab
-                if (cfg.ui_mode !== 'pro') {
-                    setNavTab("ai");
-                } else {
-                    const tool = "message";
-                    setNavTab(tool);
-                }
+                // Both modes default to AI assistant panel on startup
+                setNavTab("ai");
 
                 // Keep track of the last active tool for settings/launch logic
                 const lastActiveTool = cfg.active_tool || "claude";
@@ -2114,7 +2108,7 @@ function App() {
             // the AI assistant panel.  'ai' is never persisted as active_tool,
             // so a config-changed event would always overwrite it.
             if (navTabRef.current !== 'ai') {
-                const tool = cfg.active_tool || "message";
+                const tool = cfg.active_tool || "ai";
                 setNavTab(tool);
                 if (tool === 'claude' || tool === 'gemini' || tool === 'codex' || tool === 'opencode' || tool === 'codebuddy' || tool === 'cursor' || tool === 'iflow' || tool === 'kilo') {
                     setActiveTool(tool);
@@ -3319,6 +3313,25 @@ ${instruction}`;
                     </div>
 
                     <div
+                        className={`sidebar-item ${navTab === 'skills' ? 'active' : ''}`}
+                        onClick={() => { switchTool('skills'); }}
+                        style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'skills' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
+                        title={t("skills")}
+                    >
+                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🧩</span>
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("skills")}</span>
+                    </div>
+                    <div
+                        className={`sidebar-item ${navTab === 'mcp' ? 'active' : ''}`}
+                        onClick={() => { switchTool('mcp'); }}
+                        style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'mcp' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
+                        title="MCP"
+                    >
+                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🔌</span>
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>MCP</span>
+                    </div>
+
+                    <div
                         className={`sidebar-item ${navTab === 'ai' ? 'active' : ''}`}
                         onClick={() => { switchTool('ai'); }}
                         style={{
@@ -3389,39 +3402,19 @@ ${instruction}`;
                         </span>
                     </div>
 
-                    <div
-                        className={`sidebar-item ${navTab === 'skills' ? 'active' : ''}`}
-                        onClick={() => { switchTool('skills'); }}
-                        style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'skills' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                        title={t("skills")}
-                    >
-                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🧩</span>
-                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("skills")}</span>
-                    </div>
-                    <div
-                        className={`sidebar-item ${navTab === 'mcp' ? 'active' : ''}`}
-                        onClick={() => { switchTool('mcp'); }}
-                        style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'mcp' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                        title="MCP"
-                    >
-                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>🔌</span>
-                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>MCP</span>
-                    </div>
-
-                    <div
-                        className={`sidebar-item ${navTab === 'clawnet' ? 'active' : ''}`}
-                        onClick={() => { switchTool('clawnet'); }}
-                        style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'clawnet' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                        title={lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet'}
-                    >
-                        <img src={clawnetIcon} alt="ClawNet" style={{ width: '22px', height: '22px', margin: 0 }} />
-                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet'}</span>
-                    </div>
-
                     <div style={{ flex: 1 }}></div>
 
-                    {/* Gossip icon — only visible in lite mode (in pro mode it's in the right panel) */}
-                    {isLiteMode && gossipAllowed && (
+                    <div
+                        className={`sidebar-item ${navTab === 'tutorial' ? 'active' : ''}`}
+                        onClick={() => { switchTool('tutorial'); }}
+                        style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'tutorial' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
+                        title={t("tutorial")}
+                    >
+                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>📚</span>
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("tutorial")}</span>
+                    </div>
+
+                    {gossipAllowed && (
                         <div
                             className={`sidebar-item ${navTab === 'gossip' ? 'active' : ''}`}
                             onClick={() => { switchTool('gossip'); }}
@@ -3434,6 +3427,16 @@ ${instruction}`;
                     )}
 
                     <div
+                        className={`sidebar-item ${navTab === 'clawnet' ? 'active' : ''}`}
+                        onClick={() => { switchTool('clawnet'); }}
+                        style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'clawnet' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
+                        title={lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet'}
+                    >
+                        <img src={clawnetIcon} alt="ClawNet" style={{ width: '22px', height: '22px', margin: 0 }} />
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet'}</span>
+                    </div>
+
+                    <div
                         className={`sidebar-item ${navTab === 'settings' ? 'active' : ''}`}
                         onClick={() => { switchTool('settings'); }}
                         style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'settings' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
@@ -3443,95 +3446,22 @@ ${instruction}`;
                         <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("settings")}</span>
                     </div>
 
-                    {/* In lite mode: "Help" with popup menu; in pro mode: "About" direct nav */}
-                    {isLiteMode ? (
-                        <div style={{ position: 'relative' }}>
-                            <div
-                                className={`sidebar-item ${showHelpMenu ? 'active' : ''}`}
-                                onClick={() => setShowHelpMenu(!showHelpMenu)}
-                                style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: showHelpMenu ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                                title={t("help")}
-                            >
-                                <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>❓</span>
-                                <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("help")}</span>
-                            </div>
-                            {showHelpMenu && (
-                                <>
-                                    <div style={{ position: 'fixed', inset: 0, zIndex: 999 }} onClick={() => setShowHelpMenu(false)} />
-                                    <div style={{
-                                        position: 'absolute',
-                                        left: '62px',
-                                        bottom: '0',
-                                        background: 'white',
-                                        border: '1px solid #e5e7eb',
-                                        borderRadius: '8px',
-                                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                                        zIndex: 1000,
-                                        minWidth: '120px',
-                                        padding: '4px 0',
-                                    }}>
-                                        {[
-                                            { icon: '📚', key: 'tutorial' as const, nav: 'tutorial' },
-                                            { icon: 'ℹ️', key: 'about' as const, nav: 'about' },
-                                        ].map(({ icon, key, nav }) => (
-                                            <div
-                                                key={key}
-                                                style={{ padding: '8px 16px', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                                                onMouseEnter={(e) => (e.currentTarget.style.background = '#f3f4f6')}
-                                                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                                                onClick={() => { setShowHelpMenu(false); switchTool(nav); }}
-                                            >
-                                                {icon} {t(key)}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                    ) : (
-                        <div
-                            className={`sidebar-item ${navTab === 'about' ? 'active' : ''}`}
-                            onClick={() => switchTool('about')}
-                            style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'about' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
-                            title={t("about")}
-                        >
-                            <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>ℹ️</span>
-                            <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("about")}</span>
-                        </div>
-                    )}
+                    <div
+                        className={`sidebar-item ${navTab === 'about' ? 'active' : ''}`}
+                        onClick={() => switchTool('about')}
+                        style={{ flexDirection: 'column', padding: '6px 0', width: '100%', gap: '4px', borderLeft: 'none', borderRight: navTab === 'about' ? '3px solid var(--primary-color)' : '3px solid transparent', justifyContent: 'center' }}
+                        title={t("about")}
+                    >
+                        <span className="sidebar-icon" style={{ margin: 0, fontSize: '1.2rem' }}>ℹ️</span>
+                        <span style={{ fontSize: '0.65rem', lineHeight: 1 }}>{t("about")}</span>
+                    </div>
                 </div>
 
                 {/* Right Tool List */}
                 <div style={{ flex: 1, padding: '10px', overflowY: 'auto', backgroundColor: '#fafbff', display: isLiteMode ? 'none' : 'flex', flexDirection: 'column' }}>
-                    {/* Tutorial row */}
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
-                        <div style={{ display: 'flex', gap: '2px', width: '100%' }}>
-                            <div
-                                className={`sidebar-item ${navTab === 'tutorial' ? 'active' : ''}`}
-                                onClick={() => switchTool('tutorial')}
-                                style={{ flexDirection: 'column', padding: '6px 0', flex: 1, gap: '2px', borderLeft: 'none', borderBottom: navTab === 'tutorial' ? '2px solid var(--primary-color)' : '2px solid transparent', justifyContent: 'center', borderRight: 'none' }}
-                                title={t("tutorial")}
-                            >
-                                <span className="sidebar-icon" style={{ margin: 0, fontSize: '1rem' }}>📚</span>
-                                <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{t("tutorial")}</span>
-                            </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '2px', width: '100%' }}>
-                            {gossipAllowed && (<div
-                                className={`sidebar-item ${navTab === 'gossip' ? 'active' : ''}`}
-                                onClick={() => switchTool('gossip')}
-                                style={{ flexDirection: 'column', padding: '6px 0', flex: 1, gap: '2px', borderLeft: 'none', borderBottom: navTab === 'gossip' ? '2px solid var(--primary-color)' : '2px solid transparent', justifyContent: 'center', borderRight: 'none' }}
-                                title={t("gossip")}
-                            >
-                                <span className="sidebar-icon" style={{ margin: 0, fontSize: '1rem' }}>🗣️</span>
-                                <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{t("gossip")}</span>
-                            </div>)}
-                            <div style={{ flex: 1 }} />
-                        </div>
-                    </div>
                     <div style={{ width: '80%', height: '1px', background: 'linear-gradient(90deg, transparent, #d4d4f7, transparent)', margin: '0 auto 8px', flexShrink: 0, display: isLiteMode ? 'none' : undefined }}></div>
                     <div style={{ flex: 1, display: isLiteMode ? 'none' : 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                    <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
+                    <div className="tool-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '6px' }}>
                         <div className={`sidebar-item ${navTab === 'claude' ? 'active' : ''}`} onClick={() => switchTool('claude')}>
                             <span className="sidebar-icon">
                                 <img src={claudecodeIcon} style={{ width: '1.4em', height: '1.4em', verticalAlign: 'middle' }} alt="Claude" />
@@ -3588,6 +3518,33 @@ ${instruction}`;
                         )}
 
                     </div>
+                    </div>
+
+                    {/* Status dashboard */}
+                    <div style={{ flexShrink: 0, padding: '0 6px', marginTop: 'auto' }}>
+                        <div style={{ width: '80%', height: '1px', background: 'linear-gradient(90deg, transparent, #d4d4f7, transparent)', margin: '8px auto' }}></div>
+                        <div style={{ fontSize: '0.6rem', color: '#888', fontFamily: "'Segoe UI', 'SF Pro Text', -apple-system, sans-serif" }}>
+                            <div style={{ marginBottom: '6px', fontWeight: 600, color: '#666', fontSize: '0.62rem' }}>
+                                {lang === 'zh-Hans' ? '系统状态' : lang === 'zh-Hant' ? '系統狀態' : 'Status'}
+                            </div>
+                            {[
+                                { label: 'LLM', on: maclawLLMOnline },
+                                { label: lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet', on: clawNetRunning },
+                                { label: lang === 'zh-Hans' ? '移动端' : lang === 'zh-Hant' ? '行動端' : 'Mobile', on: !!remoteActivationStatus?.activated },
+                            ].map(({ label, on }) => (
+                                <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px' }}>
+                                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: on ? '#22c55e' : '#ccc', display: 'inline-block', flexShrink: 0 }}></span>
+                                    <span>{label}</span>
+                                    <span style={{ marginLeft: 'auto', color: on ? '#22c55e' : '#aaa' }}>
+                                        {on ? (lang?.startsWith('zh') ? '在线' : 'Online') : (lang?.startsWith('zh') ? '离线' : 'Offline')}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                        <div style={{ width: '80%', height: '1px', background: 'linear-gradient(90deg, transparent, #d4d4f7, transparent)', margin: '8px auto' }}></div>
+                        <div style={{ textAlign: 'center', fontSize: '0.55rem', color: '#bbb', paddingBottom: '6px', fontFamily: "'Segoe UI', 'SF Pro Text', -apple-system, sans-serif" }}>
+                            V{APP_VERSION}
+                        </div>
                     </div>
                 </div>
             </div>

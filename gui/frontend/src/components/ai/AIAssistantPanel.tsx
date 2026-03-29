@@ -14,6 +14,7 @@ interface AIAssistantPanelProps {
     sendMessage: (text: string) => Promise<void>;
     clearHistory: () => Promise<void>;
     executeAction: (command: string) => Promise<void>;
+    refreshNews: () => void;
     inline?: boolean; // when true, render as inline content instead of overlay
     onHideWindow?: () => void; // hide the entire window (inline mode)
 }
@@ -509,7 +510,7 @@ if (typeof document !== "undefined" && !document.getElementById("ai-blink-style"
 
 /* ── Main component ── */
 
-export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, ready, sendMessage, clearHistory, executeAction, inline, onHideWindow }: AIAssistantPanelProps) {
+export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, ready, sendMessage, clearHistory, executeAction, refreshNews, inline, onHideWindow }: AIAssistantPanelProps) {
     const [inputValue, setInputValue] = useState("");
     const [composing, setComposing] = useState(false);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -619,6 +620,7 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
 
     return (
         <div style={containerStyle}>
+            <style>{`.pinned-news-card > div { margin-top: 0 !important; margin-bottom: 0 !important; }`}</style>
             {/* ── Drag overlay (inline mode) ── */}
             {inline && (
                 <div style={{
@@ -652,6 +654,13 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
                     }}>{title}</span>
                 </div>
                 <div style={{ display: "flex", gap: "4px", flexShrink: 0, ...(inline ? { '--wails-draggable': 'no-drag', position: 'relative', zIndex: 1000 } as any : {}) }}>
+                    <button
+                        {...(inline ? { onMouseDown: refreshNews } : { onClick: refreshNews })}
+                        style={{ ...baseActionBtnStyle, color: t.actionBtnColor }}
+                        title={lang === "en" ? "Refresh news" : "刷新消息"}
+                    >
+                        🔄
+                    </button>
                     <button
                         {...(inline ? { onMouseDown: clearHistory } : { onClick: clearHistory })}
                         style={{ ...baseActionBtnStyle, color: t.actionBtnColor }}
@@ -708,14 +717,14 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
                                 marginBottom: '6px',
                             }}>
                                 {pinnedNews.map(msg => (
-                                    <div key={msg.id} style={{
+                                    <div key={msg.id} className="pinned-news-card" style={{
                                         padding: "6px 8px",
                                         borderRadius: "6px",
                                         background: "linear-gradient(135deg, rgba(99,102,241,0.06), rgba(139,92,246,0.06))",
                                         borderLeft: `3px solid ${t.promptColor}`,
                                         color: t.text,
                                         fontSize: "11px",
-                                        lineHeight: "1.5",
+                                        lineHeight: "1.4",
                                         overflow: "hidden",
                                     }}>
                                         {renderContentWithCodeBlocks(msg.content, t)}
