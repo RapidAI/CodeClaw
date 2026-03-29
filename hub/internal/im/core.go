@@ -3,11 +3,87 @@ package im
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// ---------------------------------------------------------------------------
+// Incoming message dedup — prevents duplicate processing when the same
+// message arrives from multiple devices (e.g. WeChat mobile + PC online).
+// ---------------------------------------------------------------------------
+
+var incomingDedup = struct {
+	mu        sync.Mutex
+	seen      map[string]time.Time
+	lastEvict time.Time
+}{seen: make(map[string]time.Time)}
+
+const incomingDedupTTL = 10 * time.Second
+
+// incomingDedupKey builds a dedup key for an incoming message.
+// If MessageID is available, use it directly for precise dedup.
+// Otherwise, fall back to a content fingerprint (platform:uid:fnv(text+attachInfo)).
+func incomingDedupKey(msg IncomingMessage) string {
+	if msg.MessageID != "" {
+		return msg.PlatformName + ":" + msg.PlatformUID + ":id:" + msg.MessageID
+	}
+	text := strings.TrimSpace(msg.Text)
+	if text == "" && len(msg.Attachments) == 0 {
+		return "" // skip dedup for empty messages
+	}
+	h := fnv.New64a()
+	h.Write([]byte(text))
+	// Include attachment count and first attachment's filename+size to
+	// distinguish different media messages with the same (or empty) text.
+	for i, att := range msg.Attachments {
+		if i >= 2 {
+			break // first two attachments are enough for fingerprinting
+		}
+		h.Write([]byte(att.FileName))
+		h.Write([]byte(strconv.FormatInt(att.Size, 10)))
+	}
+	return fmt.Sprintf("%s:%s:%x:a%d", msg.PlatformName, msg.PlatformUID, h.Sum64(), len(msg.Attachments))
+}
+
+// isDuplicateIncoming returns true if the same message was already seen
+// within the dedup TTL window.
+func isDuplicateIncoming(msg IncomingMessage) bool {
+	key := incomingDedupKey(msg)
+	if key == "" {
+		return false
+	}
+	now := time.Now()
+	incomingDedup.mu.Lock()
+	defer incomingDedup.mu.Unlock()
+
+	// Lazy eviction — at most once per 5 seconds.
+	if now.Sub(incomingDedup.lastEvict) > 5*time.Second {
+		for k, t := range incomingDedup.seen {
+			if now.Sub(t) > incomingDedupTTL {
+				delete(incomingDedup.seen, k)
+			}
+		}
+		incomingDedup.lastEvict = now
+	}
+
+	if _, exists := incomingDedup.seen[key]; exists {
+		return true
+	}
+	incomingDedup.seen[key] = now
+	return false
+}
+
+// resetIncomingDedup clears the dedup cache. Exported for tests only.
+func resetIncomingDedup() {
+	incomingDedup.mu.Lock()
+	incomingDedup.seen = make(map[string]time.Time)
+	incomingDedup.lastEvict = time.Time{}
+	incomingDedup.mu.Unlock()
+}
 
 // ---------------------------------------------------------------------------
 // Abstraction interfaces
@@ -245,6 +321,14 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 			Title:      "请求过于频繁",
 			Body:       "您的操作频率已超过限制（每分钟 30 次），请稍后再试。",
 		})
+		return
+	}
+
+	// 2b. Incoming message dedup — drop duplicates from multi-device delivery
+	// (e.g. WeChat mobile + PC sending the same event).
+	if isDuplicateIncoming(msg) {
+		log.Printf("[IM Adapter] DEDUP: dropping duplicate message from platform=%s uid=%s msgID=%s text_len=%d",
+			msg.PlatformName, msg.PlatformUID, msg.MessageID, len(msg.Text))
 		return
 	}
 

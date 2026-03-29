@@ -201,6 +201,7 @@ func TestRateLimiter_IndependentUsers(t *testing.T) {
 }
 
 func TestHandleMessage_IdentityFailure(t *testing.T) {
+	resetIncomingDedup()
 	plugin := &mockPlugin{name: "test", caps: CapabilityDeclaration{SupportsRichCard: false}}
 	df := &mockDeviceFinder{machineID: "m1", llmConfigured: true, found: true}
 	router := NewMessageRouter(df)
@@ -231,6 +232,7 @@ func TestHandleMessage_IdentityFailure(t *testing.T) {
 }
 
 func TestHandleMessage_RateLimited(t *testing.T) {
+	resetIncomingDedup()
 	plugin := &mockPlugin{name: "test", caps: CapabilityDeclaration{SupportsRichCard: false}}
 	df := &mockDeviceFinder{machineID: "m1", llmConfigured: true, found: true}
 	router := NewMessageRouter(df)
@@ -264,6 +266,7 @@ func TestHandleMessage_RateLimited(t *testing.T) {
 }
 
 func TestHandleMessage_DeviceOffline(t *testing.T) {
+	resetIncomingDedup()
 	plugin := &mockPlugin{name: "test", caps: CapabilityDeclaration{SupportsRichCard: false}}
 	df := &mockDeviceFinder{found: false} // no online device
 	router := NewMessageRouter(df)
@@ -289,6 +292,7 @@ func TestHandleMessage_DeviceOffline(t *testing.T) {
 }
 
 func TestHandleMessage_LLMNotConfigured(t *testing.T) {
+	resetIncomingDedup()
 	plugin := &mockPlugin{name: "test", caps: CapabilityDeclaration{SupportsRichCard: false}}
 	df := &mockDeviceFinder{machineID: "m1", llmConfigured: false, found: true}
 	router := NewMessageRouter(df)
@@ -314,6 +318,7 @@ func TestHandleMessage_LLMNotConfigured(t *testing.T) {
 }
 
 func TestHandleMessage_AgentResponse(t *testing.T) {
+	resetIncomingDedup()
 	plugin := &mockPlugin{name: "test", caps: CapabilityDeclaration{SupportsRichCard: true}}
 	df := &mockDeviceFinder{machineID: "m1", llmConfigured: true, found: true}
 	router := NewMessageRouter(df)

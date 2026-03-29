@@ -289,6 +289,7 @@ func (p *RemoteGatewayPlugin) HandleGatewayMessage(machineID string, payload jso
 		PlatformUID  string              `json:"platform_uid"`
 		Text         string              `json:"text"`
 		MessageType  string              `json:"message_type"`
+		MessageID    string              `json:"message_id"`
 		ContextToken string              `json:"context_token"`
 		Attachments  []MessageAttachment `json:"attachments,omitempty"`
 	}
@@ -335,6 +336,7 @@ func (p *RemoteGatewayPlugin) HandleGatewayMessage(machineID string, payload jso
 	handler(IncomingMessage{
 		PlatformName: p.platform,
 		PlatformUID:  msg.PlatformUID,
+		MessageID:    msg.MessageID,
 		MessageType:  msgType,
 		Text:         msg.Text,
 		Attachments:  msg.Attachments,

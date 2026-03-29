@@ -73,6 +73,7 @@ type IncomingMessage struct {
 	PlatformName  string              `json:"platform_name"`       // IM platform name (e.g. "feishu", "qbot")
 	PlatformUID   string              `json:"platform_uid"`        // Platform-specific user ID (e.g. Feishu open_id)
 	UnifiedUserID string              `json:"unified_user_id"`     // Unified internal user ID (populated by IM Adapter)
+	MessageID     string              `json:"message_id,omitempty"` // Platform message ID for dedup (optional)
 	MessageType   string              `json:"message_type"`        // "text", "image", "file", "audio", "interactive"
 	Text          string              `json:"text"`                // Text content
 	Attachments   []MessageAttachment `json:"attachments,omitempty"` // File/image attachments
