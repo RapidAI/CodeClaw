@@ -1426,6 +1426,12 @@ func (h *TUIAgentHandler) toolWebFetch(args map[string]interface{}) string {
 	return sb.String()
 }
 
+// ===================== GUI 自动化 =====================
+// TODO: 当 TUI 获得完整 GUI 依赖（Accessibility Bridge、InputSimulator、截图引擎）时，
+// 在此处调用 guiautomation.RegisterTools 注册 GUI 自动化工具（gui_record_start、
+// gui_record_stop、gui_replay、gui_list_flows、gui_click、gui_type、gui_screenshot）。
+// 参考 gui/tools_gui_automation.go 中的 registerGUIAutomationTools 实现模式。
+
 // ===================== 项目管理 =====================
 
 func (h *TUIAgentHandler) toolProjectManage(args map[string]interface{}) string {

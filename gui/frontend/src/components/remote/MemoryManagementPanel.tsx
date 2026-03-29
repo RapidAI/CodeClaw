@@ -273,17 +273,17 @@ function MemoryEditTab({ t, isZh, revision, onCountChange, createRef }: EditTabP
                 {entries.map(entry => (
                     <div key={entry.id} style={{ border: `1px solid ${colors.border}`, borderRadius: radius.md, padding: "8px 10px", background: colors.surface }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                            <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap", justifyContent: "flex-start" }}>
                                     <span style={{ fontSize: "0.66rem", fontWeight: 600, padding: "1px 6px", borderRadius: radius.sm, color: "#fff", background: CATEGORY_COLORS[entry.category] || colors.textMuted }}>{catLabel(entry.category, isZh)}</span>
                                     {(entry.tags || []).map(tag => (
                                         <span key={tag} style={{ fontSize: "0.64rem", padding: "1px 5px", borderRadius: radius.sm, background: colors.bg, color: colors.textSecondary, border: `1px solid ${colors.border}` }}>{tag}</span>
                                     ))}
                                 </div>
-                                <div style={{ fontSize: "0.78rem", color: colors.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{entry.content}</div>
-                                <div style={{ fontSize: "0.66rem", color: colors.textMuted, marginTop: 4 }}>{t("更新", "Updated")}: {fmtDate(entry.updated_at, isZh)} · {t("访问", "Access")}: {entry.access_count}</div>
+                                <div style={{ fontSize: "0.78rem", color: colors.text, whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 120, overflowY: "auto", paddingRight: 4, textAlign: "left" }}>{entry.content}</div>
+                                <div style={{ fontSize: "0.66rem", color: colors.textMuted, marginTop: 4, textAlign: "left" }}>{t("更新", "Updated")}: {fmtDate(entry.updated_at, isZh)} · {t("访问", "Access")}: {entry.access_count}</div>
                             </div>
-                            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                            <div style={{ display: "flex", gap: 4, flexShrink: 0, alignSelf: "flex-start" }}>
                                 <button onClick={() => openEdit(entry)} aria-label={t("编辑", "Edit")} title={t("编辑", "Edit")} style={{ padding: "3px 8px", fontSize: "0.7rem", cursor: "pointer", background: "none", border: `1px solid ${colors.border}`, borderRadius: radius.sm, color: colors.textSecondary }}>✏️</button>
                                 <button onClick={() => setDeleteTarget(entry.id)} aria-label={t("删除", "Delete")} title={t("删除", "Delete")} style={{ padding: "3px 8px", fontSize: "0.7rem", cursor: "pointer", background: "none", border: `1px solid ${colors.border}`, borderRadius: radius.sm, color: colors.danger }}>🗑️</button>
                             </div>

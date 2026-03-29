@@ -1,4 +1,4 @@
-package browser
+﻿package browser
 
 import (
 	"encoding/json"
@@ -15,7 +15,7 @@ func RegisterTools(registry *tool.Registry) {
 	tools := []tool.RegisteredTool{
 		{
 			Name:        "browser_connect",
-			Description: "连接到浏览器的 CDP 远程调试端口。如果浏览器未启动调试模式，会返回启动指引。可选参数 addr 指定地址（默认 http://127.0.0.1:9222）。",
+			Description: "连接到浏览器（自动发现或启动）。优先连接已有调试端口；如果没有，会自动用用户的 Chrome/Edge 默认 profile 启动（保留登录态）。可选参数 addr 手动指定 CDP 地址。",
 			Category:    tool.CategoryBuiltin,
 			Tags:        []string{"browser", "web", "test", "automation", "浏览器", "连接", "网页"},
 			Priority:    5,
@@ -26,7 +26,7 @@ func RegisterTools(registry *tool.Registry) {
 				a := strArg(args, "addr", addr)
 				sess, err := GetSession(a)
 				if err != nil {
-					return fmt.Sprintf("连接失败: %s", err)
+					return fmt.Sprintf("连接失败: %s\n\n注意: 浏览器连接已自动尝试发现和启动，无需手动重试其他方案。如仍失败，请让用户手动关闭所有浏览器窗口后再试一次。", err)
 				}
 				pages, _ := sess.ListPages()
 				var info []string
@@ -55,7 +55,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				url := strArg(args, "url", "")
 				if url == "" {
@@ -82,7 +82,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				sel := strArg(args, "selector", "")
 				if err := sess.Click(sel); err != nil {
@@ -105,7 +105,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				sel := strArg(args, "selector", "")
 				text := strArg(args, "text", "")
@@ -127,7 +127,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				fullPage, _ := args["full_page"].(bool)
 				data, err := sess.Screenshot(fullPage)
@@ -156,7 +156,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				text, err := sess.GetText(strArg(args, "selector", ""))
 				if err != nil {
@@ -177,7 +177,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				html, err := sess.GetHTML(strArg(args, "selector", ""))
 				if err != nil {
@@ -199,7 +199,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				result, err := sess.Eval(strArg(args, "expression", ""))
 				if err != nil {
@@ -222,7 +222,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				sel := strArg(args, "selector", "")
 				timeout := intArg(args, "timeout", 10)
@@ -245,7 +245,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				dx := intArg(args, "delta_x", 0)
 				dy := intArg(args, "delta_y", 500)
@@ -269,7 +269,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				if err := sess.Select(strArg(args, "selector", ""), strArg(args, "value", "")); err != nil {
 					return fmt.Sprintf("选择失败: %s", err)
@@ -287,7 +287,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				pages, err := sess.ListPages()
 				if err != nil {
@@ -322,7 +322,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				tid := strArg(args, "target_id", "")
 				if err := sess.SwitchPage(tid); err != nil {
@@ -356,7 +356,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				sel := strArg(args, "selector", "")
 				if err := sess.ClickAt(sel); err != nil {
@@ -379,7 +379,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				sel := strArg(args, "selector", "")
 				filesStr := strArg(args, "files", "")
@@ -406,7 +406,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				if err := sess.Back(); err != nil {
 					return fmt.Sprintf("后退失败: %s", err)
@@ -425,7 +425,7 @@ func RegisterTools(registry *tool.Registry) {
 			Handler: func(args map[string]interface{}) string {
 				sess, err := GetSession(addr)
 				if err != nil {
-					return err.Error()
+					return sessionError(err)
 				}
 				info, err := sess.Info()
 				if err != nil {
@@ -445,6 +445,12 @@ func RegisterTools(registry *tool.Registry) {
 }
 
 // ── arg helpers ──
+
+// sessionError returns a concise error for browser session failures,
+// directing the AI to call browser_connect instead of inventing workarounds.
+func sessionError(err error) string {
+	return fmt.Sprintf("浏览器未连接: %s。请先调用 browser_connect。", err)
+}
 
 func strArg(args map[string]interface{}, key, fallback string) string {
 	if v, ok := args[key].(string); ok && v != "" {

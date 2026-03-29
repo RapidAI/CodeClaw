@@ -105,13 +105,13 @@ export function MCPManagementPanel({ translate }: Props) {
                     style={activeTab === "local" ? tabActiveStyle : tabStyle}
                     onClick={() => setActiveTab("local")}
                 >
-                    本地 (Stdio)
+                    {translate("mcpTabLocal")}
                 </button>
                 <button
                     style={activeTab === "remote" ? tabActiveStyle : tabStyle}
                     onClick={() => setActiveTab("remote")}
                 >
-                    远程 (HTTP)
+                    {translate("mcpTabRemote")}
                 </button>
             </div>
 
@@ -219,8 +219,8 @@ function LocalMCPPanel({ translate }: Props) {
     };
 
     const handleSubmit = async () => {
-        if (!formData.name.trim()) { setFormError("名称不能为空"); return; }
-        if (!formData.command.trim()) { setFormError("命令不能为空"); return; }
+        if (!formData.name.trim()) { setFormError(translate("mcpNameRequired")); return; }
+        if (!formData.command.trim()) { setFormError(translate("mcpCommandRequired")); return; }
         const args = argsText.split("\n").map(s => s.trim()).filter(Boolean);
         const env: Record<string, string> = {};
         for (const p of envPairs) {
@@ -276,11 +276,11 @@ function LocalMCPPanel({ translate }: Props) {
         try {
             parsed = JSON.parse(jsonText);
         } catch {
-            setJsonError("JSON 格式错误"); return;
+            setJsonError(translate("mcpJsonFormatError")); return;
         }
         const mcpServers = parsed.mcpServers || parsed;
         if (typeof mcpServers !== "object" || Array.isArray(mcpServers)) {
-            setJsonError("格式不正确，需要 { mcpServers: { name: { command, args, env } } }");
+            setJsonError(translate("mcpJsonStructureError"));
             return;
         }
         setBusy(true);
@@ -311,19 +311,19 @@ function LocalMCPPanel({ translate }: Props) {
             {/* Header */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: "0.78rem", color: "#5a6577" }}>
-                    {servers.length} 个本地 MCP Server
+                    {servers.length} {translate("mcpLocalCount")}
                 </span>
                 <div style={{ display: "flex", gap: "6px" }}>
                     <button className="btn-secondary" style={{ fontSize: "0.72rem", padding: "3px 10px" }} onClick={() => { setShowJsonImport(true); setJsonText(""); setJsonError(""); }} disabled={busy}>
-                        导入 JSON
+                        {translate("mcpImportJson")}
                     </button>
                     <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={openCreateForm} disabled={busy}>
-                        + 添加
+                        {translate("mcpAdd")}
                     </button>
                 </div>
             </div>
 
-            {loading && <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>加载中...</div>}
+            {loading && <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>{translate("mcpLoading")}</div>}
             {error && <div style={{ fontSize: "0.78rem", color: "#c53030", background: "#fff5f5", padding: "6px 10px", borderRadius: "4px", border: "1px solid #fecdd3" }}>{error}</div>}
 
             {/* Server list */}
@@ -348,17 +348,17 @@ function LocalMCPPanel({ translate }: Props) {
                                             background: s.disabled ? "#d1d5db" : statusMap[s.id] ? "#22c55e" : "#ef4444",
                                             flexShrink: 0,
                                         }}
-                                        title={s.disabled ? "已禁用" : statusMap[s.id] ? "运行中" : "未运行"}
+                                        title={s.disabled ? translate("mcpDisabled") : statusMap[s.id] ? translate("mcpRunning") : translate("mcpNotRunning")}
                                     />
                                     <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "#1a202c" }}>{s.name}</span>
-                                    {s.disabled && <span style={{ fontSize: "0.66rem", color: "#8b95a5" }}>(已禁用)</span>}
+                                    {s.disabled && <span style={{ fontSize: "0.66rem", color: "#8b95a5" }}>({translate("mcpDisabled")})</span>}
                                 </div>
                                 <div style={{ display: "flex", gap: "4px" }}>
                                     <button className="btn-secondary" style={smallBtnStyle} onClick={() => handleToggleDisabled(s)} disabled={busy}>
-                                        {s.disabled ? "启用" : "禁用"}
+                                        {s.disabled ? translate("mcpEnable") : translate("mcpDisable")}
                                     </button>
-                                    <button className="btn-secondary" style={smallBtnStyle} onClick={() => openEditForm(s)} disabled={busy}>编辑</button>
-                                    <button className="btn-secondary btn-danger" style={smallBtnStyle} onClick={() => setDeleteTarget(s)} disabled={busy}>删除</button>
+                                    <button className="btn-secondary" style={smallBtnStyle} onClick={() => openEditForm(s)} disabled={busy}>{translate("mcpEdit")}</button>
+                                    <button className="btn-secondary btn-danger" style={smallBtnStyle} onClick={() => setDeleteTarget(s)} disabled={busy}>{translate("mcpDelete")}</button>
                                 </div>
                             </div>
                             <div style={{ fontSize: "0.72rem", color: "#5a6577", fontFamily: "monospace", marginTop: "4px", wordBreak: "break-all" }}>
@@ -366,7 +366,7 @@ function LocalMCPPanel({ translate }: Props) {
                             </div>
                             {s.env && Object.keys(s.env).length > 0 && (
                                 <div style={{ fontSize: "0.68rem", color: "#8b95a5", marginTop: "2px" }}>
-                                    环境变量: {Object.keys(s.env).join(", ")}
+                                    {translate("mcpEnvVars")}: {Object.keys(s.env).join(", ")}
                                 </div>
                             )}
                         </div>
@@ -376,7 +376,7 @@ function LocalMCPPanel({ translate }: Props) {
 
             {!loading && servers.length === 0 && !error && (
                 <div style={{ textAlign: "center", padding: "20px", fontSize: "0.78rem", color: "#8b95a5" }}>
-                    暂无本地 MCP Server，点击「+ 添加」或「导入 JSON」来配置
+                    {translate("mcpNoLocalServers")}
                 </div>
             )}
 
@@ -385,18 +385,18 @@ function LocalMCPPanel({ translate }: Props) {
                 <div className="modal-backdrop" onClick={() => setDeleteTarget(null)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: "280px" }}>
                         <div className="modal-header">
-                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>确认删除</h3>
+                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{translate("mcpConfirmDelete")}</h3>
                             <button className="btn-close" onClick={() => setDeleteTarget(null)}>×</button>
                         </div>
                         <div className="modal-body">
                             <p style={{ fontSize: "0.8rem", color: "#5a6577", margin: 0 }}>
-                                确定要删除本地 MCP Server「{deleteTarget.name}」吗？
+                                {translate("mcpConfirmDeleteLocal").replace("{name}", deleteTarget.name)}
                             </p>
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-secondary" onClick={() => setDeleteTarget(null)} disabled={busy}>取消</button>
+                            <button className="btn-secondary" onClick={() => setDeleteTarget(null)} disabled={busy}>{translate("cancel")}</button>
                             <button className="btn-secondary btn-danger" onClick={() => handleDelete(deleteTarget)} disabled={busy}>
-                                {busy ? "删除中..." : "删除"}
+                                {busy ? translate("mcpDeleting") : translate("mcpDelete")}
                             </button>
                         </div>
                     </div>
@@ -408,12 +408,12 @@ function LocalMCPPanel({ translate }: Props) {
                 <div className="modal-backdrop" onClick={() => setShowJsonImport(false)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: "480px", textAlign: "left" }}>
                         <div className="modal-header">
-                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>导入 JSON 配置</h3>
+                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{translate("mcpImportJsonTitle")}</h3>
                             <button className="btn-close" onClick={() => setShowJsonImport(false)}>×</button>
                         </div>
                         <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                             <div style={{ fontSize: "0.72rem", color: "#5a6577" }}>
-                                粘贴标准 MCP JSON 配置，支持格式如：
+                                {translate("mcpImportJsonDesc")}
                             </div>
                             <pre style={{ fontSize: "0.68rem", background: "#f4f5f7", padding: "6px 8px", borderRadius: "4px", margin: 0, whiteSpace: "pre-wrap", color: "#4f5d75" }}>
 {`{"mcpServers": {"server-name": {
@@ -427,7 +427,7 @@ function LocalMCPPanel({ translate }: Props) {
                                 rows={8}
                                 value={jsonText}
                                 onChange={(e) => setJsonText(e.target.value)}
-                                placeholder='粘贴 JSON 配置...'
+                                placeholder={translate("mcpImportJsonPlaceholder")}
                                 spellCheck={false}
                                 style={{ fontFamily: "monospace", fontSize: "0.74rem", resize: "vertical" }}
                             />
@@ -438,9 +438,9 @@ function LocalMCPPanel({ translate }: Props) {
                             )}
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-secondary" onClick={() => setShowJsonImport(false)} disabled={busy}>取消</button>
+                            <button className="btn-secondary" onClick={() => setShowJsonImport(false)} disabled={busy}>{translate("cancel")}</button>
                             <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 14px" }} onClick={handleJsonImport} disabled={busy || !jsonText.trim()}>
-                                {busy ? "导入中..." : "导入"}
+                                {busy ? translate("mcpImporting") : translate("mcpImport")}
                             </button>
                         </div>
                     </div>
@@ -452,20 +452,20 @@ function LocalMCPPanel({ translate }: Props) {
                 <div className="modal-backdrop" onClick={closeForm}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: "440px", textAlign: "left" }}>
                         <div className="modal-header">
-                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{editingServer ? "编辑本地 MCP Server" : "添加本地 MCP Server"}</h3>
+                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{editingServer ? translate("mcpEditLocalServer") : translate("mcpAddLocalServer")}</h3>
                             <button className="btn-close" onClick={closeForm}>×</button>
                         </div>
                         <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">名称</label>
+                                <label className="form-label">{translate("mcpNameLabel")}</label>
                                 <input className="form-input" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="brave-search" spellCheck={false} />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">命令 (command)</label>
+                                <label className="form-label">{translate("mcpCommandLabel")}</label>
                                 <input className="form-input" value={formData.command} onChange={(e) => setFormData({ ...formData, command: e.target.value })} placeholder="npx" spellCheck={false} />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">参数 (args)，每行一个</label>
+                                <label className="form-label">{translate("mcpArgsLabel")}</label>
                                 <textarea
                                     className="form-input"
                                     rows={3}
@@ -477,7 +477,7 @@ function LocalMCPPanel({ translate }: Props) {
                                 />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">环境变量 (env)</label>
+                                <label className="form-label">{translate("mcpEnvLabel")}</label>
                                 {envPairs.map((pair, idx) => (
                                     <div key={idx} style={{ display: "flex", gap: "4px", marginBottom: "4px", alignItems: "center" }}>
                                         <input
@@ -509,7 +509,7 @@ function LocalMCPPanel({ translate }: Props) {
                                     </div>
                                 ))}
                                 <button className="btn-secondary" style={{ fontSize: "0.72rem", padding: "2px 8px" }} onClick={() => setEnvPairs([...envPairs, { key: "", value: "" }])}>
-                                    + 添加环境变量
+                                    {translate("mcpAddEnvVar")}
                                 </button>
                             </div>
                             {formError && (
@@ -519,9 +519,9 @@ function LocalMCPPanel({ translate }: Props) {
                             )}
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-secondary" onClick={closeForm} disabled={busy}>取消</button>
+                            <button className="btn-secondary" onClick={closeForm} disabled={busy}>{translate("cancel")}</button>
                             <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 14px" }} onClick={handleSubmit} disabled={busy}>
-                                {busy ? "提交中..." : editingServer ? "保存" : "添加"}
+                                {busy ? translate("mcpSubmitting") : editingServer ? translate("mcpSave") : translate("mcpAdd")}
                             </button>
                         </div>
                     </div>
@@ -588,8 +588,8 @@ function RemoteMCPPanel({ translate }: Props) {
     };
 
     const handleSubmit = async () => {
-        if (!formData.name.trim()) { setFormError("名称不能为空"); return; }
-        if (!formData.endpoint_url.trim()) { setFormError("端点 URL 不能为空"); return; }
+        if (!formData.name.trim()) { setFormError(translate("mcpNameRequired")); return; }
+        if (!formData.endpoint_url.trim()) { setFormError(translate("mcpEndpointRequired")); return; }
         setBusy(true);
         setFormError("");
         try {
@@ -684,9 +684,9 @@ function RemoteMCPPanel({ translate }: Props) {
 
     const healthLabel = (status: string): string => {
         switch (status) {
-            case "healthy": return "健康";
-            case "slow": return "缓慢";
-            case "unavailable": return "不可用";
+            case "healthy": return translate("mcpHealthy");
+            case "slow": return translate("mcpSlow");
+            case "unavailable": return translate("mcpUnavailable");
             default: return status;
         }
     };
@@ -695,14 +695,14 @@ function RemoteMCPPanel({ translate }: Props) {
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: "0.78rem", color: "#5a6577" }}>
-                    {servers.length} {translate("mcpServersRegistered") || "个已注册 MCP Server"}
+                    {servers.length} {translate("mcpServersRegistered")}
                 </span>
                 <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 12px" }} onClick={openCreateForm} disabled={busy}>
-                    + 注册 MCP Server
+                    {translate("mcpRegisterServer")}
                 </button>
             </div>
 
-            {loading && <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>加载中...</div>}
+            {loading && <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>{translate("mcpLoading")}</div>}
             {error && <div style={{ fontSize: "0.78rem", color: "#c53030", background: "#fff5f5", padding: "6px 10px", borderRadius: "4px", border: "1px solid #fecdd3" }}>{error}</div>}
 
             {!loading && servers.length > 0 && (
@@ -710,11 +710,11 @@ function RemoteMCPPanel({ translate }: Props) {
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.76rem" }}>
                         <thead>
                             <tr style={{ background: "#f4f5f7" }}>
-                                <th style={thStyle}>名称</th>
-                                <th style={thStyle}>端点 URL</th>
-                                <th style={thStyle}>健康状态</th>
-                                <th style={thStyle}>工具数</th>
-                                <th style={{ ...thStyle, width: "140px" }}>操作</th>
+                                <th style={thStyle}>{translate("mcpColName")}</th>
+                                <th style={thStyle}>{translate("mcpColEndpoint")}</th>
+                                <th style={thStyle}>{translate("mcpColHealth")}</th>
+                                <th style={thStyle}>{translate("mcpColTools")}</th>
+                                <th style={{ ...thStyle, width: "140px" }}>{translate("mcpColActions")}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -736,6 +736,7 @@ function RemoteMCPPanel({ translate }: Props) {
                                     healthBg={healthBg}
                                     healthBorder={healthBorder}
                                     healthLabel={healthLabel}
+                                    translate={translate}
                                 />
                             ))}
                         </tbody>
@@ -745,7 +746,7 @@ function RemoteMCPPanel({ translate }: Props) {
 
             {!loading && servers.length === 0 && !error && (
                 <div style={{ textAlign: "center", padding: "20px", fontSize: "0.78rem", color: "#8b95a5" }}>
-                    暂无已注册的 MCP Server
+                    {translate("mcpNoRemoteServers")}
                 </div>
             )}
 
@@ -754,18 +755,18 @@ function RemoteMCPPanel({ translate }: Props) {
                 <div className="modal-backdrop" onClick={() => setDeleteTarget(null)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: "280px" }}>
                         <div className="modal-header">
-                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>确认删除</h3>
+                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{translate("mcpConfirmDelete")}</h3>
                             <button className="btn-close" onClick={() => setDeleteTarget(null)}>×</button>
                         </div>
                         <div className="modal-body">
                             <p style={{ fontSize: "0.8rem", color: "#5a6577", margin: 0 }}>
-                                确定要注销 MCP Server「{deleteTarget.name}」吗？此操作不可撤销。
+                                {translate("mcpConfirmDeleteRemote").replace("{name}", deleteTarget.name)}
                             </p>
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-secondary" onClick={() => setDeleteTarget(null)} disabled={busy}>取消</button>
+                            <button className="btn-secondary" onClick={() => setDeleteTarget(null)} disabled={busy}>{translate("cancel")}</button>
                             <button className="btn-secondary btn-danger" onClick={() => handleDelete(deleteTarget)} disabled={busy}>
-                                {busy ? "删除中..." : "删除"}
+                                {busy ? translate("mcpDeleting") : translate("mcpDelete")}
                             </button>
                         </div>
                     </div>
@@ -777,30 +778,30 @@ function RemoteMCPPanel({ translate }: Props) {
                 <div className="modal-backdrop" onClick={closeForm}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: "420px", textAlign: "left" }}>
                         <div className="modal-header">
-                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{editingServer ? "编辑 MCP Server" : "注册 MCP Server"}</h3>
+                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{editingServer ? translate("mcpEditServer") : translate("mcpRegisterServerTitle")}</h3>
                             <button className="btn-close" onClick={closeForm}>×</button>
                         </div>
                         <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">名称</label>
+                                <label className="form-label">{translate("mcpNameLabel")}</label>
                                 <input className="form-input" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="my-mcp-server" spellCheck={false} />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">端点 URL</label>
+                                <label className="form-label">{translate("mcpEndpointLabel")}</label>
                                 <input className="form-input" value={formData.endpoint_url} onChange={(e) => setFormData({ ...formData, endpoint_url: e.target.value })} placeholder="https://mcp.example.com/v1" spellCheck={false} />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                                <label className="form-label">认证方式</label>
+                                <label className="form-label">{translate("mcpAuthType")}</label>
                                 <select className="form-input" value={formData.auth_type} onChange={(e) => setFormData({ ...formData, auth_type: e.target.value as MCPServerView["auth_type"] })}>
-                                    <option value="none">无认证</option>
-                                    <option value="api_key">API Key</option>
-                                    <option value="bearer">Bearer Token</option>
+                                    <option value="none">{translate("mcpAuthNone")}</option>
+                                    <option value="api_key">{translate("mcpAuthApiKey")}</option>
+                                    <option value="bearer">{translate("mcpAuthBearer")}</option>
                                 </select>
                             </div>
                             {formData.auth_type !== "none" && (
                                 <div className="form-group" style={{ marginBottom: 0 }}>
-                                    <label className="form-label">{formData.auth_type === "api_key" ? "API Key" : "Bearer Token"}</label>
-                                    <input className="form-input" type="password" value={formData.auth_secret} onChange={(e) => setFormData({ ...formData, auth_secret: e.target.value })} placeholder={formData.auth_type === "api_key" ? "输入 API Key" : "输入 Bearer Token"} spellCheck={false} />
+                                    <label className="form-label">{formData.auth_type === "api_key" ? translate("mcpAuthApiKey") : translate("mcpAuthBearer")}</label>
+                                    <input className="form-input" type="password" value={formData.auth_secret} onChange={(e) => setFormData({ ...formData, auth_secret: e.target.value })} placeholder={formData.auth_type === "api_key" ? translate("mcpEnterApiKey") : translate("mcpEnterBearer")} spellCheck={false} />
                                 </div>
                             )}
                             {formError && (
@@ -808,9 +809,9 @@ function RemoteMCPPanel({ translate }: Props) {
                             )}
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-secondary" onClick={closeForm} disabled={busy}>取消</button>
+                            <button className="btn-secondary" onClick={closeForm} disabled={busy}>{translate("cancel")}</button>
                             <button className="btn-primary" style={{ fontSize: "0.78rem", padding: "4px 14px" }} onClick={handleSubmit} disabled={busy}>
-                                {busy ? "提交中..." : editingServer ? "保存" : "注册"}
+                                {busy ? translate("mcpSubmitting") : editingServer ? translate("mcpSave") : translate("mcpRegister")}
                             </button>
                         </div>
                     </div>
@@ -837,6 +838,7 @@ function ServerRow({
     healthBg,
     healthBorder,
     healthLabel,
+    translate,
 }: {
     server: MCPServerView;
     busy: boolean;
@@ -853,6 +855,7 @@ function ServerRow({
     healthBg: (s: string) => string;
     healthBorder: (s: string) => string;
     healthLabel: (s: string) => string;
+    translate: (key: string) => string;
 }) {
     const isExpanded = expandedServerID === server.id;
     const showHealthDetail = healthDetailID === server.id;
@@ -877,7 +880,7 @@ function ServerRow({
                             cursor: "pointer",
                         }}
                         onClick={onToggleHealthDetail}
-                        title="点击查看健康检查记录"
+                        title={translate("mcpHealthRecord")}
                     >
                         ● {healthLabel(server.health_status)}
                     </span>
@@ -886,10 +889,10 @@ function ServerRow({
                 <td style={tdStyle}>
                     <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
                         <button className="btn-secondary" style={smallBtnStyle} onClick={onToggleTools} disabled={busy}>
-                            {isExpanded ? "收起" : "工具"}
+                            {isExpanded ? translate("mcpCollapse") : translate("mcpTools")}
                         </button>
-                        <button className="btn-secondary" style={smallBtnStyle} onClick={onEdit} disabled={busy}>编辑</button>
-                        <button className="btn-secondary btn-danger" style={smallBtnStyle} onClick={onDelete} disabled={busy}>删除</button>
+                        <button className="btn-secondary" style={smallBtnStyle} onClick={onEdit} disabled={busy}>{translate("mcpEdit")}</button>
+                        <button className="btn-secondary btn-danger" style={smallBtnStyle} onClick={onDelete} disabled={busy}>{translate("mcpDelete")}</button>
                     </div>
                 </td>
             </tr>
@@ -898,15 +901,15 @@ function ServerRow({
                 <tr>
                     <td colSpan={5} style={{ padding: "6px 8px", background: "#fafbfc", borderTop: "1px solid #e1e4e8" }}>
                         <div style={{ fontSize: "0.72rem", color: "#5a6577" }}>
-                            <div style={{ fontWeight: 600, marginBottom: "4px" }}>健康检查记录</div>
+                            <div style={{ fontWeight: 600, marginBottom: "4px" }}>{translate("mcpHealthRecord")}</div>
                             <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
-                                <span>状态: <span style={{ color: healthColor(server.health_status), fontWeight: 600 }}>{healthLabel(server.health_status)}</span></span>
+                                <span>{translate("mcpHealthStatus")}: <span style={{ color: healthColor(server.health_status), fontWeight: 600 }}>{healthLabel(server.health_status)}</span></span>
                                 <span>·</span>
-                                <span>失败次数: {server.fail_count}</span>
+                                <span>{translate("mcpFailCount")}: {server.fail_count}</span>
                                 <span>·</span>
-                                <span>最近检查: {server.last_check_at ? new Date(server.last_check_at).toLocaleString() : "—"}</span>
+                                <span>{translate("mcpLastCheck")}: {server.last_check_at ? new Date(server.last_check_at).toLocaleString() : "—"}</span>
                                 <button className="btn-secondary" style={{ ...smallBtnStyle, marginLeft: "8px" }} onClick={onHealthCheck} disabled={busy}>
-                                    立即检查
+                                    {translate("mcpCheckNow")}
                                 </button>
                             </div>
                         </div>
@@ -918,21 +921,21 @@ function ServerRow({
                 <tr>
                     <td colSpan={5} style={{ padding: "6px 8px", background: "#fafbfc", borderTop: "1px solid #e1e4e8" }}>
                         {toolsLoading ? (
-                            <div style={{ fontSize: "0.74rem", color: "#8b95a5", padding: "4px 0" }}>加载工具列表...</div>
+                            <div style={{ fontSize: "0.74rem", color: "#8b95a5", padding: "4px 0" }}>{translate("mcpLoadingTools")}</div>
                         ) : expandedTools.length > 0 ? (
                             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                                 <div style={{ fontSize: "0.72rem", fontWeight: 600, color: "#5a6577", marginBottom: "2px" }}>
-                                    工具列表 ({expandedTools.length})
+                                    {translate("mcpToolList")} ({expandedTools.length})
                                 </div>
                                 {expandedTools.map((tool) => (
                                     <div key={tool.name} style={{ background: "#ffffff", border: "1px solid #e1e4e8", borderRadius: "4px", padding: "4px 8px" }}>
                                         <div style={{ fontSize: "0.74rem", fontWeight: 600, color: "#1a202c" }}>{tool.name}</div>
-                                        <div style={{ fontSize: "0.7rem", color: "#5a6577" }}>{tool.description || "无描述"}</div>
+                                        <div style={{ fontSize: "0.7rem", color: "#5a6577" }}>{tool.description || translate("mcpNoDescription")}</div>
                                     </div>
                                 ))}
                             </div>
                         ) : (
-                            <div style={{ fontSize: "0.74rem", color: "#8b95a5", padding: "4px 0" }}>暂无工具</div>
+                            <div style={{ fontSize: "0.74rem", color: "#8b95a5", padding: "4px 0" }}>{translate("mcpNoTools")}</div>
                         )}
                     </td>
                 </tr>

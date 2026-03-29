@@ -27,8 +27,8 @@ var (
 )
 
 // GetSession returns the global browser session, connecting if needed.
-// If addr is empty, it auto-discovers the CDP port via DevToolsActivePort file
-// or common port scanning before falling back to the default address.
+// If addr is empty, it auto-discovers the CDP port or automatically launches
+// the user's browser with remote debugging enabled (preserving login state).
 func GetSession(addr string) (*Session, error) {
 	globalSessionMu.Lock()
 	defer globalSessionMu.Unlock()
@@ -38,17 +38,17 @@ func GetSession(addr string) (*Session, error) {
 	}
 
 	if addr == "" {
-		// Auto-discover CDP address.
-		if discovered, err := DiscoverCDPAddr(); err == nil {
-			addr = discovered
-		} else {
-			addr = DefaultCDPAddr
+		// Auto-discover or launch browser with CDP.
+		discovered, err := DiscoverOrLaunch()
+		if err != nil {
+			return nil, fmt.Errorf("浏览器连接失败: %w", err)
 		}
+		addr = discovered
 	}
 
 	targets, err := DiscoverTargets(addr)
 	if err != nil {
-		return nil, fmt.Errorf("%w\n\n%s", err, launchHint(addr))
+		return nil, fmt.Errorf("无法获取浏览器页面列表 (%s): %w", addr, err)
 	}
 
 	// Find the first "page" target.
@@ -63,7 +63,7 @@ func GetSession(addr string) (*Session, error) {
 		if len(targets) > 0 && targets[0].WebSocketDebugURL != "" {
 			wsURL = targets[0].WebSocketDebugURL
 		} else {
-			return nil, fmt.Errorf("未找到可调试的页面目标\n\n%s", launchHint(addr))
+			return nil, fmt.Errorf("浏览器已连接但未找到可调试的页面")
 		}
 	}
 
@@ -596,19 +596,3 @@ func (s *Session) waitForLoad(timeout time.Duration) {
 	}
 }
 
-func launchHint(addr string) string {
-	return fmt.Sprintf(`请先启动浏览器并开启远程调试:
-
-  方式一（推荐）: 在 Chrome 地址栏打开 chrome://inspect/#remote-debugging
-    勾选 "Allow remote debugging for this browser instance"，可能需要重启浏览器。
-    无需命令行参数，程序会自动发现端口。
-
-  方式二: 命令行启动
-    Windows Edge:  msedge --remote-debugging-port=9222 --user-data-dir=C:\temp\edge-debug
-    Windows Chrome: chrome --remote-debugging-port=9222 --user-data-dir=C:\temp\chrome-debug
-    macOS Chrome:  /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
-    Linux Chrome:  google-chrome --remote-debugging-port=9222
-
-  注意: 方式二需要先关闭所有浏览器实例，或使用独立的 --user-data-dir。
-  当前尝试连接: %s`, addr)
-}

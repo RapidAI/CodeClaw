@@ -56,6 +56,7 @@ func NewBackgroundLoopManager(statusC chan StatusEvent) *BackgroundLoopManager {
 			SlotKindAuto:      1,
 			SlotKindSSH:       10,
 			SlotKindBrowser:   2,
+			SlotKindGUI:       1,
 		},
 		slotCounts: make(map[SlotKind]int),
 		queues:     make(map[SlotKind][]*pendingTask),

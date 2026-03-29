@@ -64,6 +64,8 @@ func (s *AgentActivityStore) FormatForPrompt(excludeSource string) string {
 			label = "GUI AI 助手"
 		} else if a.Source == "browser_replay" {
 			label = "浏览器回放"
+		} else if a.Source == "gui_replay" {
+			label = "GUI 桌面回放"
 		}
 		line := fmt.Sprintf("- [%s] 任务: %s", label, a.Task)
 		if a.MaxIter > 0 {
