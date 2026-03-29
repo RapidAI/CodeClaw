@@ -16,7 +16,6 @@ func findModel(t *testing.T) string {
 	}
 	home, _ := os.UserHomeDir()
 	candidates := []string{
-		filepath.Join(home, ".maclaw", "models", "gemma-emb.gguf"),
 		filepath.Join(home, ".maclaw", "models", "embeddinggemma-300M-Q8_0.gguf"),
 	}
 	for _, p := range candidates {

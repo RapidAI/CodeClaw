@@ -7,9 +7,9 @@ import (
 )
 
 // DefaultModelFilename is the standard filename for the Gemma embedding model.
-const DefaultModelFilename = "gemma-emb.gguf"
+const DefaultModelFilename = "embeddinggemma-300M-Q8_0.gguf"
 
-// DefaultModelPath returns the default model path: ~/.maclaw/models/gemma-emb.gguf.
+// DefaultModelPath returns the default model path: ~/.maclaw/models/embeddinggemma-300M-Q8_0.gguf.
 // Returns an empty string if the home directory cannot be determined.
 func DefaultModelPath() string {
 	home, err := os.UserHomeDir()

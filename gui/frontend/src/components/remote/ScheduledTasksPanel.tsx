@@ -216,10 +216,10 @@ export function ScheduledTasksPanel({ lang }: Props) {
                                     }}>{task.status}</span>
                                     <span style={{ fontSize: "0.8rem", fontWeight: 600, color: colors.text }}>{task.name}</span>
                                 </div>
-                                <div style={{ fontSize: "0.72rem", color: colors.textMuted, wordBreak: "break-word" }}>
+                                <div style={{ fontSize: "0.72rem", color: colors.textMuted, wordBreak: "break-word", maxHeight: 120, overflowY: "auto", whiteSpace: "pre-wrap" }}>
                                     🎯 {task.action}
-                                    {" · "}⏰ {scheduleDesc(task, isZh)}
-                                    {task.next_run_at && <>{" · "}{t("下次", "Next")}: {fmtDate(task.next_run_at, isZh)}</>}
+                                    {"\n"}⏰ {scheduleDesc(task, isZh)}
+                                    {task.next_run_at && <>{"\n"}{t("下次", "Next")}: {fmtDate(task.next_run_at, isZh)}</>}
                                     {task.run_count > 0 && <>{" · "}{t("已执行", "Runs")}: {task.run_count}</>}
                                 </div>
                                 {task.last_error && (

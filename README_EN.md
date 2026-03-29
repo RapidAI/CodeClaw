@@ -2,56 +2,130 @@
 
 [📖 User Manual](UserManual_EN.md) | [❓ FAQ](faq_en.md) | [English](README_EN.md) | [中文](README.md)
 
-MaClaw is a desktop AI programming assistant dashboard built with Wails, Go, and React. It is designed to provide unified configuration management, automated environment deployment, and one-click launch capabilities for multiple AI CLI tools (Anthropic Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode, CodeBuddy, and Qoder CLI).
+**MaClaw** is your **Programming Little Crayfish (编程小龙虾)** — whether you're a professional software developer or an everyday office worker, it's the most caring AI partner by your side. It doesn't just understand code — it understands *you*: customizable personality, long-term memory of your preferences, spiritual companionship while you work, and autonomous task handling when you're away. Built with Wails, Go, and React, it integrates **three-state programming, agent orchestration, personality system, long-term memory, and SSH/browser monitoring** — equally at home in **software development, office productivity, and daily tasks**.
 
-This application is deeply integrated with popular AI programming models, supporting rapid API Key configuration and automatic synchronization.
+> It's the programmer's coding partner, the office worker's productivity assistant, and everyone's intelligent companion. It stays with you when you work, and works for you when you step away.
 
+Programming as smooth as eating a macaron.
 
-<img width="806" height="486" alt="image" src="https://github.com/user-attachments/assets/c5f1d640-3bed-49af-bd2c-532d1f039a1a" />
+## Three-State Programming Architecture
 
-## Core Features
+MaClaw pioneers a **three-state programming** model covering the full spectrum from local development to fully autonomous orchestration:
 
-*   **🚀 Automatic Environment Preparation**: Automatically detects and prepares the required AI CLI environments (Claude Code, Codex, Gemini, OpenCode, CodeBuddy, Qoder CLI) upon startup, supporting automatic installation and version updates.
-*   **🖼️ Unified Sidebar UI**: Features a modern vertical sidebar navigation for quick switching between different AI programming tools.
-*   **📢 Message Center (BBS)**: Integrated real-time announcements to keep you updated with the latest tool news, tips, and community announcements.
-*   **📚 Interactive Tutorial**: Built-in beginner and advanced guides presented via interactive Markdown to help you master AI programming tools quickly.
-*   **🛒 API Store**: Curated list of high-quality API providers accessible with one click to easily resolve model access challenges.
-*   **🛠️ Unified Skill Management**:
-    *   **Global Skill Repository**: Supports both **Skill ID (Address)** and **Zip Package** formats. Zip skills are added once and shared across all tools.
-    *   **Smart Compatibility Check**: Automatically identifies tool capabilities; Gemini/Codex only display and allow installation of Zip skills.
-    *   **Built-in System Skills**: Pre-configured official documentation and common toolsets for out-of-the-box use.
-*   **📂 Multi-Project Management (Vibe Coding)**：
-    *   **Tabbed Interface**: Manage multiple projects simultaneously and switch contexts quickly using tabs.
-    *   **Independent Configuration**: Each project can have its own working directory and launch parameters (e.g., Yolo Mode).
-    *   **Python Environment Support**: Deeply integrated with Conda/Anaconda, allowing independent Python environments for different projects.
-*   **🔄 Multi-Model & Cross-Platform Support**:
-    *   Integrated with **Claude Code**, **OpenAI Codex**, **Google Gemini CLI**, **OpenCode**, **CodeBuddy**, and **Qoder CLI**.
-    *   **"Original" Mode**: One-click switch back to official configurations to ensure a pure tool experience.
-    *   **Smart Sync**: API Keys for the same provider are automatically synchronized across different tools.
-*   **🖱️ System Tray Support**: Quick model switching, one-click launch, and quitting the application.
-*   **⚡ One-Click Launch**: Large buttons to launch the respective CLI tool with pre-configured environments and authentication.
+| State | Description | Use Cases |
+|--------|-------------|-----------|
+| **Local AI Programming** | AI CLI tools run directly on your machine with full filesystem and dev environment access | Daily coding, debugging, refactoring |
+| **Remote AI Programming** | Browser-based remote access via MaClaw Hub with PWA and mobile support | Remote work, cross-device collaboration |
+| **AI-Orchestrated Auto Programming** | Swarm orchestrator intelligently splits tasks, multi-agent parallel execution, automatic merging | Large features, bulk refactoring, automated pipelines |
+
+Seamless switching between states with intelligent routing based on tool availability, network conditions, and task type.
+
+## Dual-Mode Experience
+
+MaClaw offers two operational modes tailored for different user groups:
+
+| Mode | Target Users | Features |
+|------|-------------|----------|
+| **Professional Mode (Pro)** | Software developers | Full access to three-state programming, Swarm orchestration, SSH/browser monitoring, MCP management, memory system, and all advanced features |
+| **Simplified Mode (Simple)** | Office workers & everyday users | Streamlined interface focused on conversational AI interaction, hiding technical complexity for zero-barrier onboarding — write docs, build reports, look up info with ease |
+
+Switch between modes with one click in settings — **developers use Pro mode to code, office workers use Simple mode to get things done. Everyone's covered.**
+
+## Core Capabilities
+
+### Agent System
+
+*   **Swarm Orchestrator**: Supports Greenfield (build from scratch) and Maintenance (incremental enhancement) operating modes
+*   **Multi-Agent Parallelism**: Up to 5 concurrent AI developer agents with conflict detection and auto-merge
+*   **Feedback Loop**: Up to 5 automatic feedback iterations per task for continuous quality improvement
+*   **Background Task Manager**: Slot-based concurrency control with five task categories: coding, scheduled, auto, SSH, and browser
+
+### Personality System — Your Programming Little Crayfish, A Warm-Hearted Code Companion
+
+MaClaw is not just a cold tool — it's your **Programming Little Crayfish**: with its own personality, remembering your habits, understanding your style, and accompanying every coding session:
+
+*   **Customizable Agent Identity**: Define your little crayfish's name, description, personality, and behavioral style
+*   **Dynamic Role Switching**: Temporarily override roles during conversations for different scenarios (serious code review / relaxed pair programming)
+*   **System Prompt Injection**: Role information automatically injected into system prompts for consistent personality and behavior
+*   **Spiritual Companionship**: Through long coding nights, your little crayfish is always online — responsive, patient, and ever-present
+
+### Memory Management — Your Little Crayfish Remembers Everything
+
+*   **Long-Term Memory Store**: Persistent storage with BM25 + vector semantic indexing — your little crayfish remembers your preferences and project knowledge across sessions
+*   **Multi-Dimensional Scoring**: Memory retrieval based on Recency, Importance, and Relevance
+*   **Memory Lifecycle**: Pin, Archive, Compress, and Garbage Collection (GC) operations
+*   **Six Memory Categories**: Self-identity, user facts, instructions, preferences, project knowledge, session checkpoints
+*   **Knowledge Graph**: Automatic linking of related memories into a structured knowledge network
+
+### SSH Monitoring & Control (Differentiated Capability)
+
+MaClaw's unique SSH monitoring system provides end-to-end remote management for software operations:
+
+*   **Remote Terminal Management**: Built-in SSH client supporting up to 10 concurrent remote sessions
+*   **Real-Time Session Monitoring**: Full visualization of remote operations with process status tracking
+*   **Ops Automation**: Agent-driven remote deployment, log analysis, and fault diagnosis
+*   **Operation Audit**: Full remote operation logging for security compliance
+*   **Batch Operations**: Batch command dispatch with result collection for improved ops efficiency
+
+### Browser Monitoring & Automation (Differentiated Capability)
+
+MaClaw's unique browser monitoring system provides core support for automated testing and business process automation:
+
+*   **Flow Recording & Replay**: Chrome DevTools Protocol-based browser interaction recording and replay
+*   **Background Automation**: Browser tasks run as background tasks with pause/resume/cancel support
+*   **OCR Integration**: RapidOCR and LLM vision model support for screen text extraction
+*   **Scheduled Replay**: Time-based automatic triggering of browser automation tasks
+*   **Variable Override**: Dynamic variable substitution during replay for parameterized automated testing
+*   **Intelligent Verification**: Built-in execution result verification for automatic correctness checking
+
+### Tool Routing & MCP Integration
+
+*   **Hybrid Retrieval Routing**: BM25 + vector semantic dual retrieval for intelligent tool matching
+*   **Local MCP Servers**: Stdio protocol with auto-discovery and health monitoring
+*   **Remote MCP Servers**: HTTP protocol with authentication and health checks
+*   **Dynamic Tool Budget**: Up to 30 tools per request, allocated by relevance
+
+## Base Features
+
+*   **🚀 Automatic Environment Preparation**: Auto-detect and prepare AI CLI environments (Claude Code, Codex, Gemini, OpenCode, CodeBuddy, Qoder CLI) with auto-install and version updates
+*   **🖼️ Unified Sidebar UI**: Modern vertical sidebar navigation for quick switching between AI programming tools
+*   **📢 Message Center (BBS)**: Integrated real-time announcements for tool updates and community news
+*   **📚 Interactive Tutorial**: Built-in beginner and advanced guides via interactive Markdown
+*   **🛒 API Store**: Curated quality API providers, accessible with one click
+*   **🛠️ Unified Skill Management**: Skill ID and Zip package support with smart compatibility checks and built-in system skills
+*   **📂 Multi-Project Management (Vibe Coding)**: Tabbed interface, independent configs, Python environment support (Conda/Anaconda)
+*   **🔄 Multi-Model & Cross-Platform**: Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode, CodeBuddy, Qoder CLI; "Original" mode and smart API Key sync
+*   **🖱️ System Tray**: One-click launch and quit
+*   **⚡ One-Click Launch**: Large buttons to launch CLI tools with pre-configured environments
 
 ## Quick Start
 
-### 1. Run the Program
-Run `MaClaw.exe` (Windows) or `MaClaw.app` (macOS) directly.
+### Post-Install Onboarding (4 Steps)
+After launching MaClaw for the first time, a guided wizard walks you through setup:
 
-### 2. Environment Detection
-On the first launch, the program performs an environment self-check. If required runtimes (e.g., Node.js) are missing, MaClaw will attempt to install them automatically.
+| Step | Content | Description |
+|------|---------|-------------|
+| **Step 1: Register** | Email registration | Enter your email to register (invitation code required in some regions). Unlocks remote programming capabilities. |
+| **Step 2: Choose Mode** | Pro / Simple | Pro mode for developers, Simple mode for office workers and everyday users. Switchable at any time. |
+| **Step 3: Configure AI** | Select LLM provider | Choose from preset providers, enter API Key and test connectivity. Also supports OAuth one-click login and free trial. |
+| **Step 4: Bind WeChat** | QR code scan (optional) | Scan the QR code to bind your little crayfish to your WeChat. Then chat with it anytime, anywhere via WeChat. |
 
-### 3. Configure API Key
-Select a provider and enter your API Key in the configuration panel for each tool.
-*   **Sync Feature**: When you set a Key for a provider in Claude, it will automatically sync to the same provider in Gemini and Codex.
-*   If you don't have a Key yet, click the **"Get Key"** button next to the input field to jump to the respective provider's application page.
+> Four steps and your little crayfish is ready — use the desktop interface on your PC, or command it via WeChat on your phone. Always online, always available.
 
-### 4. Switch and Launch
-*   Select your desired AI tool (Claude, Codex, or Gemini) in the left sidebar.
-*   **Select Project**: Click a project tab in the "Vibe Coding" area to switch projects.
-*   Click **"Launch"**; a terminal window with a pre-configured environment will pop up and run the tool automatically.
+### Run the Program
+Run `MaClaw.exe` (Windows) or `MaClaw.app` (macOS).
+
+### Environment Detection
+On first launch, MaClaw performs an environment self-check and auto-installs missing runtimes (e.g., Node.js).
+
+### Choose a State and Launch
+*   **Local Programming**: Select an AI tool in the sidebar and click **"Launch"**
+*   **Remote Programming**: Access remotely via MaClaw Hub in your browser
+*   **Auto Orchestration**: Configure Swarm orchestrator to let AI split and execute tasks automatically
 
 ## About
 
-*   **Version**: V5.2.1.9700
+*   **Version**: V5.2.2.9710
 *   **Author**: Dr. Daniel
 *   **GitHub**: [RapidAI/MaClaw](https://github.com/rapidai/maclaw)
 *   **Website**: [maclaw.top](https://maclaw.top)
