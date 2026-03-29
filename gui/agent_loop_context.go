@@ -27,6 +27,7 @@ const (
 	SlotKindAuto                      // ClawNet 自动任务 — max 1
 	SlotKindSSH                       // SSH 远程会话 — max 10
 	SlotKindBrowser                   // 浏览器任务 — max 2
+	SlotKindGUI                       // GUI 桌面自动化任务 — max 1
 )
 
 // SlotKindString returns a human-readable label for the slot kind.
@@ -42,6 +43,8 @@ func (s SlotKind) String() string {
 		return "ssh"
 	case SlotKindBrowser:
 		return "browser"
+	case SlotKindGUI:
+		return "gui"
 	default:
 		return "unknown"
 	}

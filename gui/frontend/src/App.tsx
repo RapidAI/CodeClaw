@@ -4874,26 +4874,28 @@ ${instruction}`;
                                     <h4 style={{ fontSize: '0.8rem', color: '#6366f1', marginBottom: '12px', marginTop: 0, textTransform: 'uppercase', letterSpacing: '0.025em' }}>
                                         {lang === 'zh-Hans' ? '系统设置' : lang === 'zh-Hant' ? '系統設置' : 'System Settings'}
                                     </h4>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                                        <div className="form-group" style={{ marginBottom: 0 }}>
-                                            <label className="form-label">{lang === 'zh-Hans' ? '心跳间隔（秒）' : lang === 'zh-Hant' ? '心跳間隔（秒）' : 'Heartbeat Interval (sec)'}</label>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <label className="form-label" style={{ marginBottom: 0, whiteSpace: 'nowrap' }}>{lang === 'zh-Hans' ? '心跳间隔（秒）' : lang === 'zh-Hant' ? '心跳間隔（秒）' : 'Heartbeat Interval (sec)'}</label>
                                             <input
                                                 className="form-input"
                                                 type="number"
                                                 min={5}
                                                 step={1}
+                                                style={{ width: '70px' }}
                                                 value={config?.remote_heartbeat_sec || 10}
                                                 onChange={(e) => saveRemoteConfigField({ remote_heartbeat_sec: Number(e.target.value || 10) })}
                                                 onBlur={(e) => saveRemoteConfigField({ remote_heartbeat_sec: Math.max(5, Number(e.target.value || 10)) })}
                                             />
                                         </div>
-                                        <div className="form-group" style={{ marginBottom: 0 }}>
-                                            <label className="form-label">{lang === 'zh-Hans' ? '熄屏时间（分钟）' : lang === 'zh-Hant' ? '熄屏時間（分鐘）' : 'Screen Dim Timeout (min)'}</label>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <label className="form-label" style={{ marginBottom: 0, whiteSpace: 'nowrap' }}>{lang === 'zh-Hans' ? '熄屏时间（分钟）' : lang === 'zh-Hant' ? '熄屏時間（分鐘）' : 'Screen Dim Timeout (min)'}</label>
                                             <input
                                                 className="form-input"
                                                 type="number"
                                                 min={0}
                                                 step={1}
+                                                style={{ width: '70px' }}
                                                 value={(config as any)?.screen_dim_timeout_min ?? 3}
                                                 onChange={(e) => saveRemoteConfigField({ screen_dim_timeout_min: Number(e.target.value || 0) } as any)}
                                                 onBlur={(e) => saveRemoteConfigField({ screen_dim_timeout_min: Math.max(0, Number(e.target.value || 0)) } as any)}

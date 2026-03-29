@@ -49,7 +49,11 @@ func DiscoverCDPAddr() (string, error) {
 func DiscoverOrLaunch() (string, error) {
 	// Fast path: already available.
 	if addr, err := DiscoverCDPAddr(); err == nil {
-		return addr, nil
+		// Verify the port is actually serving CDP (not just TCP-open).
+		if _, err2 := DiscoverTargets(addr); err2 == nil {
+			return addr, nil
+		}
+		log.Printf("[browser] 端口可达但 CDP 无响应，将重新启动浏览器")
 	}
 
 	// Detect browser.

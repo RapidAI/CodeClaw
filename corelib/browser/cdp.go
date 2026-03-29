@@ -27,6 +27,7 @@ type CDPClient struct {
 	events   chan CDPEvent
 	closed   chan struct{}
 	closeErr error
+	stopPing chan struct{} // signals the keepalive goroutine to stop
 }
 
 // CDPEvent is a CDP event pushed by the browser.
@@ -88,17 +89,64 @@ func ConnectCDP(wsURL string) (*CDPClient, error) {
 		return nil, fmt.Errorf("cdp dial: %w", err)
 	}
 	c := &CDPClient{
-		conn:    conn,
-		pending: make(map[int64]chan json.RawMessage),
-		events:  make(chan CDPEvent, 64),
-		closed:  make(chan struct{}),
+		conn:     conn,
+		pending:  make(map[int64]chan json.RawMessage),
+		events:   make(chan CDPEvent, 64),
+		closed:   make(chan struct{}),
+		stopPing: make(chan struct{}),
 	}
 	go c.readLoop()
+	go c.keepAlive()
 	return c, nil
+}
+
+// IsAlive checks if the CDP connection is still functional by sending a
+// lightweight Browser.getVersion command with a short timeout.
+func (c *CDPClient) IsAlive() bool {
+	select {
+	case <-c.closed:
+		return false
+	default:
+	}
+	_, err := c.Send("Browser.getVersion", nil, 2*time.Second)
+	return err == nil
+}
+
+// keepAlive sends periodic WebSocket pings to prevent idle disconnection.
+// Runs until the connection is closed or stopPing is signalled.
+func (c *CDPClient) keepAlive() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			c.mu.Lock()
+			err := c.conn.WriteControl(
+				websocket.PingMessage, nil,
+				time.Now().Add(5*time.Second),
+			)
+			c.mu.Unlock()
+			if err != nil {
+				// Ping failed — connection is dead, let readLoop handle cleanup.
+				return
+			}
+		case <-c.stopPing:
+			return
+		case <-c.closed:
+			return
+		}
+	}
 }
 
 // Send sends a CDP command and waits for the response (up to timeout).
 func (c *CDPClient) Send(method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
+	// Early exit if connection is already closed.
+	select {
+	case <-c.closed:
+		return nil, fmt.Errorf("cdp connection closed")
+	default:
+	}
+
 	id := c.nextID.Add(1)
 
 	msg := map[string]interface{}{
@@ -155,6 +203,12 @@ func (c *CDPClient) Close() error {
 	case <-c.closed:
 		return c.closeErr
 	default:
+	}
+	// Stop keepalive goroutine first.
+	select {
+	case <-c.stopPing:
+	default:
+		close(c.stopPing)
 	}
 	c.closeErr = c.conn.Close()
 	close(c.closed)

@@ -37,6 +37,21 @@ func (r *GUIReplayer) Replay(flow *GUIRecordedFlow, overrides map[string]string)
 	return r.supervisor.Execute(spec)
 }
 
+// CancelAll cancels all running tasks in the underlying supervisor.
+// Safe to call from external packages (e.g. gui) that cannot access
+// the unexported supervisor field directly.
+func (r *GUIReplayer) CancelAll() {
+	r.supervisor.mu.RLock()
+	var ids []string
+	for id := range r.supervisor.tasks {
+		ids = append(ids, id)
+	}
+	r.supervisor.mu.RUnlock()
+	for _, id := range ids {
+		_ = r.supervisor.Cancel(id)
+	}
+}
+
 // flowToTaskSpec converts a recorded flow into an executable task spec.
 func (r *GUIReplayer) flowToTaskSpec(flow *GUIRecordedFlow, overrides map[string]string) GUITaskSpec {
 	var steps []GUIStepSpec

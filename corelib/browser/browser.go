@@ -3,6 +3,7 @@ package browser
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -29,16 +30,26 @@ var (
 // GetSession returns the global browser session, connecting if needed.
 // If addr is empty, it auto-discovers the CDP port or automatically launches
 // the user's browser with remote debugging enabled (preserving login state).
+//
+// Production-grade: automatically detects stale connections and reconnects
+// transparently so callers always get a working session.
 func GetSession(addr string) (*Session, error) {
 	globalSessionMu.Lock()
 	defer globalSessionMu.Unlock()
 
+	// Fast path: existing session that is still alive.
 	if globalSession != nil && globalSession.client != nil {
-		return globalSession, nil
+		if globalSession.client.IsAlive() {
+			return globalSession, nil
+		}
+		// Connection is dead — clean up and reconnect.
+		log.Printf("[browser] 检测到 CDP 连接已断开，正在自动重连...")
+		globalSession.client.Close()
+		globalSession = nil
 	}
 
+	// Resolve CDP address (discover or launch).
 	if addr == "" {
-		// Auto-discover or launch browser with CDP.
 		discovered, err := DiscoverOrLaunch()
 		if err != nil {
 			return nil, fmt.Errorf("浏览器连接失败: %w", err)
@@ -46,6 +57,34 @@ func GetSession(addr string) (*Session, error) {
 		addr = discovered
 	}
 
+	// Connect with retry — the browser may still be starting up or the port
+	// may have changed after a restart.
+	const maxRetries = 3
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt) * 2 * time.Second // 2s, 4s
+			log.Printf("[browser] CDP 连接重试 (%d/%d), 等待 %v...", attempt+1, maxRetries, backoff)
+			time.Sleep(backoff)
+			// Re-discover in case the port changed (e.g. browser restarted with port=0).
+			if newAddr, err := DiscoverCDPAddr(); err == nil {
+				addr = newAddr
+			}
+		}
+
+		session, err := connectToAddr(addr)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		globalSession = session
+		return globalSession, nil
+	}
+	return nil, fmt.Errorf("CDP 连接失败 (重试 %d 次): %w", maxRetries, lastErr)
+}
+
+// connectToAddr establishes a new CDP session to the given HTTP address.
+func connectToAddr(addr string) (*Session, error) {
 	targets, err := DiscoverTargets(addr)
 	if err != nil {
 		return nil, fmt.Errorf("无法获取浏览器页面列表 (%s): %w", addr, err)
@@ -69,15 +108,20 @@ func GetSession(addr string) (*Session, error) {
 
 	client, err := ConnectCDP(wsURL)
 	if err != nil {
-		return nil, fmt.Errorf("CDP 连接失败: %w", err)
+		return nil, fmt.Errorf("CDP WebSocket 连接失败: %w", err)
 	}
 
 	// Enable Page and Runtime domains.
-	client.Send("Page.enable", nil, 5*time.Second)
-	client.Send("Runtime.enable", nil, 5*time.Second)
+	if _, err := client.Send("Page.enable", nil, 5*time.Second); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("CDP Page.enable 失败: %w", err)
+	}
+	if _, err := client.Send("Runtime.enable", nil, 5*time.Second); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("CDP Runtime.enable 失败: %w", err)
+	}
 
-	globalSession = &Session{client: client, addr: addr}
-	return globalSession, nil
+	return &Session{client: client, addr: addr}, nil
 }
 
 // CloseSession disconnects the global session.
@@ -502,10 +546,16 @@ func (s *Session) SwitchPage(targetID string) error {
 
 	client, err := ConnectCDP(wsURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("切换页面 CDP 连接失败: %w", err)
 	}
-	client.Send("Page.enable", nil, 5*time.Second)
-	client.Send("Runtime.enable", nil, 5*time.Second)
+	if _, err := client.Send("Page.enable", nil, 5*time.Second); err != nil {
+		client.Close()
+		return fmt.Errorf("切换页面 Page.enable 失败: %w", err)
+	}
+	if _, err := client.Send("Runtime.enable", nil, 5*time.Second); err != nil {
+		client.Close()
+		return fmt.Errorf("切换页面 Runtime.enable 失败: %w", err)
+	}
 
 	// Swap client under lock.
 	s.mu.Lock()

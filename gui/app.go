@@ -459,6 +459,10 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 			}
 		}
 		hubClient.imHandler.SetBackgroundLoopManager(blm)
+		// Register GUI automation tools with async background replay support.
+		registerGUIAutomationTools(hubClient.imHandler.registry, blm, hubClient.imHandler.agentActivity, statusC)
+		// Rebuild the tool builder so it picks up the newly registered GUI tools.
+		hubClient.imHandler.toolBuilder = NewDynamicToolBuilder(hubClient.imHandler.registry)
 		// Wire the statusC into the chat loop's LoopContext so it can drain
 		// background events. This is done lazily: the chat LoopContext gets
 		// statusC assigned in HandleIMMessageWithProgress before runAgentLoop.
@@ -2933,7 +2937,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 			RemoteMachineToken: "",
 			RemoteHeartbeatSec:  10,
 			ScreenDimTimeoutMin: 3, // Default: dim display after 3 minutes of inactivity
-			ClawNetEnabled:       true,
+			ClawNetEnabled:       false,
 			GossipAutoPublish:    true,
 			YoloModeAllowed:      true,
 			GossipEnabled:        true,
@@ -3019,7 +3023,7 @@ func (a *App) LoadConfig() (AppConfig, error) {
 		config.PowerOptimization = true
 	}
 	if !hasClawNetEnabled {
-		config.ClawNetEnabled = true
+		config.ClawNetEnabled = false
 	}
 	if !hasGossipAutoPublish {
 		config.GossipAutoPublish = true
