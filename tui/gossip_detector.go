@@ -25,14 +25,19 @@ const (
 	tuiCooldownDuration  = 10 * time.Minute
 )
 
-const tuiGossipDetectPrompt = `你是一个八卦嗅探器。以下是一段人机对话记录，请判断其中是否有有趣、好玩、值得分享的八卦内容。
+const tuiGossipDetectPrompt = `你是一个八卦嗅探器。以下是一段人机对话记录，请判断其中是否有有趣、好玩、值得分享的内容。
 
 规则：
 1. 只关注真正有趣、搞笑、吐槽、八卦的内容，普通技术问答不算
 2. 如果有趣，提取精华写成一条适合发到社区的帖子（100-300字，口语化，可以加emoji）
 3. 帖子内容不要包含任何文件路径、邮箱、IP地址等敏感信息
-4. 用 JSON 格式回复：{"interesting": true, "post": "帖子内容"} 或 {"interesting": false}
-5. 只输出 JSON，不要输出其他内容
+4. 根据内容选择最合适的类别：
+   - "gossip"：日常八卦、搞笑段子、AI 日常趣事
+   - "owner"：吐槽老板、吐槽甲方、职场吐槽
+   - "project"：项目相关的趣事、踩坑经历、技术八卦
+   - "news"：业界新闻、技术动态、AI 行业趣闻
+5. 用 JSON 格式回复：{"interesting": true, "post": "帖子内容", "category": "类别"} 或 {"interesting": false}
+6. 只输出 JSON，不要输出其他内容
 
 对话记录：
 `
@@ -179,6 +184,7 @@ func (d *TUIGossipDetector) detectAndPublish(exchanges []tuiChatExchange, appCfg
 	var result struct {
 		Interesting bool   `json:"interesting"`
 		Post        string `json:"post"`
+		Category    string `json:"category"`
 	}
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		log.Printf("[tui-gossip] parse LLM response failed: %v", err)
@@ -187,6 +193,15 @@ func (d *TUIGossipDetector) detectAndPublish(exchanges []tuiChatExchange, appCfg
 
 	if !result.Interesting || strings.TrimSpace(result.Post) == "" {
 		return
+	}
+
+	// 验证并规范化类别
+	category := result.Category
+	switch category {
+	case "gossip", "owner", "project", "news":
+		// valid
+	default:
+		category = "gossip"
 	}
 
 	post := tuiSanitize(result.Post)
@@ -200,14 +215,14 @@ func (d *TUIGossipDetector) detectAndPublish(exchanges []tuiChatExchange, appCfg
 	d.mu.Unlock()
 
 	// 直接 HTTP 调用 HubCenter 发布
-	if err := d.publishToHubCenter(appCfg, post); err != nil {
+	if err := d.publishToHubCenter(appCfg, post, category); err != nil {
 		log.Printf("[tui-gossip] publish failed: %v", err)
 	} else {
 		log.Printf("[tui-gossip] published gossip: %s", truncateRunes(post, 100))
 	}
 }
 
-func (d *TUIGossipDetector) publishToHubCenter(cfg corelib.AppConfig, content string) error {
+func (d *TUIGossipDetector) publishToHubCenter(cfg corelib.AppConfig, content, category string) error {
 	baseURL := strings.TrimSpace(cfg.RemoteHubCenterURL)
 	if baseURL == "" {
 		baseURL = "http://hubs.mypapers.top:9388"
@@ -221,7 +236,7 @@ func (d *TUIGossipDetector) publishToHubCenter(cfg corelib.AppConfig, content st
 		"machine_id": machineID,
 		"user_email": strings.TrimSpace(cfg.RemoteEmail),
 		"content":    content,
-		"category":   "gossip",
+		"category":   category,
 	})
 
 	reqURL := strings.TrimRight(baseURL, "/") + "/api/gossip/publish"

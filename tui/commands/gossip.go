@@ -129,15 +129,15 @@ func gossipPublish(args []string) error {
 	}
 	fs := flag.NewFlagSet("gossip publish", flag.ExitOnError)
 	content := fs.String("content", "", "帖子内容")
-	category := fs.String("category", "", "分类: owner|project|news")
+	category := fs.String("category", "", "分类: gossip|owner|project|news")
 	jsonOut := fs.Bool("json", false, "JSON 格式输出")
 	fs.Parse(args)
 
 	if *content == "" {
-		return NewUsageError("usage: gossip publish --content \"...\" --category owner|project|news")
+		return NewUsageError("usage: gossip publish --content \"...\" --category gossip|owner|project|news")
 	}
 	if *category == "" {
-		return NewUsageError("usage: gossip publish --content \"...\" --category owner|project|news")
+		return NewUsageError("usage: gossip publish --content \"...\" --category gossip|owner|project|news")
 	}
 
 	email := resolveEmail()

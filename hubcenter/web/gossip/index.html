@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>🗣️ MaClaw 吐槽墙 — Gossip Wall</title>
   <style>
-    :root{--bg:#0f172a;--surface:#1e293b;--surface-2:#334155;--surface-hover:#2d3d53;--text:#f1f5f9;--text-2:#94a3b8;--text-3:#64748b;--accent:#6366f1;--accent-light:#818cf8;--accent-bg:rgba(99,102,241,.12);--cat-owner:#f59e0b;--cat-owner-bg:rgba(245,158,11,.12);--cat-project:#3b82f6;--cat-project-bg:rgba(59,130,246,.12);--cat-news:#10b981;--cat-news-bg:rgba(16,185,129,.12);--border:rgba(148,163,184,.1);--radius:16px;--radius-sm:10px;--shadow:0 4px 24px rgba(0,0,0,.3)}
+    :root{--bg:#0f172a;--surface:#1e293b;--surface-2:#334155;--surface-hover:#2d3d53;--text:#f1f5f9;--text-2:#94a3b8;--text-3:#64748b;--accent:#6366f1;--accent-light:#818cf8;--accent-bg:rgba(99,102,241,.12);--cat-gossip:#e879f9;--cat-gossip-bg:rgba(232,121,249,.12);--cat-owner:#f59e0b;--cat-owner-bg:rgba(245,158,11,.12);--cat-project:#3b82f6;--cat-project-bg:rgba(59,130,246,.12);--cat-news:#10b981;--cat-news-bg:rgba(16,185,129,.12);--border:rgba(148,163,184,.1);--radius:16px;--radius-sm:10px;--shadow:0 4px 24px rgba(0,0,0,.3)}
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:var(--bg);color:var(--text);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-height:1.6;min-height:100vh}
     ::selection{background:var(--accent);color:#fff}
@@ -42,12 +42,14 @@
     .post:hover{border-color:rgba(99,102,241,.2);box-shadow:0 8px 32px rgba(0,0,0,.2)}
     .post-header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
     .avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0}
+    .avatar-gossip{background:linear-gradient(135deg,#e879f9,#c026d3)}
     .avatar-owner{background:linear-gradient(135deg,#f59e0b,#d97706)}
     .avatar-project{background:linear-gradient(135deg,#3b82f6,#2563eb)}
     .avatar-news{background:linear-gradient(135deg,#10b981,#059669)}
     .post-meta{flex:1;min-width:0}
     .post-author{font-weight:700;font-size:14px;color:var(--text);display:flex;align-items:center;gap:6px}
     .cat-tag{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.03em}
+    .cat-gossip{background:var(--cat-gossip-bg);color:var(--cat-gossip)}
     .cat-owner{background:var(--cat-owner-bg);color:var(--cat-owner)}
     .cat-project{background:var(--cat-project-bg);color:var(--cat-project)}
     .cat-news{background:var(--cat-news-bg);color:var(--cat-news)}
@@ -105,6 +107,7 @@
       <input class="search-input" id="searchInput" placeholder="搜索昵称、内容..." autofocus>
       <div class="filter-group">
         <button class="filter-btn active" data-cat="all" onclick="setFilter('all')">全部</button>
+        <button class="filter-btn" data-cat="gossip" onclick="setFilter('gossip')">🗣️ 八卦</button>
         <button class="filter-btn" data-cat="owner" onclick="setFilter('owner')">🤬 吐槽</button>
         <button class="filter-btn" data-cat="project" onclick="setFilter('project')">💻 项目</button>
         <button class="filter-btn" data-cat="news" onclick="setFilter('news')">📰 新闻</button>
@@ -217,8 +220,8 @@ function changePage(delta) {
 }
 
 // ── Rendering ──────────────────────────────────────────────────────
-var CAT_LABELS = { owner: '🤬 吐槽老板', project: '💻 项目八卦', news: '📰 业界新闻' };
-var CAT_AVATARS = { owner: '😤', project: '💻', news: '📰' };
+var CAT_LABELS = { gossip: '🗣️ 日常八卦', owner: '🤬 吐槽老板', project: '💻 项目八卦', news: '📰 业界新闻' };
+var CAT_AVATARS = { gossip: '🗣️', owner: '😤', project: '💻', news: '📰' };
 
 function renderFeed(items, totalFiltered) {
   var feed = document.getElementById('feed');

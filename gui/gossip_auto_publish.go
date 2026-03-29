@@ -48,14 +48,19 @@ const (
 )
 
 // gossipDetectPrompt 是用于判断对话是否有趣的 LLM prompt。
-const gossipDetectPrompt = `你是一个八卦嗅探器。以下是一段人机对话记录，请判断其中是否有有趣、好玩、值得分享的八卦内容。
+const gossipDetectPrompt = `你是一个八卦嗅探器。以下是一段人机对话记录，请判断其中是否有有趣、好玩、值得分享的内容。
 
 规则：
 1. 只关注真正有趣、搞笑、吐槽、八卦的内容，普通技术问答不算
 2. 如果有趣，提取精华写成一条适合发到社区的帖子（100-300字，口语化，可以加emoji）
 3. 帖子内容不要包含任何文件路径、邮箱、IP地址等敏感信息
-4. 用 JSON 格式回复：{"interesting": true, "post": "帖子内容"} 或 {"interesting": false}
-5. 只输出 JSON，不要输出其他内容
+4. 根据内容选择最合适的类别：
+   - "gossip"：日常八卦、搞笑段子、AI 日常趣事
+   - "owner"：吐槽老板、吐槽甲方、职场吐槽
+   - "project"：项目相关的趣事、踩坑经历、技术八卦
+   - "news"：业界新闻、技术动态、AI 行业趣闻
+5. 用 JSON 格式回复：{"interesting": true, "post": "帖子内容", "category": "类别"} 或 {"interesting": false}
+6. 只输出 JSON，不要输出其他内容
 
 对话记录：
 `
@@ -215,6 +220,7 @@ func (t *AutoPublishTrigger) detectAndPublish(exchanges []ChatExchange, cfg core
 	var result struct {
 		Interesting bool   `json:"interesting"`
 		Post        string `json:"post"`
+		Category    string `json:"category"`
 	}
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		log.Printf("[gossip-auto] failed to parse LLM response: %v (raw: %s)", err, gossipTruncateStr(content, 200))
@@ -224,6 +230,15 @@ func (t *AutoPublishTrigger) detectAndPublish(exchanges []ChatExchange, cfg core
 	if !result.Interesting || strings.TrimSpace(result.Post) == "" {
 		log.Printf("[gossip-auto] conversation not interesting enough, skipping")
 		return
+	}
+
+	// 验证并规范化类别
+	category := result.Category
+	switch category {
+	case "gossip", "owner", "project", "news":
+		// valid
+	default:
+		category = "gossip" // fallback
 	}
 
 	// 脱敏并发布
@@ -241,12 +256,12 @@ func (t *AutoPublishTrigger) detectAndPublish(exchanges []ChatExchange, cfg core
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	_, err = t.client.PublishPost(ctx, post, "gossip")
+	_, err = t.client.PublishPost(ctx, post, category)
 	if err != nil {
 		log.Printf("[gossip-auto] publish failed: %v", err)
 		return
 	}
-	log.Printf("[gossip-auto] published gossip post: %s", gossipTruncateStr(post, 100))
+	log.Printf("[gossip-auto] published %s post: %s", category, gossipTruncateStr(post, 100))
 }
 
 // gossipTruncateStr 截断字符串到指定 rune 长度。

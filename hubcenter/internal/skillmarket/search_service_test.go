@@ -37,6 +37,73 @@ func TestSearch_FTS5Index(t *testing.T) {
 	}
 }
 
+func TestSearch_PrefixMatch(t *testing.T) {
+	_, svc := setupSearchTest(t)
+	ctx := context.Background()
+
+	_ = svc.IndexSkill(ctx, "s1", "Python Formatter", "Format Python code", []string{"python", "format"}, 4.5, 100, 10, "published", "2025-01-01T00:00:00Z")
+	_ = svc.IndexSkill(ctx, "s2", "Go Linter", "Lint Go code", []string{"go", "lint"}, 3.0, 50, 0, "published", "2025-01-02T00:00:00Z")
+
+	// 前缀搜索 "pyth" 应匹配 "Python"
+	results, err := svc.Search(ctx, "pyth", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for prefix 'pyth', got %d", len(results))
+	}
+
+	// 前缀搜索 "form" 应匹配 "Formatter" / "Format"
+	results, err = svc.Search(ctx, "form", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) < 1 {
+		t.Errorf("expected >=1 result for prefix 'form', got %d", len(results))
+	}
+}
+
+func TestSanitizeFTS5Query(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"python", "python*"},
+		{"pyth form", "pyth* form*"},
+		{"hello-world", "hello* world*"},
+		{"", ""},
+		{"   ", ""},
+		{"a+b", "a* b*"},
+		{"中文搜索", "中文搜索*"},
+		{"py 工具", "py* 工具*"},
+	}
+	for _, tt := range tests {
+		got := sanitizeFTS5Query(tt.input)
+		if got != tt.want {
+			t.Errorf("sanitizeFTS5Query(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestEscapeLIKE(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"hello", "hello"},
+		{"100%", "100\\%"},
+		{"a_b", "a\\_b"},
+		{"a\\b", "a\\\\b"},
+		{"%_\\", "\\%\\_\\\\"},
+	}
+	for _, tt := range tests {
+		got := escapeLIKE(tt.input)
+		if got != tt.want {
+			t.Errorf("escapeLIKE(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestSearch_TagsFilter(t *testing.T) {
 	_, svc := setupSearchTest(t)
 	ctx := context.Background()

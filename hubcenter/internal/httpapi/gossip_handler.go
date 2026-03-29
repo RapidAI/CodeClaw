@@ -23,7 +23,7 @@ type gossipPublishRequest struct {
 	MachineID string `json:"machine_id"`
 	UserEmail string `json:"user_email"` // optional
 	Content   string `json:"content"`
-	Category  string `json:"category"` // "owner" | "project" | "news"
+	Category  string `json:"category"` // "gossip" | "owner" | "project" | "news"
 }
 
 func generateNickname(machineID string) string {

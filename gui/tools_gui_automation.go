@@ -1,13 +1,19 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os/exec"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/RapidAI/CodeClaw/corelib/accessibility"
 	"github.com/RapidAI/CodeClaw/corelib/guiautomation"
+	"github.com/RapidAI/CodeClaw/corelib/remote"
 )
 
 // guiReplayActivityAdapter wraps AgentActivityStore to satisfy guiautomation.GUIActivityUpdater.
@@ -38,7 +44,7 @@ func registerGUIAutomationTools(registry *ToolRegistry, loopMgr *BackgroundLoopM
 	inputSim := guiautomation.NewInputSimulator()
 
 	screenshotFn := func() (string, error) {
-		return captureDesktopScreenshot()
+		return captureDesktopScreenshot(-1) // default: all monitors stitched
 	}
 
 	matcher := guiautomation.NewImageMatcher(nil, screenshotFn)
@@ -275,25 +281,60 @@ func registerGUIAutomationTools(registry *ToolRegistry, loopMgr *BackgroundLoopM
 		},
 	})
 
-	// --- gui_screenshot ---
+	// --- gui_screenshot (multi-monitor aware) ---
 	registry.Register(RegisteredTool{
 		Name:        "gui_screenshot",
-		Description: "截取当前桌面屏幕截图，返回 base64 编码的 PNG。Take a desktop screenshot, returns base64-encoded PNG.",
+		Description: "截取桌面屏幕截图。默认截取所有显示器拼接图；传 screen_index 可截取指定显示器。Take a desktop screenshot. Defaults to all monitors stitched; pass screen_index for a specific monitor.",
 		Category:    ToolCategoryBuiltin,
 		Tags:        []string{"gui", "test", "automation", "桌面", "截图"},
+		Priority:    5,
+		Status:      RegToolAvailable,
+		InputSchema: map[string]interface{}{
+			"screen_index": map[string]interface{}{"type": "integer", "description": "显示器索引（0=主显示器，1=第二个...）。不传则截取所有显示器拼接图 / Monitor index (0=primary). Omit for all monitors stitched."},
+		},
+		Source: "builtin:gui_automation",
+		Handler: func(args map[string]interface{}) string {
+			screenIdx := guiIntArg(args, "screen_index", -1)
+			data, err := captureDesktopScreenshot(screenIdx)
+			if err != nil {
+				return fmt.Sprintf("截图失败: %s", err)
+			}
+			resp := map[string]interface{}{
+				"type":   "image",
+				"format": "png",
+				"base64": data,
+			}
+			if screenIdx >= 0 {
+				resp["screen_index"] = screenIdx
+			} else {
+				resp["screen_index"] = "all"
+			}
+			result, _ := json.Marshal(resp)
+			return string(result)
+		},
+	})
+
+	// --- gui_list_displays ---
+	registry.Register(RegisteredTool{
+		Name:        "gui_list_displays",
+		Description: "列出所有连接的显示器信息（索引、名称、分辨率、位置、是否主显示器）。List all connected displays with index, name, resolution, position, and primary flag.",
+		Category:    ToolCategoryBuiltin,
+		Tags:        []string{"gui", "test", "automation", "桌面", "显示器"},
 		Priority:    5,
 		Status:      RegToolAvailable,
 		InputSchema: map[string]interface{}{},
 		Source:      "builtin:gui_automation",
 		Handler: func(args map[string]interface{}) string {
-			data, err := screenshotFn()
+			displays, err := remote.EnumDisplays()
 			if err != nil {
-				return fmt.Sprintf("截图失败: %s", err)
+				return fmt.Sprintf("枚举显示器失败: %s", err)
+			}
+			if len(displays) == 0 {
+				return "未检测到显示器"
 			}
 			result, _ := json.Marshal(map[string]interface{}{
-				"type":   "image",
-				"format": "png",
-				"base64": data,
+				"count":    len(displays),
+				"displays": displays,
 			})
 			return string(result)
 		},
@@ -380,11 +421,67 @@ func emitGUIReplayStatus(statusC chan StatusEvent, loopID, flowName string, elap
 	}
 }
 
-// captureDesktopScreenshot captures the full desktop as a base64-encoded PNG.
-// This is a placeholder that delegates to the existing screenshot infrastructure.
-func captureDesktopScreenshot() (string, error) {
-	// TODO: Wire to corelib/remote screenshot engine for full multi-monitor capture.
-	return "", nil
+// captureDesktopScreenshot captures the desktop as a base64-encoded PNG.
+// screenIndex < 0 means capture all monitors stitched; >= 0 means a specific monitor.
+func captureDesktopScreenshot(screenIndex int) (string, error) {
+	// On macOS, ensure screen recording permission.
+	if !EnsureScreenRecordingPermission() {
+		return "", fmt.Errorf("screen recording permission not granted")
+	}
+	available, reason := DetectDisplayServer()
+	if !available {
+		return "", fmt.Errorf("no graphical display: %s", reason)
+	}
+
+	var cmdStr string
+	if screenIndex >= 0 {
+		res, err := remote.BuildSingleMonitorScreenshotCommandSafe(screenIndex)
+		if err != nil {
+			return "", err
+		}
+		cmdStr = res.Command
+	} else {
+		res := remote.BuildScreenshotCommandWithFallback()
+		cmdStr = res.Command
+	}
+	if cmdStr == "" {
+		return "", fmt.Errorf("screenshot not supported on this platform")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	var shellName string
+	var shellArgs []string
+	if runtime.GOOS == "windows" {
+		shellName = "powershell"
+		shellArgs = []string{"-NoProfile", "-NonInteractive", "-Command", cmdStr}
+	} else {
+		shellName = "bash"
+		shellArgs = []string{"-c", cmdStr}
+	}
+
+	cmd := exec.CommandContext(ctx, shellName, shellArgs...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	hideCommandWindow(cmd)
+
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("screenshot timed out after 45s")
+		}
+		return "", fmt.Errorf("screenshot failed: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+
+	base64Data, err := ParseScreenshotOutput(stdout.String())
+	if err != nil {
+		return "", fmt.Errorf("screenshot parse error: %w", err)
+	}
+	if isBlankImage(base64Data) {
+		return "", fmt.Errorf("screenshot is blank — display may be off or locked")
+	}
+	return base64Data, nil
 }
 
 // ── arg helpers (gui-local, avoid collision with corelib/guiautomation) ──

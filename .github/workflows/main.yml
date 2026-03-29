@@ -585,6 +585,7 @@ jobs:
           cp "build/bin/${OUT_NAME}_amd64_linux" "$APP_DIR/usr/bin/${OUT_LOWER}"
           cp "${BRAND_ICON_PNG}" "$APP_DIR/${OUT_LOWER}.png"
           cp "${BRAND_ICON_PNG}" "$APP_DIR/.DirIcon"
+          cp "${BRAND_ICON_PNG}" "$APP_DIR/usr/share/icons/hicolor/512x512/apps/${OUT_LOWER}.png"
 
           # Desktop file (no leading spaces allowed)
           cat > "$APP_DIR/${OUT_LOWER}.desktop" << DEOF
@@ -611,14 +612,14 @@ jobs:
           wget -q -O appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APP_DIR" \
-            "dist/${OUT_NAME}-${VERSION}-x86_64.AppImage"
+            "dist/${OUT_NAME}-x86_64.AppImage"
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts-${{ matrix.brand || 'default' }}
           path: |
-            dist/${{ env.BRAND_APP_NAME }}-*-x86_64.AppImage
+            dist/${{ env.BRAND_APP_NAME }}-x86_64.AppImage
             dist/*-tui_amd64_linux
             dist/*-tui_arm64_linux
             dist/*-tool_amd64_linux
@@ -629,10 +630,120 @@ jobs:
             dist/maclaw-tool_arm64_linux
 
   # ============================================================
+  # Linux ARM64: GUI (arm64, CGO native) + AppImage
+  # ============================================================
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        brand: ${{ inputs.BRAND == 'maclaw' && fromJSON('[""]') || inputs.BRAND == 'qianxin' && fromJSON('["qianxin"]') || fromJSON('["", "qianxin"]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute brand variables
+        run: |
+          BRAND="${{ matrix.brand }}"
+          if [ -n "$BRAND" ]; then
+            case "$BRAND" in
+              qianxin) DISPLAY_NAME="TigerClaw" ;;
+              *)       DISPLAY_NAME="$BRAND" ;;
+            esac
+            echo "BRAND_TAG=oem_${BRAND}" >> $GITHUB_ENV
+            echo "BRAND_ICON_PNG=assets/${BRAND}.png" >> $GITHUB_ENV
+            echo "BRAND_APP_NAME=${DISPLAY_NAME}" >> $GITHUB_ENV
+            echo "BRAND_DISPLAY_NAME=${DISPLAY_NAME}" >> $GITHUB_ENV
+          else
+            echo "BRAND_TAG=" >> $GITHUB_ENV
+            echo "BRAND_ICON_PNG=build/appicon.png" >> $GITHUB_ENV
+            echo "BRAND_APP_NAME=${APP_NAME}" >> $GITHUB_ENV
+            echo "BRAND_DISPLAY_NAME=${APP_NAME}" >> $GITHUB_ENV
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          if sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev 2>/dev/null; then
+            TAGS="desktop,production"
+          else
+            sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+            TAGS="desktop,production,webkit2_41"
+          fi
+          if [ -n "$BRAND_TAG" ]; then TAGS="${TAGS},${BRAND_TAG}"; fi
+          echo "WEBKIT_TAGS=${TAGS}" >> $GITHUB_ENV
+
+      - name: Build frontend
+        run: |
+          cd gui/frontend
+          npm ci --cache ./.npm_cache
+          npm run build
+
+      - name: Build Linux GUI (arm64)
+        run: |
+          mkdir -p dist build/bin
+          OUT_NAME="${BRAND_APP_NAME}"
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+            go build -tags "${WEBKIT_TAGS}" -o "build/bin/${OUT_NAME}_arm64_linux" ./gui/
+
+      - name: Create AppImage (arm64)
+        run: |
+          OUT_NAME="${BRAND_APP_NAME}"
+          OUT_LOWER=$(echo "$OUT_NAME" | tr '[:upper:]' '[:lower:]')
+          APP_DIR="build/linux/AppDir_arm64"
+          rm -rf "$APP_DIR"
+          mkdir -p "$APP_DIR/usr/bin"
+          mkdir -p "$APP_DIR/usr/share/icons/hicolor/512x512/apps"
+          cp "build/bin/${OUT_NAME}_arm64_linux" "$APP_DIR/usr/bin/${OUT_LOWER}"
+          cp "${BRAND_ICON_PNG}" "$APP_DIR/${OUT_LOWER}.png"
+          cp "${BRAND_ICON_PNG}" "$APP_DIR/.DirIcon"
+          cp "${BRAND_ICON_PNG}" "$APP_DIR/usr/share/icons/hicolor/512x512/apps/${OUT_LOWER}.png"
+
+          cat > "$APP_DIR/${OUT_LOWER}.desktop" << DEOF
+          [Desktop Entry]
+          Name=${BRAND_DISPLAY_NAME}
+          Exec=${OUT_LOWER}
+          Icon=${OUT_LOWER}
+          Type=Application
+          Categories=Development;
+          DEOF
+          sed -i 's/^[[:space:]]*//' "$APP_DIR/${OUT_LOWER}.desktop"
+
+          cat > "$APP_DIR/AppRun" << REOF
+          #!/bin/bash
+          HERE="\$(dirname "\$(readlink -f "\${0}")")"
+          export PATH="\${HERE}/usr/bin:\${PATH}"
+          exec ${OUT_LOWER} "\$@"
+          REOF
+          sed -i 's/^[[:space:]]*//' "$APP_DIR/AppRun"
+          chmod +x "$APP_DIR/AppRun"
+
+          wget -q -O appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage"
+          chmod +x appimagetool
+          ARCH=aarch64 ./appimagetool --appimage-extract-and-run "$APP_DIR" \
+            "dist/${OUT_NAME}-aarch64.AppImage"
+
+      - name: Upload Linux ARM64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-artifacts-${{ matrix.brand || 'default' }}
+          path: |
+            dist/${{ env.BRAND_APP_NAME }}-aarch64.AppImage
+
+  # ============================================================
   # Release: collect all artifacts and create GitHub Release
   # ============================================================
   release:
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-windows, build-macos, build-linux, build-linux-arm64]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
