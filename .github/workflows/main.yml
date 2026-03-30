@@ -230,13 +230,31 @@ jobs:
 
       - name: Install NSIS
         shell: pwsh
-        run: choco install nsis -y --no-progress
+        run: |
+          choco install nsis -y --no-progress
+          # Refresh PATH so makensis is discoverable
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+          refreshenv
+          # Verify installation and locate makensis
+          $nsisPath = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          if (-not $nsisPath) {
+            # Fallback: search common locations
+            $candidates = @(
+              "C:\Program Files (x86)\NSIS\makensis.exe",
+              "C:\Program Files\NSIS\makensis.exe",
+              (Join-Path $env:ChocolateyInstall "bin\makensis.exe")
+            )
+            $nsisPath = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $nsisPath) { Write-Error "NSIS makensis.exe not found after install"; exit 1 }
+          Write-Host "NSIS found at: $nsisPath"
+          echo "NSIS_PATH=$nsisPath" >> $env:GITHUB_ENV
 
       - name: Create NSIS installer
         shell: pwsh
         run: |
           $cfg = Get-Content wails.json -Raw | ConvertFrom-Json
-          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          $nsis = $env:NSIS_PATH
           $root = (Get-Location).Path
           $outName = $env:BRAND_APP_NAME
           & $nsis /DINFO_PROJECTNAME="${outName}" `
