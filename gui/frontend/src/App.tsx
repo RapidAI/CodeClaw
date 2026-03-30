@@ -1563,7 +1563,7 @@ const ToolConfiguration = ({
     return (
         <div style={{
             backgroundColor: '#fafbff',
-            padding: '10px 12px',
+            padding: '9px 12px',
             borderRadius: '12px',
             border: '1px solid rgba(99, 102, 241, 0.08)',
             marginBottom: '10px'
@@ -1573,8 +1573,8 @@ const ToolConfiguration = ({
                 gridTemplateColumns: 'repeat(3, 1fr)',
                 gap: '8px',
                 width: '100%',
-                paddingTop: '6px',
-                paddingBottom: '6px',
+                paddingTop: '5px',
+                paddingBottom: '5px',
                 overflow: 'visible'
             }}>
                 {toolCfg.models.map((model: any) => {
@@ -1586,7 +1586,7 @@ const ToolConfiguration = ({
                             onClick={() => handleModelSwitch(model.model_name)}
                             style={{
                                 width: '100%',
-                                padding: '6px 4px',
+                                padding: '5px 4px',
                                 fontSize: '1.125rem',
                                 borderBottom: (model.api_key && model.api_key.trim() !== "") ? '3px solid var(--primary-color)' : '1px solid var(--border-color)',
                                 position: 'relative',

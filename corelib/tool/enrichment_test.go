@@ -169,3 +169,38 @@ func findSubstring(s, sub string) bool {
 	}
 	return false
 }
+
+func TestGenerateEnrichmentPrompt_WithBody(t *testing.T) {
+	bodySummary := "Parameters:\n- query (string): SQL query\n- timeout (int): seconds"
+	sys, usr := GenerateEnrichmentPrompt("sql_tool", "Execute SQL queries", bodySummary)
+
+	if !containsSubstring(usr, bodySummary) {
+		t.Errorf("user prompt should contain bodySummary, got: %s", usr)
+	}
+	if !containsSubstring(usr, "sql_tool") {
+		t.Errorf("user prompt should contain tool name, got: %s", usr)
+	}
+	if !containsSubstring(sys, "implementation") || !containsSubstring(sys, "body") {
+		t.Errorf("system prompt should mention implementation/body details, got: %s", sys)
+	}
+	if !containsSubstring(sys, "distinguish") {
+		t.Errorf("system prompt should instruct to distinguish from similar tools, got: %s", sys)
+	}
+}
+
+func TestGenerateEnrichmentPrompt_EmptyBody(t *testing.T) {
+	sys, usr := GenerateEnrichmentPrompt("my_tool", "Does cool stuff", "")
+
+	if containsSubstring(usr, "Body Summary") {
+		t.Errorf("user prompt should not contain 'Body Summary' when empty, got: %s", usr)
+	}
+	if containsSubstring(sys, "body summary") {
+		t.Errorf("system prompt should not mention 'body summary' when empty, got: %s", sys)
+	}
+	if !containsSubstring(usr, "my_tool") {
+		t.Errorf("user prompt should contain tool name, got: %s", usr)
+	}
+	if !containsSubstring(usr, "Does cool stuff") {
+		t.Errorf("user prompt should contain description, got: %s", usr)
+	}
+}

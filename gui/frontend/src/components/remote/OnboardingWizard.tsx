@@ -137,10 +137,10 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, onClose, onLLMCo
         }).catch(() => {});
     }, [hubUrl]);
 
-    // Check WeChat status on mount
+    // Check WeChat status on mount — only treat explicit "connected"/"confirmed" as bound
     useEffect(() => {
         GetWeixinStatus().then(s => {
-            if (s && s !== "disconnected") setWxDone(true);
+            if (s === "connected" || s === "confirmed") setWxDone(true);
         }).catch(() => {});
     }, []);
 
