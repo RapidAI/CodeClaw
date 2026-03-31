@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // MCPToolView is a tool exposed by an MCP Server.
@@ -40,19 +41,38 @@ type LocalMCPToolProvider interface {
 // DefinitionGenerator dynamically generates the Agent's tool definition
 // list by merging builtin tool definitions with tools from healthy MCP Servers
 // and running local (stdio) MCP Servers.
+// Supports deferred loading: tools in DeferredTools are excluded from the
+// initial prompt and can be discovered via SearchDeferred (inspired by
+// Claude Code's ToolSearchTool pattern).
 type DefinitionGenerator struct {
 	mcpProvider      MCPServerProvider
 	localMCPProvider LocalMCPToolProvider
 	builtinDefs      []map[string]interface{}
+	deferredTools    map[string]bool // tool names to defer (not included in Generate output)
 }
 
 // NewDefinitionGenerator creates a new generator.
 // builtinDefs are the static tool definitions (e.g. from buildToolDefinitions).
 func NewDefinitionGenerator(mcpProvider MCPServerProvider, builtinDefs []map[string]interface{}) *DefinitionGenerator {
 	return &DefinitionGenerator{
-		mcpProvider: mcpProvider,
-		builtinDefs: builtinDefs,
+		mcpProvider:   mcpProvider,
+		builtinDefs:   builtinDefs,
+		deferredTools: make(map[string]bool),
 	}
+}
+
+// SetDeferredTools marks tool names that should be excluded from Generate()
+// output. These tools are still available via SearchDeferred().
+func (g *DefinitionGenerator) SetDeferredTools(names []string) {
+	g.deferredTools = make(map[string]bool, len(names))
+	for _, n := range names {
+		g.deferredTools[n] = true
+	}
+}
+
+// IsDeferredTool returns true if the tool name is in the deferred set.
+func (g *DefinitionGenerator) IsDeferredTool(name string) bool {
+	return g.deferredTools[name]
 }
 
 // SetLocalMCPProvider sets the local MCP provider for stdio-based tool discovery.
@@ -63,9 +83,16 @@ func (g *DefinitionGenerator) SetLocalMCPProvider(provider LocalMCPToolProvider)
 // Generate produces the complete tool definition list: builtin + dynamic MCP tools.
 // Dynamic tool names that conflict with builtin names get a server_id prefix.
 // Only tools from healthy remote MCP Servers and running local MCP Servers are included.
+// Tools in the deferred set are excluded (use SearchDeferred to find them).
 func (g *DefinitionGenerator) Generate() []map[string]interface{} {
-	result := make([]map[string]interface{}, len(g.builtinDefs))
-	copy(result, g.builtinDefs)
+	result := make([]map[string]interface{}, 0, len(g.builtinDefs))
+	for _, def := range g.builtinDefs {
+		name := ExtractToolName(def)
+		if name != "" && g.deferredTools[name] {
+			continue
+		}
+		result = append(result, def)
+	}
 
 	builtinNames := make(map[string]bool, len(g.builtinDefs))
 	for _, def := range g.builtinDefs {
@@ -114,6 +141,9 @@ func (g *DefinitionGenerator) Generate() []map[string]interface{} {
 
 	for _, p := range pending {
 		name := p.tool.Name
+		if g.deferredTools[name] {
+			continue
+		}
 		needsPrefix := builtinNames[name]
 		if !needsPrefix {
 			if ownerID := dynamicNames[name]; ownerID == "" {
@@ -223,4 +253,72 @@ func LooksLikePropertiesMap(m map[string]interface{}) bool {
 		}
 	}
 	return true
+}
+
+// SearchDeferred returns deferred tool definitions matching the query.
+// Searches tool names and descriptions using substring matching.
+// Returns up to maxResults definitions. If query is empty, returns all deferred tools.
+func (g *DefinitionGenerator) SearchDeferred(query string, maxResults int) []map[string]interface{} {
+	all := g.GenerateDeferred()
+	if query == "" {
+		if maxResults > 0 && len(all) > maxResults {
+			return all[:maxResults]
+		}
+		return all
+	}
+
+	queryLower := strings.ToLower(query)
+	var matches []map[string]interface{}
+	for _, def := range all {
+		name := strings.ToLower(ExtractToolName(def))
+		desc := ""
+		if fn, ok := def["function"].(map[string]interface{}); ok {
+			desc, _ = fn["description"].(string)
+		}
+		descLower := strings.ToLower(desc)
+
+		if strings.Contains(name, queryLower) || strings.Contains(descLower, queryLower) {
+			matches = append(matches, def)
+			if maxResults > 0 && len(matches) >= maxResults {
+				break
+			}
+		}
+	}
+	return matches
+}
+
+// GenerateDeferred returns only the deferred tool definitions (the complement
+// of Generate). Used by SearchDeferred and for tool discovery prompts.
+func (g *DefinitionGenerator) GenerateDeferred() []map[string]interface{} {
+	var result []map[string]interface{}
+	for _, def := range g.builtinDefs {
+		name := ExtractToolName(def)
+		if name != "" && g.deferredTools[name] {
+			result = append(result, def)
+		}
+	}
+
+	// Also include deferred MCP tools.
+	if g.mcpProvider != nil {
+		for _, srv := range g.mcpProvider.ListServers() {
+			if srv.HealthStatus != "healthy" {
+				continue
+			}
+			for _, t := range g.mcpProvider.GetServerTools(srv.ID) {
+				if g.deferredTools[t.Name] {
+					result = append(result, MCPToolToDefinition(t.Name, t))
+				}
+			}
+		}
+	}
+	if g.localMCPProvider != nil {
+		for _, ts := range g.localMCPProvider.GetAllTools() {
+			for _, t := range ts.Tools {
+				if g.deferredTools[t.Name] {
+					result = append(result, MCPToolToDefinition(t.Name, t))
+				}
+			}
+		}
+	}
+	return result
 }
