@@ -138,6 +138,100 @@ func (c *Coordinator) HandleDeviceProfileUpdate(userID string, payload json.RawM
 	log.Printf("[Coordinator] device profile updated: user=%s machine=%s name=%s", userID, profile.MachineID, profile.Name)
 }
 
+// TryFastAnswer attempts to handle a message without device routing.
+// Returns a response if the message can be answered quickly (direct_answer
+// intent, no-device-online error, etc.). Returns nil if the message needs
+// device routing and should be queued for background processing.
+func (c *Coordinator) TryFastAnswer(
+	ctx context.Context,
+	userID, platformName, platformUID, text string,
+) *GenericResponse {
+	machines := c.devices.FindAllOnlineMachinesForUser(ctx, userID)
+
+	// No devices online — answer immediately, no point queuing.
+	if len(machines) == 0 {
+		return &GenericResponse{
+			StatusCode: 503,
+			StatusIcon: "📴",
+			Title:      "设备不在线",
+			Body:       "您的设备当前不在线，无法处理请求。\n\n请确认 MaClaw 客户端已启动并连接到 Hub。",
+		}
+	}
+
+	// No smart route permission — can't do fast-path classification.
+	if !c.IsUserSmartRouteEnabled(ctx, userID) {
+		return nil // queue it
+	}
+
+	// Private/meeting mode — needs device routing, queue it.
+	state := c.spaceState.GetOrCreate(userID)
+	if state.State != SpaceLobby {
+		return nil
+	}
+
+	// In lobby with LLM enabled — try intent classification to detect direct_answer.
+	cfg := c.configProvider()
+	llmEnabled := cfg != nil && cfg.Enabled && c.breaker.Allow()
+	if !llmEnabled {
+		return nil // no LLM, can't classify, queue it
+	}
+
+	// Only attempt fast classification for multi-device or smart-route-single scenarios.
+	smartRouteSingle := cfg != nil && cfg.SmartRouteSingleDevice
+	if len(machines) == 1 && !smartRouteSingle {
+		return nil // single device, direct forward, queue it
+	}
+
+	// Run intent classification (5s timeout — acceptable for fast path).
+	profiles := c.profileCache.GetAll(userID)
+	if len(profiles) == 0 {
+		for _, m := range machines {
+			profiles = append(profiles, DeviceProfile{
+				MachineID:     m.MachineID,
+				Name:          m.Name,
+				LLMConfigured: m.LLMConfigured,
+			})
+		}
+	}
+	cc := c.convContext.GetOrCreate(userID)
+	convRounds := cc.GetRecentSummaries(3)
+	history := c.getRecentHistory(userID)
+
+	result, err := c.intentClassifier.Classify(ctx, userID, text, profiles, history, convRounds)
+	if err != nil {
+		return nil // classification failed, queue it
+	}
+
+	// Only direct_answer and need_clarification are fast-path.
+	// Do NOT recordHistory here for non-fast-path results — Coordinate
+	// will do its own classification (cache-hit) and record there.
+	switch result.Type {
+	case IntentDirectAnswer:
+		c.recordHistory(userID, text, result)
+		resp, err := c.hubDirectAnswer(ctx, userID, platformName, platformUID, text, machines)
+		if err != nil {
+			return nil // error, let queue handle it
+		}
+		return resp
+
+	case IntentNeedClarification:
+		c.recordHistory(userID, text, result)
+		msg := result.Message
+		if msg == "" {
+			msg = "请补充更多信息，以便我判断应该发给哪台设备。"
+		}
+		return &GenericResponse{
+			StatusCode: 200,
+			StatusIcon: "❓",
+			Title:      "需要更多信息",
+			Body:       msg,
+		}
+
+	default:
+		return nil // needs device routing, queue it
+	}
+}
+
 // Coordinate is the main entry point called by the Adapter for non-command
 // messages. It dispatches by space state (lobby/private/meeting), then
 // applies rule engine + LLM classification within each space.

@@ -11,6 +11,7 @@ interface AIAssistantPanelProps {
     sending: boolean;
     streaming: boolean;
     ready: boolean;
+    initStatus?: string; // "connecting" | "loading" | "warming" | "ready"
     sendMessage: (text: string) => Promise<void>;
     clearHistory: () => Promise<void>;
     executeAction: (command: string) => Promise<void>;
@@ -511,7 +512,7 @@ if (typeof document !== "undefined" && !document.getElementById("ai-blink-style"
 
 /* ── Main component ── */
 
-export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, ready, sendMessage, clearHistory, executeAction, refreshNews, scrollToTopSeq, inline, onHideWindow }: AIAssistantPanelProps) {
+export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, ready, initStatus, sendMessage, clearHistory, executeAction, refreshNews, scrollToTopSeq, inline, onHideWindow }: AIAssistantPanelProps) {
     const [inputValue, setInputValue] = useState("");
     const [composing, setComposing] = useState(false);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -525,8 +526,18 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
 
     const title = lang === "en" ? "AI Assistant" : "AI 助手";
     const thinkingText = lang === "en" ? "Thinking..." : "正在思考...";
+
+    const initStatusLabels: Record<string, Record<string, string>> = {
+        connecting: { en: "Connecting to Hub...", zh: "正在连接 Hub..." },
+        loading:    { en: "Loading components...", zh: "正在加载组件..." },
+        warming:    { en: "Warming up...", zh: "正在预热..." },
+        ready:      { en: "Ready", zh: "就绪" },
+    };
+    const statusKey = initStatus || "connecting";
+    const initLabel = (initStatusLabels[statusKey] || initStatusLabels.connecting)[lang === "en" ? "en" : "zh"];
+
     const placeholderText = !ready
-        ? (lang === "en" ? "Initializing..." : "正在初始化...")
+        ? initLabel
         : streaming
         ? (lang === "en" ? "Thinking..." : "正在思考...")
         : sending
@@ -715,7 +726,21 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
                 }}
                 onScroll={handleScroll}
             >
-                {messages.length === 0 ? (
+                {!ready ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: "12px" }}>
+                        <div style={{
+                            width: "28px", height: "28px",
+                            border: `3px solid ${t.inputBarBorder}`,
+                            borderTop: `3px solid ${t.promptColor}`,
+                            borderRadius: "50%",
+                            animation: "maclaw-spin 0.8s linear infinite",
+                        }} />
+                        <style>{`@keyframes maclaw-spin { to { transform: rotate(360deg); } }`}</style>
+                        <div style={{ color: t.textMuted, fontSize: "12px" }}>
+                            {initLabel}
+                        </div>
+                    </div>
+                ) : messages.length === 0 ? (
                     <span style={{ color: t.emptyHint }}>
                         {lang === "en" ? "Ask me anything..." : "有什么可以帮你的？"}
                     </span>
@@ -768,7 +793,7 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
                                             marginTop: "2px",
                                             color: t.textMuted,
                                         }}>
-                                            {bodyText}
+                                            {renderInlineMarkdown(bodyText, t)}
                                         </div>
                                         )}
                                     </div>

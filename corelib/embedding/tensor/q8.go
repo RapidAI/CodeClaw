@@ -5,6 +5,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/viterin/vek/vek32"
 )
@@ -43,12 +44,32 @@ func (t *Q8Tensor) DequantRow(row int, dst []float32) {
 	}
 }
 
+// matMulMaxParallel controls internal parallelism for MatMul operations.
+// 0 = default (NumCPU). Set to 1 to force single-threaded (for batch-level parallelism).
+var matMulMaxParallel int32
+
+// SetMatMulMaxParallel sets the internal parallelism limit.
+func SetMatMulMaxParallel(n int) { atomic.StoreInt32(&matMulMaxParallel, int32(n)) }
+
+func getMatMulWorkers() int {
+	n := int(atomic.LoadInt32(&matMulMaxParallel))
+	if n <= 0 { return runtime.NumCPU() }
+	return n
+}
+
 // MatMulQ8 computes out = A @ B^T where A is [M, K] float32 and B is Q8_0 [N, K].
 // Result out is [M, N]. Each B row is dequantized into a temporary buffer, then
 // vek32.Dot (AVX2/NEON SIMD) computes the dot product against the A row.
 func MatMulQ8(out, a []float32, b *Q8Tensor, M, N, K int) {
-	if M > 1 && M*K > 4096 && runtime.NumCPU() > 1 {
-		matMulQ8Parallel(out, a, b, M, N, K)
+	// Parallelize when there's enough work: either across M rows or N columns.
+	nCPU := getMatMulWorkers()
+	if nCPU > 1 && N*K > 4096 {
+		if M > 1 {
+			matMulQ8Parallel(out, a, b, M, N, K)
+			return
+		}
+		// M is small (often 1 for short sequences) — parallelize across N columns.
+		matMulQ8ParallelN(out, a, b, M, N, K)
 		return
 	}
 	buf := make([]float32, K) // dequant buffer, reused across all N iterations
@@ -63,7 +84,7 @@ func MatMulQ8(out, a []float32, b *Q8Tensor, M, N, K int) {
 }
 
 func matMulQ8Parallel(out, a []float32, b *Q8Tensor, M, N, K int) {
-	nWorkers := runtime.NumCPU()
+	nWorkers := getMatMulWorkers()
 	if nWorkers > M {
 		nWorkers = M
 	}
@@ -91,6 +112,42 @@ func matMulQ8Parallel(out, a []float32, b *Q8Tensor, M, N, K int) {
 				}
 			}
 		}(start, end)
+	}
+	wg.Wait()
+}
+
+// matMulQ8ParallelN parallelizes across the N (output) dimension.
+// This is critical when M=1 (single-token or short-sequence inference)
+// where M-parallel would only use 1 goroutine.
+func matMulQ8ParallelN(out, a []float32, b *Q8Tensor, M, N, K int) {
+	nWorkers := getMatMulWorkers()
+	if nWorkers > N {
+		nWorkers = N
+	}
+	nBlocks := K / q8BlockSize
+	var wg sync.WaitGroup
+	colsPerWorker := (N + nWorkers - 1) / nWorkers
+	for w := 0; w < nWorkers; w++ {
+		nStart := w * colsPerWorker
+		nEnd := nStart + colsPerWorker
+		if nEnd > N {
+			nEnd = N
+		}
+		if nStart >= nEnd {
+			break
+		}
+		wg.Add(1)
+		go func(ns, ne int) {
+			defer wg.Done()
+			buf := make([]float32, K)
+			for m := 0; m < M; m++ {
+				aRow := a[m*K : m*K+K]
+				for n := ns; n < ne; n++ {
+					dequantRowInto(b.Data, n, nBlocks, buf)
+					out[m*N+n] = vek32.Dot(aRow, buf)
+				}
+			}
+		}(nStart, nEnd)
 	}
 	wg.Wait()
 }

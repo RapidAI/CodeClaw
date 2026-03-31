@@ -14,7 +14,7 @@ import cursorIcon from './assets/images/qodercli.png';
 import lobsterOffline from './assets/images/lobster_offline.svg';
 import lobsterHalf from './assets/images/lobster_half.svg';
 import clawnetIcon from './assets/images/clawnet.svg';
-import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, ClawNetIsRunning, ClawNetEnsureDaemonWithDownload, GetQQBotStatus, RestartQQBot, GetTelegramStatus, RestartTelegram, GetWeixinStatus, RestartWeixin, StopWeixin, StartWeixinQRLogin, WaitWeixinQRLogin, GetWeixinLocalMode, SetWeixinLocalMode, GetQQBotLocalMode, SetQQBotLocalMode, GetTelegramLocalMode, SetTelegramLocalMode, IsGossipAllowed, GetBrandInfo, GetUIZoomFactor, SetUIZoomFactor } from "../wailsjs/go/main/App";
+import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, ClawNetIsRunning, ClawNetEnsureDaemonWithDownload, ClawNetStopDaemon, GetQQBotStatus, RestartQQBot, GetTelegramStatus, RestartTelegram, GetWeixinStatus, RestartWeixin, StopWeixin, StartWeixinQRLogin, WaitWeixinQRLogin, GetWeixinLocalMode, SetWeixinLocalMode, GetQQBotLocalMode, SetQQBotLocalMode, GetTelegramLocalMode, SetTelegramLocalMode, IsGossipAllowed, GetBrandInfo, GetUIZoomFactor, SetUIZoomFactor } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
 import ReactMarkdown from 'react-markdown';
@@ -2089,13 +2089,8 @@ function App() {
                     const idx = toolCfg.models.findIndex((m: any) => m.model_name === toolCfg.current_model);
                     if (idx !== -1) setActiveTab(idx);
 
-                    // Check if any model has an API key configured for the active tool
-                    if (isToolTab(lastActiveTool)) {
-                        const hasAnyApiKey = toolCfg.models.some((m: any) => m.api_key && m.api_key.trim() !== "");
-                        if (!hasAnyApiKey) {
-                            setShowModelSettings(true);
-                        }
-                    }
+                    // NOTE: removed auto-popup of provider config when no API key is set.
+                    // Users can open it manually via the "服务商配置" button.
                 }
             }
         }).catch(err => {
@@ -2224,8 +2219,11 @@ function App() {
     // When the settings tab is active, ClawNetPanel also polls — but the
     // lightweight ClawNetIsRunning() call is idempotent, so the overlap is
     // harmless and keeps the globe indicator responsive on tab switches.
+    // NOTE: Only poll when clawnet_enabled — if disabled, report as not running.
     const clawNetAutoStarted = useRef(false);
     const clawNetPrevUp = useRef(false);
+    const clawNetEnabledRef = useRef(!!config?.clawnet_enabled);
+    useEffect(() => { clawNetEnabledRef.current = !!config?.clawnet_enabled; }, [config?.clawnet_enabled]);
     useEffect(() => {
         let retryTimer: ReturnType<typeof setTimeout> | null = null;
         const clearRetry = () => {
@@ -2233,6 +2231,13 @@ function App() {
         };
         const checkClawNet = () => {
             clearRetry();
+            // When ClawNet is disabled in config, don't report as running
+            // even if a residual daemon process happens to be alive.
+            if (!clawNetEnabledRef.current) {
+                clawNetPrevUp.current = false;
+                setClawNetRunning(false);
+                return;
+            }
             ClawNetIsRunning().then(up => {
                 if (!up && clawNetPrevUp.current) {
                     // Was online, now looks offline — quick retry in 2s to
@@ -2265,9 +2270,22 @@ function App() {
 
     // Auto-start ClawNet daemon when enabled in config, so the user doesn't
     // have to visit the settings panel to light up the globe icon.
+    // When disabled, actively stop any residual daemon.
     useEffect(() => {
+        // Skip when config hasn't loaded yet — don't kill a daemon before
+        // we know the user's preference.
+        if (!config) return;
+        if (!config.clawnet_enabled) {
+            // Disabled — stop residual daemon if it's still running.
+            ClawNetIsRunning().then(up => {
+                if (up) {
+                    ClawNetStopDaemon().catch(() => {});
+                }
+            }).catch(() => {});
+            setClawNetRunning(false);
+            return;
+        }
         if (clawNetAutoStarted.current) return;
-        if (!config?.clawnet_enabled) return;
         clawNetAutoStarted.current = true;
         ClawNetIsRunning().then(up => {
             if (!up) {

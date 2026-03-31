@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { SendAIAssistantMessage, ClearAIAssistantHistory, FetchNews, IsAIAssistantReady } from "../../../wailsjs/go/main/App";
+import { SendAIAssistantMessage, ClearAIAssistantHistory, FetchNews, IsAIAssistantReady, GetAIAssistantInitStatus } from "../../../wailsjs/go/main/App";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime";
 
 export interface ChatMessage {
@@ -69,6 +69,8 @@ export function useAIAssistant() {
     const [sending, setSending] = useState(false);
     const [streaming, setStreaming] = useState(false);
     const [ready, setReady] = useState(false);
+    // Human-readable init status: "connecting" | "loading" | "warming" | "ready"
+    const [initStatus, setInitStatus] = useState<string>("connecting");
     // Counter that bumps whenever the panel should scroll to top (e.g. after
     // news reload on clear / restart).  The Panel watches this value.
     const [scrollToTopSeq, setScrollToTopSeq] = useState(0);
@@ -80,6 +82,7 @@ export function useAIAssistant() {
     const scrollOnNextNewsRef = useRef(true); // true on mount (app restart)
 
     // Poll backend readiness until the AI assistant is initialized.
+    // Also listen for init progress events from the backend.
     useEffect(() => {
         let cancelled = false;
         const check = () => {
@@ -87,15 +90,33 @@ export function useAIAssistant() {
                 if (cancelled) return;
                 if (ok) {
                     setReady(true);
+                    setInitStatus("ready");
                 } else {
-                    setTimeout(check, 2000);
+                    GetAIAssistantInitStatus().then(status => {
+                        if (!cancelled) setInitStatus(status || "connecting");
+                    }).catch(() => {});
+                    setTimeout(check, 1500);
                 }
             }).catch(() => {
-                if (!cancelled) setTimeout(check, 2000);
+                if (!cancelled) setTimeout(check, 1500);
             });
         };
         check();
-        return () => { cancelled = true; };
+
+        const progressHandler = (status: string) => {
+            if (status === "ready") {
+                setReady(true);
+                setInitStatus("ready");
+            } else {
+                setInitStatus(status);
+            }
+        };
+        EventsOn("ai-assistant-init-progress", progressHandler);
+
+        return () => {
+            cancelled = true;
+            EventsOff("ai-assistant-init-progress");
+        };
     }, []);
 
     // Persist messages to localStorage whenever they change (debounced via ref
@@ -337,7 +358,7 @@ export function useAIAssistant() {
         };
     }, []);
 
-    return { messages, sending, streaming, ready, sendMessage, clearHistory, executeAction, refreshNews: doFetchNews, scrollToTopSeq };
+    return { messages, sending, streaming, ready, initStatus, sendMessage, clearHistory, executeAction, refreshNews: doFetchNews, scrollToTopSeq };
 }
 
 // Polyfill for Array.findLastIndex (not available in all environments)

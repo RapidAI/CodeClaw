@@ -61,7 +61,6 @@ func (a *ClaudeAdapter) BuildCommand(spec LaunchSpec) (CommandSpec, error) {
 		// it to exit mid-task when creating large projects (e.g. a full game).
 		// Each tool call consumes one turn, so complex tasks need many turns.
 		"--max-turns", "200",
-		"--max-output-tokens", "128000",
 	}
 
 	// When resuming a previous Claude Code session, use --resume <session_id>
@@ -216,6 +215,11 @@ func (a *ClaudeAdapter) buildCommandEnv(base map[string]string) map[string]strin
 	}
 	if env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"] == "" {
 		env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"] = "1"
+	}
+	// Pass max output tokens via environment variable instead of CLI flag,
+	// because Claude Code 2.x does not support --max-output-tokens.
+	if env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "" {
+		env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "128000"
 	}
 
 	return env

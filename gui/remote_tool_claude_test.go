@@ -104,7 +104,6 @@ func TestClaudeAdapterBuildCommandIncludesPrintFlag(t *testing.T) {
 	foundP := false
 	foundStreamJSON := false
 	foundMaxTurns := false
-	foundMaxOutputTokens := false
 	for i, arg := range cmd.Args {
 		if arg == "-p" {
 			foundP = true
@@ -114,9 +113,6 @@ func TestClaudeAdapterBuildCommandIncludesPrintFlag(t *testing.T) {
 		}
 		if arg == "--max-turns" && i+1 < len(cmd.Args) && cmd.Args[i+1] == "200" {
 			foundMaxTurns = true
-		}
-		if arg == "--max-output-tokens" && i+1 < len(cmd.Args) && cmd.Args[i+1] == "128000" {
-			foundMaxOutputTokens = true
 		}
 	}
 
@@ -129,7 +125,9 @@ func TestClaudeAdapterBuildCommandIncludesPrintFlag(t *testing.T) {
 	if !foundMaxTurns {
 		t.Fatalf("BuildCommand args %v missing --max-turns 200", cmd.Args)
 	}
-	if !foundMaxOutputTokens {
-		t.Fatalf("BuildCommand args %v missing --max-output-tokens 128000", cmd.Args)
+
+	// Verify max output tokens is passed via env var, not CLI flag.
+	if cmd.Env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] != "128000" {
+		t.Fatalf("Env CLAUDE_CODE_MAX_OUTPUT_TOKENS = %q, want %q", cmd.Env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "128000")
 	}
 }

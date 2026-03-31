@@ -631,6 +631,56 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, onClose, onLLMCo
                                         <>
                                             {selectedProvider.is_custom ? (
                                                 <>
+                                                    {/* Protocol selection */}
+                                                    <div style={{ marginBottom: 10 }}>
+                                                        <label style={labelStyle}>{t("协议", "Protocol")}</label>
+                                                        <div style={{ display: "flex", gap: 6 }}>
+                                                            {(["openai", "anthropic"] as const).map(proto => {
+                                                                const active = (selectedProvider.protocol || "openai") === proto;
+                                                                return (
+                                                                    <button key={proto} onClick={() => updateField("protocol", proto)} style={{
+                                                                        fontSize: "0.76rem", padding: "5px 16px", cursor: "pointer",
+                                                                        background: active ? "#6366f1" : "#fff",
+                                                                        color: active ? "#fff" : "#1e293b",
+                                                                        border: `1px solid ${active ? "#6366f1" : "#e2e8f0"}`,
+                                                                        borderRadius: 4, transition: "all 0.15s",
+                                                                    }}>
+                                                                        {proto === "openai" ? "OpenAI" : "Anthropic"}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                        <p style={{ fontSize: "0.68rem", color: "#94a3b8", margin: "4px 0 0 0", lineHeight: 1.4 }}>
+                                                            {(selectedProvider.protocol || "openai") === "anthropic"
+                                                                ? t("使用 Anthropic Messages API（x-api-key 鉴权）", "Uses Anthropic Messages API (x-api-key auth)")
+                                                                : t("使用 OpenAI 兼容接口（Bearer Token 鉴权）", "Uses OpenAI-compatible API (Bearer token auth)")}
+                                                        </p>
+                                                    </div>
+                                                    {/* User-Agent selection */}
+                                                    <div style={{ marginBottom: 10 }}>
+                                                        <label style={labelStyle}>User-Agent</label>
+                                                        <div style={{ display: "flex", gap: 6 }}>
+                                                            {(["openclaw", "claude-code/2.0.0"] as const).map(ua => {
+                                                                const active = (selectedProvider.agent_type || "openclaw") === ua;
+                                                                return (
+                                                                    <button key={ua} onClick={() => updateField("agent_type", ua)} style={{
+                                                                        fontSize: "0.76rem", padding: "5px 16px", cursor: "pointer",
+                                                                        background: active ? "#6366f1" : "#fff",
+                                                                        color: active ? "#fff" : "#1e293b",
+                                                                        border: `1px solid ${active ? "#6366f1" : "#e2e8f0"}`,
+                                                                        borderRadius: 4, transition: "all 0.15s",
+                                                                    }}>
+                                                                        {ua}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                        <p style={{ fontSize: "0.68rem", color: "#94a3b8", margin: "4px 0 0 0", lineHeight: 1.4 }}>
+                                                            {(selectedProvider.agent_type || "openclaw") === "claude-code/2.0.0"
+                                                                ? t("Kimi 等需要编程套餐身份的服务商", "For providers requiring Claude Coding Plan identity (e.g. Kimi)")
+                                                                : t("智谱等大多数服务商使用 OpenClaw 身份", "Most providers use OpenClaw identity (e.g. Zhipu)")}
+                                                        </p>
+                                                    </div>
                                                     <div style={{ marginBottom: 10 }}>
                                                         <label style={labelStyle}>API URL <span style={{ color: "#ef4444" }}>*</span></label>
                                                         <input style={inputStyle} value={selectedProvider.url}

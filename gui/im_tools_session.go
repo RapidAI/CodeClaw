@@ -467,7 +467,21 @@ func (h *IMMessageHandler) toolGetSessionOutput(args map[string]interface{}) str
 		case CompletionCompleted:
 			b.WriteString("\n✅ 任务似乎已完成，可以查看结果")
 		case CompletionIncomplete:
-			b.WriteString("\n⚠️ 任务似乎未完成，建议发送「继续」让编程工具继续工作")
+			if session.isStructuredSession() {
+				session.mu.RLock()
+				continueCount := session.AutoContinueCount
+				session.mu.RUnlock()
+
+				if continueCount >= 10 {
+					b.WriteString("\n⚠️ 已自动续接 10 次，建议告知用户当前进度并询问是否继续。")
+				} else {
+					b.WriteString("\n🔄 编程工具因 token/turn 限制暂停，任务未完成。")
+					b.WriteString(fmt.Sprintf("\n📌 立即调用 send_and_observe(session_id=%q, text=\"继续完成之前的任务\") 让编程工具继续工作。", sessionID))
+					b.WriteString("\n⚠️ 不要询问用户是否继续——直接发送续接指令。")
+				}
+			} else {
+				b.WriteString("\n⚠️ 任务似乎未完成，建议发送「继续」让编程工具继续工作")
+			}
 			// CompletionUncertain: 保持现有默认提示（"⚠️ 会话正在等待用户输入"）
 		}
 	}

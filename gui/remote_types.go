@@ -195,6 +195,7 @@ type RemoteSession struct {
 	StallState      StallState      // current stall state, updated by StallDetector
 	CompletionLevel CompletionLevel // latest completion analysis result
 	LastNudgeCount  int             // nudge count from the most recent stall episode
+	AutoContinueCount int           // times Agent auto-continued within a live session (e.g. gemini-acp cancelled)
 	ThinkingState   ThinkingState   // current thinking state (idle/active)
 	ThinkingSince   time.Time       // when the current thinking state started
 

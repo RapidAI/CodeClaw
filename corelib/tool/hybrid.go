@@ -2,13 +2,25 @@ package tool
 
 import (
 	"crypto/sha256"
+	"encoding/gob"
 	"fmt"
+	"log"
 	"math"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/RapidAI/CodeClaw/corelib/embedding"
+	"github.com/RapidAI/CodeClaw/corelib/embedding/tensor"
 )
+
+// ConcurrentEmbedder is an optional interface that embedders can implement
+// to support lock-free concurrent inference (each call allocates its own scratch).
+type ConcurrentEmbedder interface {
+	EmbedConcurrent(text string) ([]float32, error)
+}
 
 // ---------------------------------------------------------------------------
 // CosineSimilarity
@@ -39,23 +51,224 @@ func CosineSimilarity(a, b []float32) float64 {
 
 // ToolEmbeddingCache caches embedding vectors for tool description texts.
 // Keyed by SHA-256 hash of the description text.
+// Supports disk persistence: embeddings are saved to ~/.maclaw/cache/tool_embeddings.gob
+// and restored on next startup if the model file hasn't changed.
 type ToolEmbeddingCache struct {
 	mu       sync.RWMutex
 	embedder embedding.Embedder
 	cache    map[string][]float32 // hash(description) → embedding
+	dirty    bool                 // true when cache has new entries not yet persisted
+	modelID  string               // model file modtime fingerprint for cache invalidation
+
+	saveMu   sync.Mutex    // serializes disk writes
+	saveOnce sync.Once     // ensures only one debounce goroutine is active
+	saveCh   chan struct{} // reset channel for debounce
 }
 
-// NewToolEmbeddingCache creates a new ToolEmbeddingCache.
+const maxToolEmbeddingCacheSize = 2000 // upper bound to prevent unbounded growth
+
+// diskCacheEnvelope is the on-disk format for persisted tool embeddings.
+type diskCacheEnvelope struct {
+	ModelID string               // model file fingerprint (modtime + size)
+	EmbDim  int                  // embedding dimension at time of caching
+	Entries map[string][]float32 // sha256(text) → embedding vector
+}
+
+// toolEmbeddingCachePath returns ~/.maclaw/cache/tool_embeddings.gob.
+func toolEmbeddingCachePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".maclaw", "cache", "tool_embeddings.gob")
+}
+
+// modelFingerprint returns a string combining the model file's modtime and size.
+// Returns "" if the file doesn't exist or can't be stat'd.
+func modelFingerprint(modelPath string) string {
+	fi, err := os.Stat(modelPath)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d_%d", fi.ModTime().UnixNano(), fi.Size())
+}
+
+// NewToolEmbeddingCache creates a new ToolEmbeddingCache and attempts to
+// restore previously persisted embeddings from disk.
 func NewToolEmbeddingCache(emb embedding.Embedder) *ToolEmbeddingCache {
-	return &ToolEmbeddingCache{
+	modelPath := embedding.DefaultModelPath()
+	mid := modelFingerprint(modelPath)
+
+	c := &ToolEmbeddingCache{
 		embedder: emb,
 		cache:    make(map[string][]float32),
+		modelID:  mid,
+		saveCh:   make(chan struct{}, 1),
 	}
+	log.Printf("[ToolEmbeddingCache] init: modelID=%q", mid)
+	c.loadFromDisk()
+	return c
 }
 
 func hashText(text string) string {
 	h := sha256.Sum256([]byte(text))
 	return fmt.Sprintf("%x", h)
+}
+
+// loadFromDisk restores cached embeddings from the gob file.
+// If the model fingerprint doesn't match, the disk cache is ignored.
+func (c *ToolEmbeddingCache) loadFromDisk() {
+	p := toolEmbeddingCachePath()
+	if p == "" {
+		return
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		log.Printf("[ToolEmbeddingCache] load: no disk cache at %s (first run)", p)
+		return // file doesn't exist yet — normal on first run
+	}
+	defer f.Close()
+
+	var env diskCacheEnvelope
+	if err := gob.NewDecoder(f).Decode(&env); err != nil {
+		log.Printf("[ToolEmbeddingCache] disk cache decode error, ignoring: %v", err)
+		return
+	}
+
+	// Validate: model fingerprint must match.
+	if env.ModelID != c.modelID || c.modelID == "" {
+		log.Printf("[ToolEmbeddingCache] model changed (disk=%q current=%q), discarding disk cache", env.ModelID, c.modelID)
+		return
+	}
+
+	// Validate: embedding dimension must match the embedder's output dim.
+	embDim := c.embedder.Dim()
+	if embDim > 0 && env.EmbDim > 0 && env.EmbDim != embDim {
+		log.Printf("[ToolEmbeddingCache] dim mismatch (disk=%d current=%d), discarding disk cache", env.EmbDim, embDim)
+		return
+	}
+
+	c.cache = make(map[string][]float32, len(env.Entries))
+	for k, v := range env.Entries {
+		if len(v) > 0 {
+			c.cache[k] = v
+		}
+	}
+	log.Printf("[ToolEmbeddingCache] restored %d embeddings from disk cache", len(c.cache))
+}
+
+// SaveToDisk persists the current in-memory cache to disk.
+// Safe to call from any goroutine. No-op if nothing changed since last save.
+// Serialized via saveMu to prevent concurrent writes.
+func (c *ToolEmbeddingCache) SaveToDisk() {
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
+
+	c.mu.RLock()
+	if !c.dirty {
+		c.mu.RUnlock()
+		return
+	}
+	// Snapshot under read lock.
+	entries := make(map[string][]float32, len(c.cache))
+	for k, v := range c.cache {
+		entries[k] = v
+	}
+	modelID := c.modelID
+	c.mu.RUnlock()
+
+	embDim := c.embedder.Dim()
+
+	p := toolEmbeddingCachePath()
+	if p == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		log.Printf("[ToolEmbeddingCache] mkdir error: %v", err)
+		return
+	}
+
+	env := diskCacheEnvelope{
+		ModelID: modelID,
+		EmbDim:  embDim,
+		Entries: entries,
+	}
+
+	tmp := p + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		log.Printf("[ToolEmbeddingCache] create tmp file error: %v", err)
+		return
+	}
+	if err := gob.NewEncoder(f).Encode(&env); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		log.Printf("[ToolEmbeddingCache] encode error: %v", err)
+		return
+	}
+	f.Close()
+
+	if err := os.Rename(tmp, p); err != nil {
+		os.Remove(tmp)
+		log.Printf("[ToolEmbeddingCache] rename error: %v", err)
+		return
+	}
+
+	c.mu.Lock()
+	c.dirty = false
+	c.mu.Unlock()
+
+	log.Printf("[ToolEmbeddingCache] saved %d embeddings to disk cache", len(entries))
+}
+
+// scheduleSave triggers an async disk save with proper debounce.
+// Only one debounce goroutine is ever active; subsequent calls reset the timer.
+func (c *ToolEmbeddingCache) scheduleSave() {
+	// Non-blocking signal to reset the debounce timer.
+	select {
+	case c.saveCh <- struct{}{}:
+	default:
+	}
+
+	c.saveOnce.Do(func() {
+		go func() {
+			for {
+				// Wait for a save signal.
+				<-c.saveCh
+				// Debounce: keep draining signals for 2 seconds.
+				timer := time.NewTimer(2 * time.Second)
+			drain:
+				for {
+					select {
+					case <-c.saveCh:
+						timer.Reset(2 * time.Second)
+					case <-timer.C:
+						break drain
+					}
+				}
+				c.SaveToDisk()
+			}
+		}()
+	})
+}
+
+// evictIfNeeded removes random entries when cache exceeds maxToolEmbeddingCacheSize.
+// Must be called with c.mu held for writing.
+func (c *ToolEmbeddingCache) evictIfNeeded() {
+	if len(c.cache) <= maxToolEmbeddingCacheSize {
+		return
+	}
+	// Remove oldest entries. Since map iteration is random in Go, this is
+	// effectively random eviction — good enough for a warm cache.
+	excess := len(c.cache) - maxToolEmbeddingCacheSize
+	log.Printf("[ToolEmbeddingCache] evict: cache size %d exceeds limit %d, removing %d entries", len(c.cache), maxToolEmbeddingCacheSize, excess)
+	for k := range c.cache {
+		if excess <= 0 {
+			break
+		}
+		delete(c.cache, k)
+		excess--
+	}
 }
 
 // Get returns the cached embedding for text, or computes and caches a new one.
@@ -82,18 +295,20 @@ func (c *ToolEmbeddingCache) Get(text string) ([]float32, error) {
 		return existing, nil
 	}
 	c.cache[key] = vec
+	c.dirty = true
+	c.evictIfNeeded()
 	c.mu.Unlock()
+
+	c.scheduleSave()
 	return vec, nil
 }
 
 // GetBatch returns embeddings for a batch of tool descriptions.
-// Keys in texts are tool IDs, values are description texts.
-// Returns a map of tool ID → embedding vector.
-// On per-tool embed error the vector is nil (no error propagation).
+// When the embedder supports ConcurrentEmbedder, missing embeddings are
+// computed in parallel across CPU cores, dramatically reducing cold-start time.
 func (c *ToolEmbeddingCache) GetBatch(texts map[string]string) (map[string][]float32, error) {
 	result := make(map[string][]float32, len(texts))
 
-	// Identify which texts need computation.
 	type needEmbed struct {
 		toolID string
 		text   string
@@ -116,18 +331,83 @@ func (c *ToolEmbeddingCache) GetBatch(texts map[string]string) (map[string][]flo
 		return result, nil
 	}
 
-	// Compute missing embeddings one by one (skip on per-tool error).
+	// Try concurrent path if embedder supports it and there are multiple items.
+	ce, hasConcurrent := c.embedder.(ConcurrentEmbedder)
+	log.Printf("[ToolEmbeddingCache] GetBatch: total=%d cached=%d missing=%d hasConcurrent=%v", len(texts), len(texts)-len(missing), len(missing), hasConcurrent)
+	if hasConcurrent && len(missing) > 1 {
+		type embedResult struct {
+			idx int
+			vec []float32
+		}
+		results := make([]embedResult, len(missing))
+		errs := make([]error, len(missing))
+
+		maxWorkers := runtime.NumCPU()
+		if maxWorkers > len(missing) {
+			maxWorkers = len(missing)
+		}
+
+		// Disable internal MatMul parallelism — batch-level parallelism is more efficient.
+		tensor.SetMatMulMaxParallel(1)
+
+		sem := make(chan struct{}, maxWorkers)
+		var wg sync.WaitGroup
+
+		for i, m := range missing {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(idx int, text string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				vec, err := ce.EmbedConcurrent(text)
+				if err != nil {
+					errs[idx] = err
+				} else {
+					results[idx] = embedResult{idx: idx, vec: vec}
+				}
+			}(i, m.text)
+		}
+		wg.Wait()
+
+		// Restore default MatMul parallelism.
+		tensor.SetMatMulMaxParallel(0)
+
+		c.mu.Lock()
+		for i, m := range missing {
+			if errs[i] != nil {
+				result[m.toolID] = nil
+				continue
+			}
+			c.cache[m.key] = results[i].vec
+			result[m.toolID] = results[i].vec
+		}
+		c.dirty = true
+		c.evictIfNeeded()
+		c.mu.Unlock()
+
+		c.scheduleSave()
+		return result, nil
+	}
+
+	// Sequential fallback.
+	computed := false
 	for _, m := range missing {
 		vec, err := c.embedder.Embed(m.text)
 		if err != nil {
-			// Skip vector score for this tool — nil embedding, no error propagation.
 			result[m.toolID] = nil
 			continue
 		}
 		c.mu.Lock()
 		c.cache[m.key] = vec
+		c.dirty = true
+		c.evictIfNeeded()
 		c.mu.Unlock()
 		result[m.toolID] = vec
+		computed = true
+	}
+
+	if computed {
+		c.scheduleSave()
 	}
 
 	return result, nil

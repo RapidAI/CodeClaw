@@ -456,7 +456,19 @@ func (m *telegramGatewayManager) HandleGatewayReply(reply GatewayReplyPayload) {
 // App integration — Wails bindings and lifecycle
 // ---------------------------------------------------------------------------
 
+// ensureTelegramGateway lazily creates the gateway manager and syncs from config.
+// If Telegram is not enabled in config, skips entirely to avoid unnecessary work.
 func (a *App) ensureTelegramGateway() {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return
+	}
+	if !cfg.TelegramBotEnabled || cfg.TelegramBotToken == "" {
+		if a.telegramGateway != nil {
+			a.telegramGateway.SyncFromConfig()
+		}
+		return
+	}
 	if a.telegramGateway == nil {
 		a.telegramGateway = newTelegramGatewayManager(a)
 	}

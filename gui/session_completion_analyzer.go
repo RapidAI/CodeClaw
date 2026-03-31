@@ -89,6 +89,10 @@ func (a *CompletionAnalyzer) Analyze(lines []string, tool string, sdkResult *SDK
 			restLower := strings.TrimSpace(lower[len("[gemini-acp] turn complete:"):])
 			if strings.Contains(restLower, "success") || strings.Contains(restLower, "done") || strings.Contains(restLower, "completed") {
 				completionCount++
+			} else if strings.Contains(restLower, "cancelled") || strings.Contains(restLower, "canceled") {
+				// cancelled means the turn was cut short (e.g. token limit),
+				// task is likely incomplete.
+				incompletionCount++
 			}
 			continue
 		}

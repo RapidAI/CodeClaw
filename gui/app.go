@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/RapidAI/CodeClaw/corelib"
+	"github.com/RapidAI/CodeClaw/corelib/bm25"
 	"github.com/RapidAI/CodeClaw/corelib/brand"
 	"github.com/RapidAI/CodeClaw/corelib/embedding"
 	"github.com/RapidAI/CodeClaw/corelib/memory"
@@ -91,6 +92,7 @@ type App struct {
 	scheduledTaskManager *ScheduledTaskManager
 	remoteInfraOnce      sync.Once // guards ensureRemoteInfra initialization
 	remoteInfraReady     atomic.Bool // fast-path check for ensureRemoteInfra
+	warmupDone           atomic.Bool // true after WarmupTools + WarmupHTTPConn complete
 	clawNetClient        *ClawNetClient
 	mcpAutoDiscovery     *MCPAutoDiscovery
 	securityFirewall     *SecurityFirewall
@@ -222,12 +224,14 @@ func (a *App) ensureInteractionInfra() {
 }
 
 func (a *App) initInteractionInfra() {
+	t0 := time.Now()
+
+	// --- Critical path: components required for the first AI message ---
 	if a.localMCPManager == nil {
 		a.localMCPManager = NewLocalMCPManager(a.mcpRegistry)
 		if a.toolDefGenerator != nil {
 			a.toolDefGenerator.SetLocalMCPManager(a.localMCPManager)
 		}
-		// Only start local MCP server processes if at least one has AutoStart enabled.
 		hasAutoStart := false
 		for _, e := range a.mcpRegistry.ListLocalServers() {
 			if !e.Disabled && e.AutoStart {
@@ -239,85 +243,11 @@ func (a *App) initInteractionInfra() {
 			go a.localMCPManager.SyncFromConfig()
 		}
 	}
-	if a.skillMarketClient == nil {
-		a.skillMarketClient = NewSkillMarketClient(a)
-	}
-	if a.gossipClient == nil {
-		a.gossipClient = NewGossipClient(a)
-	}
-	if a.gossipAutoPublish == nil && a.gossipClient != nil {
-		a.gossipAutoPublish = NewAutoPublishTrigger(a.gossipClient, func() bool {
-			if cfg, err := a.LoadConfig(); err == nil {
-				return cfg.GossipAutoPublish
-			}
-			return true
-		})
-		a.gossipAutoPublish.SetLLMConfigFn(func() corelib.MaclawLLMConfig {
-			return a.GetMaclawLLMConfig()
-		})
-		a.gossipAutoPublish.SetGossipAllowedFn(func() bool {
-			return a.isGossipAllowed()
-		})
-	}
-	if a.autoUploadTrigger == nil && a.skillMarketClient != nil {
-		a.autoUploadTrigger = NewAutoUploadTrigger(a.skillMarketClient, func() string {
-			if cfg, err := a.LoadConfig(); err == nil {
-				return strings.TrimSpace(cfg.RemoteEmail)
-			}
-			return ""
-		})
-	}
-	if a.skillRunner == nil && a.skillExecutor != nil {
-		a.skillRunner = NewSkillRunner(a.skillExecutor)
-		a.skillRunner.uploadTrigger = a.autoUploadTrigger
-		a.skillRunner.packageFn = a.packageSkillForMarket
-	}
 	if a.auditLog == nil {
 		al, err := NewAuditLog(filepath.Join(a.GetDataDir(), "audit"))
 		if err == nil {
 			a.auditLog = al
 		}
-	}
-	if a.llmSecurityReview == nil {
-		cfg := a.GetMaclawLLMConfig()
-		a.llmSecurityReview = NewLLMSecurityReview(cfg)
-	}
-	if a.experienceExtractor == nil {
-		cfg := a.GetMaclawLLMConfig()
-		a.experienceExtractor = NewExperienceExtractor(a, a.skillExecutor, cfg)
-	}
-	// Periodically clean up stale learned/crafted skills on startup.
-	if a.skillExecutor != nil {
-		go a.skillExecutor.CleanupStaleSkills()
-	}
-	if a.orchestrator == nil {
-		a.orchestrator = NewOrchestrator(a, a.remoteSessions, a.sharedContext, a.toolSelector)
-	}
-	if a.skillHubClient == nil {
-		a.skillHubClient = NewSkillHubClient(a)
-		go a.skillHubClient.RefreshRecommendations(context.Background())
-		a.stopHubTicker = make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(24 * time.Hour)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					_ = a.skillHubClient.RefreshRecommendations(context.Background())
-				case <-a.stopHubTicker:
-					return
-				}
-			}
-		}()
-	}
-	if a.toolRouter != nil && a.skillHubClient != nil {
-		a.toolRouter.SetHubClient(a.skillHubClient)
-	}
-	if a.capabilityGapDetector == nil {
-		cfg := a.GetMaclawLLMConfig()
-		a.capabilityGapDetector = NewCapabilityGapDetector(
-			a, a.skillHubClient, a.skillExecutor, a.riskAssessor, a.auditLog, cfg,
-		)
 	}
 	// Initialize smart session components — memory store
 	a.ensureMemoryStore()
@@ -353,9 +283,103 @@ func (a *App) initInteractionInfra() {
 	if a.startupFeedback != nil && a.sessionCheckpointer != nil {
 		a.startupFeedback.SetCheckpointer(a.sessionCheckpointer)
 	}
+	if a.orchestrator == nil {
+		a.orchestrator = NewOrchestrator(a, a.remoteSessions, a.sharedContext, a.toolSelector)
+	}
 	if a.taskOrchestrator2 == nil && a.remoteSessions != nil && a.toolSelector != nil {
 		a.taskOrchestrator2 = NewTaskOrchestrator2(a.remoteSessions, a.toolSelector, a.contextBridge)
 	}
+
+	log.Printf("[initInteractionInfra] critical path done in %v", time.Since(t0))
+
+	// --- Deferred path: non-critical components initialized in background ---
+	// These are not needed for the first AI message and can load lazily.
+	go a.initDeferredInteractionInfra()
+}
+
+// initDeferredInteractionInfra initializes non-critical interaction components
+// in the background so they don't block the first AI assistant message.
+func (a *App) initDeferredInteractionInfra() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[initDeferredInteractionInfra] panic (non-fatal): %v", r)
+		}
+	}()
+	t0 := time.Now()
+
+	if a.skillMarketClient == nil {
+		a.skillMarketClient = NewSkillMarketClient(a)
+	}
+	if a.gossipClient == nil {
+		a.gossipClient = NewGossipClient(a)
+	}
+	if a.gossipAutoPublish == nil && a.gossipClient != nil {
+		a.gossipAutoPublish = NewAutoPublishTrigger(a.gossipClient, func() bool {
+			if cfg, err := a.LoadConfig(); err == nil {
+				return cfg.GossipAutoPublish
+			}
+			return true
+		})
+		a.gossipAutoPublish.SetLLMConfigFn(func() corelib.MaclawLLMConfig {
+			return a.GetMaclawLLMConfig()
+		})
+		a.gossipAutoPublish.SetGossipAllowedFn(func() bool {
+			return a.isGossipAllowed()
+		})
+	}
+	if a.autoUploadTrigger == nil && a.skillMarketClient != nil {
+		a.autoUploadTrigger = NewAutoUploadTrigger(a.skillMarketClient, func() string {
+			if cfg, err := a.LoadConfig(); err == nil {
+				return strings.TrimSpace(cfg.RemoteEmail)
+			}
+			return ""
+		})
+	}
+	if a.skillRunner == nil && a.skillExecutor != nil {
+		a.skillRunner = NewSkillRunner(a.skillExecutor)
+		a.skillRunner.uploadTrigger = a.autoUploadTrigger
+		a.skillRunner.packageFn = a.packageSkillForMarket
+	}
+	if a.llmSecurityReview == nil {
+		cfg := a.GetMaclawLLMConfig()
+		a.llmSecurityReview = NewLLMSecurityReview(cfg)
+	}
+	if a.experienceExtractor == nil {
+		cfg := a.GetMaclawLLMConfig()
+		a.experienceExtractor = NewExperienceExtractor(a, a.skillExecutor, cfg)
+	}
+	// Periodically clean up stale learned/crafted skills on startup.
+	if a.skillExecutor != nil {
+		go a.skillExecutor.CleanupStaleSkills()
+	}
+	if a.skillHubClient == nil {
+		a.skillHubClient = NewSkillHubClient(a)
+		go a.skillHubClient.RefreshRecommendations(context.Background())
+		a.stopHubTicker = make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					_ = a.skillHubClient.RefreshRecommendations(context.Background())
+				case <-a.stopHubTicker:
+					return
+				}
+			}
+		}()
+	}
+	if a.toolRouter != nil && a.skillHubClient != nil {
+		a.toolRouter.SetHubClient(a.skillHubClient)
+	}
+	if a.capabilityGapDetector == nil {
+		cfg := a.GetMaclawLLMConfig()
+		a.capabilityGapDetector = NewCapabilityGapDetector(
+			a, a.skillHubClient, a.skillExecutor, a.riskAssessor, a.auditLog, cfg,
+		)
+	}
+
+	log.Printf("[initDeferredInteractionInfra] deferred path done in %v", time.Since(t0))
 }
 
 // ---------------------------------------------------------------------------
@@ -683,9 +707,16 @@ func (a *App) createAndWireHubClient() *RemoteHubClient {
 
 	// Background warmup: pre-build tool cache and warm up the HTTP connection
 	// pool so the first user message doesn't pay cold-start latency.
+	// Run both in parallel for faster startup.
 	go func() {
-		hubClient.imHandler.WarmupTools()
-		hubClient.imHandler.WarmupHTTPConn()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); hubClient.imHandler.WarmupTools() }()
+		go func() { defer wg.Done(); hubClient.imHandler.WarmupHTTPConn() }()
+		wg.Wait()
+		a.warmupDone.Store(true)
+		a.emitEvent("ai-assistant-init-progress", "ready")
+		log.Println("[startup] warmup complete (tools + HTTP)")
 	}()
 
 	// Start QQ Bot gateway if configured (runs on client side).
@@ -741,6 +772,9 @@ func (a *App) startup(ctx context.Context) {
 	// Platform specific initialization
 	a.platformStartup()
 	a.startConfigWatcher()
+	// Pre-warm gse Chinese segmenter dictionary in background so BM25
+	// tool routing doesn't block on first use.
+	bm25.PrewarmDict()
 	// Initialize CodeBuddy config in project directory
 	if config, err := a.LoadConfig(); err == nil {
 		// a.syncToCodeBuddySettings(config, ")
@@ -772,9 +806,18 @@ func (a *App) startup(ctx context.Context) {
 					log.Printf("[startup] pre-warm panic (non-fatal): %v", r)
 				}
 			}()
+			a.emitEvent("ai-assistant-init-progress", "loading")
 			log.Println("[startup] pre-warming interaction infrastructure")
 			a.ensureInteractionInfra()
 			log.Println("[startup] interaction infrastructure ready")
+			// In local mode (no Hub), warmup is done after interaction infra
+			// is ready — there's no separate WarmupTools/WarmupHTTPConn step.
+			if a.hubClient() == nil {
+				a.warmupDone.Store(true)
+				a.emitEvent("ai-assistant-init-progress", "ready")
+			} else {
+				a.emitEvent("ai-assistant-init-progress", "warming")
+			}
 		}()
 		// Auto-start IM gateways that were previously enabled.
 		// If Hub is connected, createAndWireHubClient already started them;
@@ -784,6 +827,21 @@ func (a *App) startup(ctx context.Context) {
 				a.ensureQQBotGateway()
 				a.ensureTelegramGateway()
 				a.ensureWeixinGateway()
+			}()
+		}
+		// Kill residual ClawNet daemon when disabled in config.
+		// The daemon is a standalone process that survives app restarts;
+		// if the user unchecked "enable ClawNet" but the app was force-killed
+		// before shutdown could stop it, the daemon lingers. Clean it up now.
+		// Use a temporary client to avoid leaving a.clawNetClient initialized
+		// (which would cause shutdown() to redundantly call StopDaemon).
+		if !config.ClawNetEnabled {
+			go func() {
+				tmp := NewClawNetClient()
+				if tmp.IsRunning() {
+					a.log("ClawNet: stopping residual daemon (clawnet_enabled=false)")
+					tmp.StopDaemon()
+				}
 			}()
 		}
 		return

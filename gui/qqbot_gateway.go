@@ -451,7 +451,20 @@ func (m *qqBotGatewayManager) SendQQBotMedia(msg qqbot.OutgoingMedia) error {
 // ---------------------------------------------------------------------------
 
 // ensureQQBotGateway lazily creates the gateway manager and syncs from config.
+// If QQ Bot is not enabled in config, skips entirely to avoid unnecessary work.
 func (a *App) ensureQQBotGateway() {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return
+	}
+	if !cfg.QQBotEnabled || cfg.QQBotAppID == "" || cfg.QQBotAppSecret == "" {
+		// Not configured — skip creating the manager entirely.
+		// If there's an existing manager (user just disabled), let it sync to stop.
+		if a.qqBotGateway != nil {
+			a.qqBotGateway.SyncFromConfig()
+		}
+		return
+	}
 	if a.qqBotGateway == nil {
 		a.qqBotGateway = newQQBotGatewayManager(a)
 	}

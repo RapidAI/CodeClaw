@@ -400,6 +400,8 @@ export function ClawNetNutshellUnpack(arg1:string, arg2:string):Promise<any>;
 // AI Assistant bindings
 export function IsAIAssistantReady():Promise<boolean>;
 
+export function GetAIAssistantInitStatus():Promise<string>;
+
 export function SendAIAssistantMessage(arg1:string):Promise<any>;
 
 export function ClearAIAssistantHistory():Promise<void>;

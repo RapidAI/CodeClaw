@@ -4,7 +4,6 @@ package tensor
 
 import (
 	"math"
-	"runtime"
 	"sync"
 
 	"github.com/viterin/vek/vek32"
@@ -13,8 +12,13 @@ import (
 // MatMul computes out = A @ B^T where A is [M, K] and B is [N, K] (row-major).
 // Result out is [M, N]. Uses SIMD-accelerated dot product for each row pair.
 func MatMul(out, a, b []float32, M, N, K int) {
-	if M > 1 && M*K > 4096 && runtime.NumCPU() > 1 {
-		matMulParallel(out, a, b, M, N, K)
+	nCPU := getMatMulWorkers()
+	if nCPU > 1 && N*K > 4096 {
+		if M > 1 {
+			matMulParallel(out, a, b, M, N, K)
+			return
+		}
+		matMulParallelN(out, a, b, M, N, K)
 		return
 	}
 	for m := 0; m < M; m++ {
@@ -27,7 +31,7 @@ func MatMul(out, a, b []float32, M, N, K int) {
 
 
 func matMulParallel(out, a, b []float32, M, N, K int) {
-	nWorkers := runtime.NumCPU()
+	nWorkers := getMatMulWorkers()
 	if nWorkers > M {
 		nWorkers = M
 	}
@@ -56,6 +60,37 @@ func matMulParallel(out, a, b []float32, M, N, K int) {
 	wg.Wait()
 }
 
+// matMulParallelN parallelizes across the N (output) dimension for small M.
+func matMulParallelN(out, a, b []float32, M, N, K int) {
+	nWorkers := getMatMulWorkers()
+	if nWorkers > N {
+		nWorkers = N
+	}
+	var wg sync.WaitGroup
+	colsPerWorker := (N + nWorkers - 1) / nWorkers
+	for w := 0; w < nWorkers; w++ {
+		nStart := w * colsPerWorker
+		nEnd := nStart + colsPerWorker
+		if nEnd > N {
+			nEnd = N
+		}
+		if nStart >= nEnd {
+			break
+		}
+		wg.Add(1)
+		go func(ns, ne int) {
+			defer wg.Done()
+			for m := 0; m < M; m++ {
+				aRow := a[m*K : m*K+K]
+				for n := ns; n < ne; n++ {
+					out[m*N+n] = vek32.Dot(aRow, b[n*K:n*K+K])
+				}
+			}
+		}(nStart, nEnd)
+	}
+	wg.Wait()
+}
+
 // RMSNorm computes RMS normalization: out[i] = x[i] / rms(x) * weight[i].
 // out and x may alias (in-place normalization).
 func RMSNorm(out, x, weight []float32, eps float32) {
@@ -69,24 +104,33 @@ func RMSNorm(out, x, weight []float32, eps float32) {
 
 // SiLU computes the SiLU activation: x * sigmoid(x), in-place.
 func SiLU(x []float32) {
+	// SiLU(x) = x / (1 + exp(-x))
+	// No SIMD intrinsic available, but we can batch the exp calls.
 	for i := range x {
-		x[i] = x[i] / (1.0 + float32(math.Exp(float64(-x[i]))))
+		ex := float32(math.Exp(float64(-x[i])))
+		x[i] = x[i] / (1.0 + ex)
 	}
 }
 
 // ElemMul computes element-wise multiplication: out[i] = a[i] * b[i].
 // out may alias a or b.
 func ElemMul(out, a, b []float32) {
-	for i := range out {
-		out[i] = a[i] * b[i]
+	if len(out) > 0 && &out[0] == &a[0] {
+		// out aliases a — use in-place variant (out *= b).
+		vek32.Mul_Inplace(out, b)
+	} else {
+		vek32.Mul_Into(out, a, b)
 	}
 }
 
 // Add computes element-wise addition: out[i] = a[i] + b[i].
 // out may alias a or b (safe for in-place residual add).
 func Add(out, a, b []float32) {
-	for i := range out {
-		out[i] = a[i] + b[i]
+	if len(out) > 0 && &out[0] == &a[0] {
+		// out aliases a — use in-place variant (out += b).
+		vek32.Add_Inplace(out, b)
+	} else {
+		vek32.Add_Into(out, a, b)
 	}
 }
 

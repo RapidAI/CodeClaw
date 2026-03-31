@@ -915,6 +915,10 @@ export function IsAIAssistantReady() {
   return window['go']['main']['App']['IsAIAssistantReady']();
 }
 
+export function GetAIAssistantInitStatus() {
+  return window['go']['main']['App']['GetAIAssistantInitStatus']();
+}
+
 export function SendAIAssistantMessage(arg1) {
   return window['go']['main']['App']['SendAIAssistantMessage'](arg1);
 }

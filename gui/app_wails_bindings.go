@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"time"
 
@@ -485,15 +486,36 @@ func (a *App) TriggerScheduledTask(id string) error {
 // AI Assistant Wails bindings
 // ---------------------------------------------------------------------------
 
-// IsAIAssistantReady returns true when the AI assistant backend is initialized.
+// IsAIAssistantReady returns true when the AI assistant backend is fully
+// initialized and ready to handle messages (Hub connected + warmup done).
 func (a *App) IsAIAssistantReady() bool {
 	hubClient := a.hubClient()
-	return hubClient != nil && hubClient.imHandler != nil
+	return hubClient != nil && hubClient.imHandler != nil && a.warmupDone.Load()
+}
+
+// GetAIAssistantInitStatus returns a human-readable initialization status
+// string for the frontend to display during startup.
+func (a *App) GetAIAssistantInitStatus() string {
+	hubClient := a.hubClient()
+	if hubClient == nil {
+		return "connecting"
+	}
+	if hubClient.imHandler == nil {
+		return "loading"
+	}
+	if !a.warmupDone.Load() {
+		return "warming"
+	}
+	return "ready"
 }
 
 // SendAIAssistantMessage handles a desktop AI assistant message (Wails binding).
 func (a *App) SendAIAssistantMessage(text string) (*IMAgentResponse, error) {
+	t0 := time.Now()
 	a.ensureInteractionInfra()
+	if elapsed := time.Since(t0); elapsed > 100*time.Millisecond {
+		log.Printf("[SendAIAssistantMessage] ensureInteractionInfra took %v", elapsed)
+	}
 	hubClient := a.hubClient()
 	if hubClient == nil || hubClient.imHandler == nil {
 		return nil, fmt.Errorf("AI assistant not initialized")

@@ -844,7 +844,19 @@ func (m *weixinGatewayManager) HandleGatewayReply(reply GatewayReplyPayload) {
 // App integration — Wails bindings and lifecycle
 // ---------------------------------------------------------------------------
 
+// ensureWeixinGateway lazily creates the gateway manager and syncs from config.
+// If WeChat is not enabled in config, skips entirely to avoid unnecessary work.
 func (a *App) ensureWeixinGateway() {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return
+	}
+	if !cfg.WeixinEnabled || cfg.WeixinToken == "" {
+		if a.weixinGateway != nil {
+			a.weixinGateway.SyncFromConfig()
+		}
+		return
+	}
 	if a.weixinGateway == nil {
 		a.weixinGateway = newWeixinGatewayManager(a)
 	}

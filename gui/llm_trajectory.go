@@ -37,9 +37,10 @@ type TrajectorySession struct {
 
 // TrajectoryRecorder records LLM interaction trajectories to disk.
 type TrajectoryRecorder struct {
-	mu      sync.Mutex
-	dir     string // ~/.maclaw/trajectories
-	session *TrajectorySession
+	mu       sync.Mutex
+	dir      string // ~/.maclaw/trajectories
+	session  *TrajectorySession
+	pipeline *SkillAutoSummaryPipeline
 }
 
 // safeFilenameRe strips characters that are invalid in file names.
@@ -54,6 +55,14 @@ func NewTrajectoryRecorder() *TrajectoryRecorder {
 	return &TrajectoryRecorder{
 		dir: filepath.Join(home, ".maclaw", "trajectories"),
 	}
+}
+
+// SetPipeline sets the skill auto-summary pipeline to be triggered on Flush.
+// The pipeline can be nil (no-op if not set).
+func (r *TrajectoryRecorder) SetPipeline(p *SkillAutoSummaryPipeline) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pipeline = p
 }
 
 // StartSession begins recording a new trajectory session.
@@ -132,5 +141,12 @@ func (r *TrajectoryRecorder) Flush() {
 		return
 	}
 	log.Printf("[Trajectory] saved %s (%d entries)", path, len(r.session.Entries))
+
+	// Trigger skill auto-summary pipeline in background.
+	if r.pipeline != nil {
+		sessionCopy := r.session // capture before nil
+		go r.pipeline.RunPipeline(sessionCopy)
+	}
+
 	r.session = nil
 }

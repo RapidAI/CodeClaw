@@ -3,11 +3,14 @@ package embedding
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/RapidAI/CodeClaw/corelib/embedding/tensor"
 )
 
 // Embed returns the embedding vector for a single text string.
+// Uses a shared scratch buffer protected by a mutex — suitable for sequential calls.
 func (g *GemmaEmbedder) Embed(text string) ([]float32, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -25,6 +28,33 @@ func (g *GemmaEmbedder) Embed(text string) ([]float32, error) {
 		return nil, err
 	}
 
+	return g.truncateAndNormalize(emb), nil
+}
+
+// EmbedConcurrent returns the embedding vector for a single text string.
+// Unlike Embed, it allocates a private scratch buffer so multiple goroutines
+// can run inference in parallel without contending on the shared mutex.
+// Weights (mmap-backed, read-only) and tokenizer are safe to share.
+func (g *GemmaEmbedder) EmbedConcurrent(text string) ([]float32, error) {
+	tokens := g.tokenizer.Encode(text)
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("gemma: empty token sequence")
+	}
+	if len(tokens) > g.hp.MaxSeqLen {
+		tokens = tokens[:g.hp.MaxSeqLen]
+	}
+
+	s := newGemmaScratch(g.hp, len(tokens))
+	emb, err := g.forwardWithScratch(tokens, s)
+	if err != nil {
+		return nil, err
+	}
+
+	return g.truncateAndNormalize(emb), nil
+}
+
+// truncateAndNormalize applies MRL dimension truncation and L2 normalization.
+func (g *GemmaEmbedder) truncateAndNormalize(emb []float32) []float32 {
 	outDim := g.dim
 	if outDim > len(emb) {
 		outDim = len(emb)
@@ -32,18 +62,59 @@ func (g *GemmaEmbedder) Embed(text string) ([]float32, error) {
 	result := make([]float32, outDim)
 	copy(result, emb[:outDim])
 	tensor.L2Normalize(result)
-	return result, nil
+	return result
 }
 
-// EmbedBatch returns embeddings for multiple texts.
+// EmbedBatch returns embeddings for multiple texts using concurrent inference.
 func (g *GemmaEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
+	if len(texts) <= 1 {
+		results := make([][]float32, len(texts))
+		for i, t := range texts {
+			emb, err := g.Embed(t)
+			if err != nil {
+				return nil, fmt.Errorf("gemma: batch item %d: %w", i, err)
+			}
+			results[i] = emb
+		}
+		return results, nil
+	}
+
 	results := make([][]float32, len(texts))
+	errs := make([]error, len(texts))
+
+	maxWorkers := runtime.NumCPU()
+	if maxWorkers > len(texts) {
+		maxWorkers = len(texts)
+	}
+
+	// Disable internal MatMul parallelism — we're parallelizing at the batch
+	// level instead. Each goroutine runs a full single-threaded inference,
+	// which avoids nested goroutine contention and maximizes CPU utilization.
+	tensor.SetMatMulMaxParallel(1)
+	defer tensor.SetMatMulMaxParallel(0) // restore default
+
+	sem := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
 	for i, t := range texts {
-		emb, err := g.Embed(t)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, text string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			emb, err := g.EmbedConcurrent(text)
+			if err != nil {
+				errs[idx] = err
+			} else {
+				results[idx] = emb
+			}
+		}(i, t)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
 		if err != nil {
 			return nil, fmt.Errorf("gemma: batch item %d: %w", i, err)
 		}
-		results[i] = emb
 	}
 	return results, nil
 }
@@ -51,18 +122,15 @@ func (g *GemmaEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
 // Dim returns the output embedding dimension.
 func (g *GemmaEmbedder) Dim() int { return g.dim }
 
-// ensureScratch returns scratch buffers large enough for the given seq length.
-// Buffers are allocated once and reused; reallocated only if seq exceeds previous capacity.
-func (g *GemmaEmbedder) ensureScratch(seq int) *gemmaScratch {
-	if g.scratch != nil && g.scratch.seqCap >= seq {
-		return g.scratch
-	}
-	hp := g.hp
+// newGemmaScratch allocates a fresh set of scratch buffers for the given
+// hyperparameters and sequence length. Each concurrent inference goroutine
+// gets its own scratch to avoid contention.
+func newGemmaScratch(hp GemmaHParams, seq int) *gemmaScratch {
 	dim := hp.Dim
 	kvDim := hp.KVDim
 	ffDim := hp.FFDim
 	headDim := hp.HeadDim
-	g.scratch = &gemmaScratch{
+	return &gemmaScratch{
 		normed:  make([]float32, seq*dim),
 		q:       make([]float32, seq*dim),
 		k:       make([]float32, seq*kvDim),
@@ -78,11 +146,30 @@ func (g *GemmaEmbedder) ensureScratch(seq int) *gemmaScratch {
 		scores:  make([]float32, seq),
 		seqCap:  seq,
 	}
+}
+
+// ensureScratch returns scratch buffers large enough for the given seq length.
+// Buffers are allocated once and reused; reallocated only if seq exceeds previous capacity.
+// Only used by the mutex-protected Embed path.
+func (g *GemmaEmbedder) ensureScratch(seq int) *gemmaScratch {
+	if g.scratch != nil && g.scratch.seqCap >= seq {
+		return g.scratch
+	}
+	g.scratch = newGemmaScratch(g.hp, seq)
 	return g.scratch
 }
 
-// forward runs the Gemma2 transformer and returns mean-pooled hidden states.
+// forward runs the Gemma2 transformer using the shared scratch (mutex-protected path).
 func (g *GemmaEmbedder) forward(tokenIDs []int) ([]float32, error) {
+	s := g.ensureScratch(len(tokenIDs))
+	return g.forwardWithScratch(tokenIDs, s)
+}
+
+// forwardWithScratch runs the Gemma2 transformer with an externally provided
+// scratch buffer. This is the core inference function — safe to call from
+// multiple goroutines as long as each has its own scratch and weights are
+// read-only (mmap-backed Q8 tensors).
+func (g *GemmaEmbedder) forwardWithScratch(tokenIDs []int, s *gemmaScratch) ([]float32, error) {
 	hp := g.hp
 	seq := len(tokenIDs)
 	dim := hp.Dim
@@ -91,9 +178,6 @@ func (g *GemmaEmbedder) forward(tokenIDs []int) ([]float32, error) {
 	nHeads := hp.NHeads
 	nKVHeads := hp.NKVHeads
 	ffDim := hp.FFDim
-
-	// Ensure scratch buffers are large enough for this sequence length.
-	s := g.ensureScratch(seq)
 
 	// Token embedding lookup: dequantize only the rows we need from Q8
 	x := make([]float32, seq*dim)
