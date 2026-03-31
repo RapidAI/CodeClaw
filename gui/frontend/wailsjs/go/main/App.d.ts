@@ -159,6 +159,14 @@ export function ListNLSkills():Promise<Array<any>>;
 
 export function DiagnoseSkillFiles():Promise<Array<any>>;
 
+export function ListExternalSkillDirs():Promise<Array<string>>;
+
+export function ListExternalSkillDirsDetailed():Promise<Array<any>>;
+
+export function AddExternalSkillDir(arg1:string):Promise<number>;
+
+export function RemoveExternalSkillDir(arg1:string):Promise<void>;
+
 export function CreateNLSkill(arg1:any):Promise<void>;
 
 export function UpdateNLSkill(arg1:any):Promise<void>;

@@ -97,9 +97,14 @@ func (e *SkillExecutor) loadSkills() []NLSkillEntry {
 }
 
 // scanSkillYAMLFiles discovers skill definitions from all known skill
-// directories (e.g. ~/.maclaw/data/skills, ~/.agents/skills) via corelib.
+// directories (e.g. ~/.maclaw/data/skills, ~/.agents/skills) plus
+// user-configured external directories via corelib.
 func (e *SkillExecutor) scanSkillYAMLFiles() []NLSkillEntry {
-	return skill.ScanAllSkillDirs()
+	cfg, err := e.app.LoadConfig()
+	if err != nil {
+		return skill.ScanAllSkillDirs()
+	}
+	return skill.ScanAllSkillDirsWithExternal(cfg.ExternalSkillDirs)
 }
 
 // skillYAMLFile is a local alias for the corelib type, used by delete and diag.
@@ -691,6 +696,87 @@ func (a *App) DiagnoseSkillFiles() []SkillDiagEntry {
 		result = append(result, SkillDiagEntry{Dir: dirName, Name: name, OK: true})
 	}
 	return result
+}
+
+// ---------------------------------------------------------------------------
+// External Skill Directories — Wails bindings
+// ---------------------------------------------------------------------------
+
+// ListExternalSkillDirs returns the user-configured external skill directories (Wails binding).
+func (a *App) ListExternalSkillDirs() []string {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return nil
+	}
+	return cfg.ExternalSkillDirs
+}
+
+// ExternalSkillDirInfo is the Wails-facing view of an external skill directory.
+type ExternalSkillDirInfo struct {
+	Path       string `json:"path"`
+	SkillCount int    `json:"skill_count"`
+	Error      string `json:"error,omitempty"`
+}
+
+// ListExternalSkillDirsDetailed returns external dirs with skill counts (Wails binding).
+func (a *App) ListExternalSkillDirsDetailed() []ExternalSkillDirInfo {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return nil
+	}
+	var result []ExternalSkillDirInfo
+	for _, dir := range cfg.ExternalSkillDirs {
+		count, verr := skill.ValidateExternalSkillDir(dir)
+		info := ExternalSkillDirInfo{Path: dir, SkillCount: count}
+		if verr != nil {
+			info.Error = verr.Error()
+		}
+		result = append(result, info)
+	}
+	return result
+}
+
+// AddExternalSkillDir validates and adds an external skill directory (Wails binding).
+func (a *App) AddExternalSkillDir(dir string) (int, error) {
+	dir = filepath.Clean(dir)
+	count, err := skill.ValidateExternalSkillDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return 0, err
+	}
+	for _, d := range cfg.ExternalSkillDirs {
+		if filepath.Clean(d) == dir {
+			return 0, fmt.Errorf("directory already added")
+		}
+	}
+	cfg.ExternalSkillDirs = append(cfg.ExternalSkillDirs, dir)
+	return count, a.SaveConfig(cfg)
+}
+
+// RemoveExternalSkillDir removes an external skill directory from config (Wails binding).
+func (a *App) RemoveExternalSkillDir(dir string) error {
+	dir = filepath.Clean(dir)
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return err
+	}
+	var filtered []string
+	found := false
+	for _, d := range cfg.ExternalSkillDirs {
+		if filepath.Clean(d) == dir {
+			found = true
+			continue
+		}
+		filtered = append(filtered, d)
+	}
+	if !found {
+		return fmt.Errorf("directory not found in config")
+	}
+	cfg.ExternalSkillDirs = filtered
+	return a.SaveConfig(cfg)
 }
 
 // CreateNLSkill registers a new NL Skill definition (Wails binding).

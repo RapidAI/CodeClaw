@@ -315,6 +315,22 @@ export function DiagnoseSkillFiles() {
   return window['go']['main']['App']['DiagnoseSkillFiles']();
 }
 
+export function ListExternalSkillDirs() {
+  return window['go']['main']['App']['ListExternalSkillDirs']();
+}
+
+export function ListExternalSkillDirsDetailed() {
+  return window['go']['main']['App']['ListExternalSkillDirsDetailed']();
+}
+
+export function AddExternalSkillDir(arg1) {
+  return window['go']['main']['App']['AddExternalSkillDir'](arg1);
+}
+
+export function RemoveExternalSkillDir(arg1) {
+  return window['go']['main']['App']['RemoveExternalSkillDir'](arg1);
+}
+
 export function CreateNLSkill(arg1) {
   return window['go']['main']['App']['CreateNLSkill'](arg1);
 }

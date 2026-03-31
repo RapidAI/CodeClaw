@@ -75,8 +75,9 @@ type AppConfig struct {
 	MCPServers      []MCPServerEntry      `json:"mcp_servers,omitempty"`
 	LocalMCPServers []LocalMCPServerEntry `json:"local_mcp_servers,omitempty"`
 	// NL Skills
-	NLSkills     []NLSkillEntry `json:"nl_skills,omitempty"`
-	SkillHubURLs []SkillHubEntry `json:"skill_hub_urls,omitempty"`
+	NLSkills          []NLSkillEntry  `json:"nl_skills,omitempty"`
+	SkillHubURLs      []SkillHubEntry `json:"skill_hub_urls,omitempty"`
+	ExternalSkillDirs []string        `json:"external_skill_dirs,omitempty"` // user-added external skill directories
 	// Memory
 	MemoryAutoCompress bool `json:"memory_auto_compress,omitempty"`
 	MemoryMaxBackups   int  `json:"memory_max_backups,omitempty"` // 0 means use default (20)
