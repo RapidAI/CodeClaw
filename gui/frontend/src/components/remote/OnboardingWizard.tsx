@@ -329,8 +329,10 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
                 setLlmDone(true);
                 onLLMConfigured();
             } else {
-                const reply = await TestMaclawLLM({ url: sp.url, key: sp.key, model: sp.model, protocol: sp.protocol || "openai", agent_type: sp.agent_type || "openclaw" });
+                // Save first to set current provider, then test (which also probes vision
+                // and persists supports_vision into the current provider entry).
                 await SaveMaclawLLMProviders(providers, sp.name);
+                const reply = await TestMaclawLLM({ url: sp.url, key: sp.key, model: sp.model, protocol: sp.protocol || "openai", agent_type: sp.agent_type || "openclaw" });
 
                 // Refresh providers to pick up auto-detected supports_vision from backend
                 try {
@@ -1054,7 +1056,7 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
                                             border: `1px solid ${llmResult.ok ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
                                             color: llmResult.ok ? "#22c55e" : "#ef4444",
                                         }}>
-                                            {llmResult.ok ? `✅ ${t("连接成功，已保存", "Connected & saved")}` : `❌ ${llmResult.msg}`}
+                                            {llmResult.ok ? `✅ ${t("连接成功，已保存", "Connected & saved")}\n${llmResult.msg}` : `❌ ${llmResult.msg}`}
                                         </div>
                                     )}
                                 </div>

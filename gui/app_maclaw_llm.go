@@ -604,7 +604,16 @@ func probeVisionOpenAI(baseURL, key, model, imgB64, userAgent string) bool {
 	if result.Error != nil {
 		return false
 	}
-	return len(result.Choices) > 0 && result.Choices[0].Message.Content != ""
+	return len(result.Choices) > 0 && result.Choices[0].Message.Content != "" && looksLikeVisionResponse(result.Choices[0].Message.Content)
+}
+
+// looksLikeVisionResponse checks whether the model's reply indicates it actually
+// "saw" the 1x1 red test image.  Models that silently ignore the image part
+// typically reply with generic text (e.g. "Hello!") instead of mentioning a colour.
+func looksLikeVisionResponse(content string) bool {
+	lower := strings.ToLower(content)
+	// The test image is a 1x1 red pixel; a vision-capable model should mention "red".
+	return strings.Contains(lower, "red") || strings.Contains(lower, "红")
 }
 
 func probeVisionAnthropic(baseURL, key, model, imgB64, userAgent string) bool {
@@ -664,7 +673,7 @@ func probeVisionAnthropic(baseURL, key, model, imgB64, userAgent string) bool {
 		return false
 	}
 	for _, block := range result.Content {
-		if block.Type == "text" && block.Text != "" {
+		if block.Type == "text" && block.Text != "" && looksLikeVisionResponse(block.Text) {
 			return true
 		}
 	}

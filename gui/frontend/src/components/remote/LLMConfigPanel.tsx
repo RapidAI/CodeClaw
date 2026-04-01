@@ -355,23 +355,20 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
 
     return (
         <div style={{ padding: "0 4px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <h4 style={{ fontSize: "0.8rem", color: "#6366f1", margin: 0, textTransform: "uppercase", letterSpacing: "0.025em" }}>
-                    {t("MaClaw LLM 配置", "MaClaw LLM Configuration")}
-                </h4>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <p style={{ fontSize: "0.72rem", color: "#888", margin: 0, lineHeight: 1.5 }}>
+                    {t(
+                        "选择 LLM 服务商（支持 OpenAI / Anthropic 协议）",
+                        "Select LLM provider (OpenAI / Anthropic supported)"
+                    )}
+                </p>
                 <button onClick={openDialog} style={{
                     fontSize: "0.76rem", padding: "6px 18px", cursor: "pointer",
-                    background: "#6366f1", color: "#fff", border: "none", borderRadius: 4, flexShrink: 0,
+                    background: "#6366f1", color: "#fff", border: "none", borderRadius: 4, flexShrink: 0, marginLeft: 12,
                 }}>
                     {t("配置", "Configure")}
                 </button>
             </div>
-            <p style={{ fontSize: "0.72rem", color: "#888", marginBottom: 16, lineHeight: 1.5 }}>
-                {t(
-                    "选择 LLM 服务商（支持 OpenAI / Anthropic 协议）",
-                    "Select LLM provider (OpenAI / Anthropic supported)"
-                )}
-            </p>
 
             {/* Current provider summary */}
             <div style={{
@@ -1031,9 +1028,9 @@ export function LLMConfigPanel({ lang, onStatusChange }: Props) {
                             }}>
                                 {t("取消", "Cancel")}
                             </button>
-                            <button onClick={dlgHandleSave} disabled={dlgSaving || oauthBusy || !dlgDirty} style={{
-                                fontSize: "0.76rem", padding: "6px 18px", cursor: dlgDirty ? "pointer" : "default",
-                                background: dlgDirty ? "#6366f1" : colors.bg, color: dlgDirty ? "#fff" : colors.textMuted,
+                            <button onClick={dlgHandleSave} disabled={dlgSaving || oauthBusy || (!dlgDirty && !dlgTested)} style={{
+                                fontSize: "0.76rem", padding: "6px 18px", cursor: (dlgDirty || dlgTested) ? "pointer" : "default",
+                                background: (dlgDirty || dlgTested) ? "#6366f1" : colors.bg, color: (dlgDirty || dlgTested) ? "#fff" : colors.textMuted,
                                 border: "none", borderRadius: 4, opacity: dlgSaving ? 0.6 : 1,
                             }}>
                                 {dlgSaving ? t("测试并保存中...", "Testing & Saving...") : dlgTested ? t("保存", "Save") : t("测试并保存", "Test & Save")}
