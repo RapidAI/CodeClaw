@@ -81,6 +81,11 @@ func (r *ToolRouter) ResetSession() {
 	r.inner.ResetSession()
 }
 
+// WarmupDeferredEmbeddings delegates to corelib/tool.Router.WarmupDeferredEmbeddings.
+func (r *ToolRouter) WarmupDeferredEmbeddings(toolDefs []map[string]interface{}) {
+	r.inner.WarmupDeferredEmbeddings(toolDefs)
+}
+
 // matchRecommendations is exposed for tests that call it directly.
 // corelib's matchRecommendations is unexported, so we keep a thin local copy.
 func (r *ToolRouter) matchRecommendations(msgTokens []string) map[string]interface{} {

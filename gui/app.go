@@ -429,7 +429,8 @@ func (a *App) ensureMemoryStore() {
 		a.memPipeline.Start()
 		// Load embedding model asynchronously so it doesn't block the first
 		// AI assistant message. Vector search will become available once
-		// the model finishes loading in the background.
+		// the model finishes loading in the background. Tool embedding
+		// cache is also pre-warmed so the first routeTools() call is fast.
 		go func() {
 			cfg, err := a.LoadConfig()
 			if err != nil || !cfg.VectorSearchEnabled {
@@ -440,15 +441,7 @@ func (a *App) ensureMemoryStore() {
 			if embedding.IsNoop(emb) {
 				return // model not found, skip
 			}
-			ms.SetEmbedder(emb)
-			if a.toolRouter != nil {
-				a.toolRouter.SetEmbedder(emb)
-			}
-			if a.remoteSessions != nil && a.remoteSessions.hubClient != nil &&
-				a.remoteSessions.hubClient.imHandler != nil &&
-				a.remoteSessions.hubClient.imHandler.toolBuilder != nil {
-				a.remoteSessions.hubClient.imHandler.toolBuilder.SetEmbedder(emb)
-			}
+			a.activateEmbedderAsync(emb)
 			log.Println("[ensureMemoryStore] embedding model loaded in background")
 		}()
 	}

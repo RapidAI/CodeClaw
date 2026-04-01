@@ -109,6 +109,7 @@ func (a *App) GetVectorSearchStatus() VectorSearchStatus {
 
 // SetVectorSearchEnabled persists the vector search toggle and
 // activates/deactivates the embedder accordingly.
+// When enabling, the embedder is wired asynchronously so the UI is not blocked.
 func (a *App) SetVectorSearchEnabled(enabled bool) error {
 	cfg, err := a.LoadConfig()
 	if err != nil {
@@ -119,21 +120,15 @@ func (a *App) SetVectorSearchEnabled(enabled bool) error {
 		return err
 	}
 
-	// Re-wire embedder on the memory store, tool router, and tool builder.
 	if enabled {
 		modelPath := embedding.DefaultModelPath()
 		emb := embedding.NewDefaultEmbedder(modelPath)
-		if a.memoryStore != nil {
-			a.memoryStore.SetEmbedder(emb)
+		if embedding.IsNoop(emb) {
+			// Model file not found — config is saved but embedder stays inactive.
+			// backgroundPreloadEmbeddingModel will pick it up later.
+			return nil
 		}
-		if a.toolRouter != nil {
-			a.toolRouter.SetEmbedder(emb)
-		}
-		if a.remoteSessions != nil && a.remoteSessions.hubClient != nil &&
-			a.remoteSessions.hubClient.imHandler != nil &&
-			a.remoteSessions.hubClient.imHandler.toolBuilder != nil {
-			a.remoteSessions.hubClient.imHandler.toolBuilder.SetEmbedder(emb)
-		}
+		go a.activateEmbedderAsync(emb)
 	} else {
 		noop := embedding.NoopEmbedder{}
 		if a.memoryStore != nil {
@@ -400,6 +395,12 @@ func (a *App) backgroundPreloadEmbeddingModel() {
 
 // verifyAndEnableEmbedding loads the model to verify integrity, then auto-enables
 // vector search if successful. Returns true on success.
+//
+// The embedder is activated asynchronously: the config flag is saved immediately
+// so subsequent startups know vector search is enabled, but the heavy work
+// (loading the model into router/memoryStore and pre-warming the tool embedding
+// cache) happens in a background goroutine. This ensures the AI assistant
+// remains responsive while the vector index is being built.
 func (a *App) verifyAndEnableEmbedding(modelPath string) bool {
 	// Ensure infrastructure is ready before enabling.
 	a.ensureRemoteInfra()
@@ -414,13 +415,74 @@ func (a *App) verifyAndEnableEmbedding(modelPath string) bool {
 	vec, err := emb.Embed("test")
 	if err != nil || len(vec) == 0 {
 		fmt.Printf("[embedding] smoke test failed: err=%v len=%d\n", err, len(vec))
+		emb.Close()
 		return false
 	}
 
-	fmt.Println("[embedding] model verified, auto-enabling vector search")
-	if err := a.SetVectorSearchEnabled(true); err != nil {
-		fmt.Printf("[embedding] auto-enable failed: %v\n", err)
+	fmt.Println("[embedding] model verified, enabling vector search asynchronously")
+
+	// Persist the config flag synchronously so the next startup picks it up.
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		fmt.Printf("[embedding] auto-enable failed (load config): %v\n", cfgErr)
+		emb.Close()
 		return false
 	}
+	cfg.VectorSearchEnabled = true
+	if cfgErr = a.SaveConfig(cfg); cfgErr != nil {
+		fmt.Printf("[embedding] auto-enable failed (save config): %v\n", cfgErr)
+		emb.Close()
+		return false
+	}
+
+	// Wire the embedder to memoryStore, toolRouter, and toolBuilder in the
+	// background so the AI assistant is not blocked. The router will use
+	// pure BM25 scoring until this goroutine finishes.
+	go a.activateEmbedderAsync(emb)
+
 	return true
+}
+
+// activateEmbedderAsync wires an already-loaded embedder into the memory store,
+// tool router, and tool builder in the background. After wiring, it pre-warms
+// the tool embedding cache so the first user message that hits the hybrid
+// retrieval path doesn't pay the cold-start cost.
+func (a *App) activateEmbedderAsync(emb embedding.Embedder) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("[embedding] activateEmbedderAsync panic: %v\n", r)
+		}
+	}()
+
+	t0 := time.Now()
+
+	// Wire embedder into memory store (triggers backfillEmbeddings in background).
+	if a.memoryStore != nil {
+		a.memoryStore.SetEmbedder(emb)
+	}
+
+	// Wire embedder into tool router (enables hybrid retrieval).
+	if a.toolRouter != nil {
+		a.toolRouter.SetEmbedder(emb)
+	}
+
+	// Wire embedder into tool builder.
+	if a.remoteSessions != nil && a.remoteSessions.hubClient != nil &&
+		a.remoteSessions.hubClient.imHandler != nil &&
+		a.remoteSessions.hubClient.imHandler.toolBuilder != nil {
+		a.remoteSessions.hubClient.imHandler.toolBuilder.SetEmbedder(emb)
+	}
+
+	// Pre-warm tool embedding cache by running a dummy route. This triggers
+	// FuseScores → GetBatch which synchronously computes and caches embeddings
+	// for all candidate tools, so the first real user message is fast.
+	var handler *IMMessageHandler
+	if a.remoteSessions != nil && a.remoteSessions.hubClient != nil {
+		handler = a.remoteSessions.hubClient.imHandler
+	}
+	if handler != nil {
+		handler.WarmupTools()
+	}
+
+	fmt.Printf("[embedding] async activation complete in %v\n", time.Since(t0))
 }
