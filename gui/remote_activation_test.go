@@ -125,7 +125,7 @@ func TestBuildClaudeLaunchEnv_CodegenWritesDedicatedSettings(t *testing.T) {
 	model := &ModelConfig{
 		ModelName: "codegen",
 		ModelId:   "claude-codegen-1",
-		ModelUrl:  "https://codegen.example/anthropic",
+		ModelUrl:  "http://127.0.0.1:5001/anthropic",
 		ApiKey:    "cg-test",
 		WireApi:   "anthropic",
 	}
@@ -135,7 +135,7 @@ func TestBuildClaudeLaunchEnv_CodegenWritesDedicatedSettings(t *testing.T) {
 		t.Fatalf("buildClaudeLaunchEnv() error = %v", err)
 	}
 
-	if env["ANTHROPIC_BASE_URL"] != "https://codegen.example/anthropic" {
+	if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:5001/anthropic" {
 		t.Fatalf("ANTHROPIC_BASE_URL = %q", env["ANTHROPIC_BASE_URL"])
 	}
 

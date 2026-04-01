@@ -137,7 +137,7 @@ func TestWriteClaudeProviderSettings_CodegenWritesBoth(t *testing.T) {
 		t.Fatalf("seed codegen settings: %v", err)
 	}
 
-	if err := WriteClaudeProviderSettings("codegen", "tok-123", "https://codegen.example/anthropic", "claude-codegen-1"); err != nil {
+	if err := WriteClaudeProviderSettings("codegen", "tok-123", "http://127.0.0.1:5001/anthropic", "claude-codegen-1"); err != nil {
 		t.Fatalf("WriteClaudeProviderSettings: %v", err)
 	}
 
@@ -151,10 +151,10 @@ func TestWriteClaudeProviderSettings_CodegenWritesBoth(t *testing.T) {
 	}
 
 	assertAnthropicEnvValue(t, claudeSettings, "ANTHROPIC_AUTH_TOKEN", "tok-123")
-	assertAnthropicEnvValue(t, claudeSettings, "ANTHROPIC_BASE_URL", "https://codegen.example/anthropic")
+	assertAnthropicEnvValue(t, claudeSettings, "ANTHROPIC_BASE_URL", "http://127.0.0.1:5001/anthropic")
 	assertAnthropicEnvValue(t, claudeSettings, "ANTHROPIC_MODEL", "claude-codegen-1")
 	assertAnthropicEnvValue(t, codegenSettings, "ANTHROPIC_AUTH_TOKEN", "tok-123")
-	assertAnthropicEnvValue(t, codegenSettings, "ANTHROPIC_BASE_URL", "https://codegen.example/anthropic")
+	assertAnthropicEnvValue(t, codegenSettings, "ANTHROPIC_BASE_URL", "http://127.0.0.1:5001/anthropic")
 	assertAnthropicEnvValue(t, codegenSettings, "ANTHROPIC_MODEL", "claude-codegen-1")
 
 	if got, _ := claudeSettings["customField"].(string); got != "keep-me" {

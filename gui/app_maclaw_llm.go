@@ -1097,12 +1097,14 @@ func upsertCodeGenProvider(providers []MaclawLLMProvider, result oauth.CodeGenSS
 	return append(providers, entry)
 }
 
-// codegenAnthropicBaseURL 将 CodeGen 的 openai 协议 base URL 转换为 anthropic 兼容端点。
-// CodeGen API 原生使用 openai 协议，Claude Code 需要 anthropic 协议，
-// 服务端在 base URL 后追加 /anthropic 路径提供兼容端点。
-// 例如：https://codegen.qianxin-inc.cn/api/v1 → https://codegen.qianxin-inc.cn/api/v1/anthropic
+// codegenClaudeProxyBaseURL 是本地 OpenAI→Anthropic 协议转换代理地址。
+// CodeGen 原始服务只提供 OpenAI 协议；Claude Code 需要 Anthropic 协议，
+// 因此必须固定走本地兼容代理，而不是把上游 CodeGen URL 直接追加 /anthropic。
+const codegenClaudeProxyBaseURL = "http://127.0.0.1:5001/anthropic"
+
+// codegenAnthropicBaseURL 返回 CodeGen 给 Claude/TigerClaw Code 使用的 Anthropic 兼容端点。
 func codegenAnthropicBaseURL(openaiBaseURL string) string {
-	return strings.TrimRight(openaiBaseURL, "/") + "/anthropic"
+	return codegenClaudeProxyBaseURL
 }
 
 // injectCodeGenModelIntoToolConfigs 将 CodeGen 服务商作为模型条目注入到各编程工具的
