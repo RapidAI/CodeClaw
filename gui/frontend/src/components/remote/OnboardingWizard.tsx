@@ -148,21 +148,25 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
 
     // ── Step 4: WeChat Binding ──
     const [wxDone, setWxDone] = useState(false);
+    const [wxSkipped, setWxSkipped] = useState(false);
     const [wxQrUrl, setWxQrUrl] = useState("");
     const [wxStatus, setWxStatus] = useState("");
     const [wxMsg, setWxMsg] = useState("");
     const [wxLoading, setWxLoading] = useState(false);
     const wxPollingRef = useRef(false);
 
+    // wxDone = actually bound; wxSkipped = user chose to skip
+    const wxCompleted = wxDone || wxSkipped;
+
     // Step completion map (memoized to avoid array re-creation)
     // TigerClaw 两步流程：step1=SSO+注册(llmDone&&regDone), step2=微信
     // 普通品牌四步：step1=注册, step2=UI模式, step3=LLM, step4=微信
     const stepDone = useMemo(() => {
         if (isTigerclaw) {
-            return [false, llmDone && regDone, wxDone];
+            return [false, llmDone && regDone, wxCompleted];
         }
-        return [false, regDone, modeDone, llmDone, wxDone];
-    }, [regDone, modeDone, llmDone, wxDone, isTigerclaw]);
+        return [false, regDone, modeDone, llmDone, wxCompleted];
+    }, [regDone, modeDone, llmDone, wxCompleted, isTigerclaw]);
 
     // Navigation guards
     const canNext = step < totalSteps && stepDone[step];
@@ -217,13 +221,13 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
 
     // Auto-close when all done
     useEffect(() => {
-        const allDone = isTigerclaw ? (llmDone && regDone && wxDone) : (regDone && modeDone && llmDone && wxDone);
+        const allDone = isTigerclaw ? (llmDone && regDone && wxCompleted) : (regDone && modeDone && llmDone && wxCompleted);
         if (allDone) {
             onSaveField({ onboarding_done: true });
             const timer = setTimeout(onClose, 1500);
             return () => clearTimeout(timer);
         }
-    }, [regDone, modeDone, llmDone, wxDone, isTigerclaw, onClose]);
+    }, [regDone, modeDone, llmDone, wxCompleted, isTigerclaw, onClose]);
 
     const selectedProvider = selectedIdx !== null ? providers[selectedIdx] : null;
 
@@ -577,7 +581,9 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
                         const s = i + 1;
                         const done = stepDone[s];
                         const active = s === step;
-                        const circleColor = done ? "#22c55e" : active ? "#6366f1" : "#cbd5e1";
+                        // Step 4 skipped: show grey instead of green
+                        const skippedStep = s === 4 && wxSkipped && !wxDone;
+                        const circleColor = skippedStep ? "#94a3b8" : done ? "#22c55e" : active ? "#6366f1" : "#cbd5e1";
                         return (
                             <div key={s} style={{ display: "flex", alignItems: "center" }}>
                                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 54 }}>
@@ -588,7 +594,7 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
                                         fontSize: "0.72rem", fontWeight: 700,
                                         transition: "background 0.2s",
                                     }}>
-                                        {done ? "✓" : s}
+                                        {skippedStep ? "—" : done ? "✓" : s}
                                     </div>
                                     <span style={{
                                         fontSize: "0.62rem", marginTop: 3,
@@ -980,6 +986,56 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
                                         <>
                                             {selectedProvider.is_custom ? (
                                                 <>
+                                                    {/* Protocol selection */}
+                                                    <div style={{ marginBottom: 10 }}>
+                                                        <label style={labelStyle}>{t("协议", "Protocol")}</label>
+                                                        <div style={{ display: "flex", gap: 6 }}>
+                                                            {(["openai", "anthropic"] as const).map(proto => {
+                                                                const active = (selectedProvider.protocol || "openai") === proto;
+                                                                return (
+                                                                    <button key={proto} onClick={() => updateField("protocol", proto)} style={{
+                                                                        fontSize: "0.76rem", padding: "5px 16px", cursor: "pointer",
+                                                                        background: active ? "#6366f1" : "#fff",
+                                                                        color: active ? "#fff" : "#1e293b",
+                                                                        border: `1px solid ${active ? "#6366f1" : "#e2e8f0"}`,
+                                                                        borderRadius: 4, transition: "all 0.15s",
+                                                                    }}>
+                                                                        {proto === "openai" ? "OpenAI" : "Anthropic"}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                        <p style={{ fontSize: "0.68rem", color: "#94a3b8", margin: "4px 0 0 0", lineHeight: 1.4 }}>
+                                                            {(selectedProvider.protocol || "openai") === "anthropic"
+                                                                ? t("使用 Anthropic Messages API（x-api-key 鉴权）", "Uses Anthropic Messages API (x-api-key auth)")
+                                                                : t("使用 OpenAI 兼容接口（Bearer Token 鉴权）", "Uses OpenAI-compatible API (Bearer token auth)")}
+                                                        </p>
+                                                    </div>
+                                                    {/* User-Agent selection */}
+                                                    <div style={{ marginBottom: 10 }}>
+                                                        <label style={labelStyle}>User-Agent</label>
+                                                        <div style={{ display: "flex", gap: 6 }}>
+                                                            {(["openclaw", "claude-code/2.0.0"] as const).map(ua => {
+                                                                const active = (selectedProvider.agent_type || "openclaw") === ua;
+                                                                return (
+                                                                    <button key={ua} onClick={() => updateField("agent_type", ua)} style={{
+                                                                        fontSize: "0.76rem", padding: "5px 16px", cursor: "pointer",
+                                                                        background: active ? "#6366f1" : "#fff",
+                                                                        color: active ? "#fff" : "#1e293b",
+                                                                        border: `1px solid ${active ? "#6366f1" : "#e2e8f0"}`,
+                                                                        borderRadius: 4, transition: "all 0.15s",
+                                                                    }}>
+                                                                        {ua}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                        <p style={{ fontSize: "0.68rem", color: "#94a3b8", margin: "4px 0 0 0", lineHeight: 1.4 }}>
+                                                            {(selectedProvider.agent_type || "openclaw") === "claude-code/2.0.0"
+                                                                ? t("Kimi 等需要编程套餐身份的服务商", "For providers requiring Claude Coding Plan identity (e.g. Kimi)")
+                                                                : t("智谱等大多数服务商使用 OpenClaw 身份", "Most providers use OpenClaw identity (e.g. Zhipu)")}
+                                                        </p>
+                                                    </div>
                                                     <div style={{ marginBottom: 10 }}>
                                                         <label style={labelStyle}>API URL <span style={{ color: "#ef4444" }}>*</span></label>
                                                         <input style={inputStyle} value={selectedProvider.url}
@@ -1055,6 +1111,16 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
                                     <div style={{ fontSize: "1.4rem", marginBottom: 4 }}>✅</div>
                                     <div style={{ fontSize: "0.82rem", color: "#22c55e", fontWeight: 600 }}>
                                         {t("微信已绑定", "WeChat connected")}
+                                    </div>
+                                </div>
+                            ) : wxSkipped ? (
+                                <div style={{
+                                    padding: "16px", textAlign: "center", borderRadius: 8,
+                                    background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.2)",
+                                }}>
+                                    <div style={{ fontSize: "1.4rem", marginBottom: 4 }}>⏭️</div>
+                                    <div style={{ fontSize: "0.82rem", color: "#94a3b8", fontWeight: 600 }}>
+                                        {t("已跳过，可稍后在设置中绑定", "Skipped — you can bind later in settings")}
                                     </div>
                                 </div>
                             ) : (
@@ -1136,10 +1202,10 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
 
                     {isLastStep ? (
                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            {!wxDone && (
+                            {!wxDone && !wxSkipped && (
                                 <button
                                     onClick={() => {
-                                        setWxDone(true);
+                                        setWxSkipped(true);
                                     }}
                                     style={{
                                         padding: "7px 14px", fontSize: "0.75rem", fontWeight: 500, borderRadius: 6,
@@ -1155,12 +1221,12 @@ export function OnboardingWizard({ lang, hubUrl, email, uiMode, brandId, brandDi
                                     onSaveField({ onboarding_done: true });
                                     onClose();
                                 }}
-                                disabled={!wxDone}
+                                disabled={!wxCompleted}
                                 style={{
                                     padding: "7px 20px", fontSize: "0.8rem", fontWeight: 600, borderRadius: 6,
-                                    background: wxDone ? "#22c55e" : "#cbd5e1",
+                                    background: wxCompleted ? "#22c55e" : "#cbd5e1",
                                     color: "#fff", border: "none",
-                                    cursor: wxDone ? "pointer" : "default",
+                                    cursor: wxCompleted ? "pointer" : "default",
                                 }}
                             >
                                 {t("完成", "Finish")}

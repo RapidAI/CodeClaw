@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { SendAIAssistantMessage, ClearAIAssistantHistory, FetchNews, IsAIAssistantReady } from "../../../wailsjs/go/main/App";
+import { SendAIAssistantMessage, ClearAIAssistantHistory, FetchNews, IsAIAssistantReady, GetAIAssistantInitStatus } from "../../../wailsjs/go/main/App";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime";
 
 export interface ChatMessage {
@@ -69,12 +69,20 @@ export function useAIAssistant() {
     const [sending, setSending] = useState(false);
     const [streaming, setStreaming] = useState(false);
     const [ready, setReady] = useState(false);
+    // Human-readable init status: "connecting" | "loading" | "warming" | "ready"
+    const [initStatus, setInitStatus] = useState<string>("connecting");
+    // Counter that bumps whenever the panel should scroll to top (e.g. after
+    // news reload on clear / restart).  The Panel watches this value.
+    const [scrollToTopSeq, setScrollToTopSeq] = useState(0);
     // Ref-based guard prevents concurrent sends (React state is async).
     const sendingRef = useRef(false);
     // Track the current streaming message ID so token events know where to append.
     const streamingMsgIdRef = useRef<string | null>(null);
+    // Flag: when true, the next doFetchNews completion will scroll to top.
+    const scrollOnNextNewsRef = useRef(true); // true on mount (app restart)
 
     // Poll backend readiness until the AI assistant is initialized.
+    // Also listen for init progress events from the backend.
     useEffect(() => {
         let cancelled = false;
         const check = () => {
@@ -82,15 +90,33 @@ export function useAIAssistant() {
                 if (cancelled) return;
                 if (ok) {
                     setReady(true);
+                    setInitStatus("ready");
                 } else {
-                    setTimeout(check, 2000);
+                    GetAIAssistantInitStatus().then(status => {
+                        if (!cancelled) setInitStatus(status || "connecting");
+                    }).catch(() => {});
+                    setTimeout(check, 1500);
                 }
             }).catch(() => {
-                if (!cancelled) setTimeout(check, 2000);
+                if (!cancelled) setTimeout(check, 1500);
             });
         };
         check();
-        return () => { cancelled = true; };
+
+        const progressHandler = (status: string) => {
+            if (status === "ready") {
+                setReady(true);
+                setInitStatus("ready");
+            } else {
+                setInitStatus(status);
+            }
+        };
+        EventsOn("ai-assistant-init-progress", progressHandler);
+
+        return () => {
+            cancelled = true;
+            EventsOff("ai-assistant-init-progress");
+        };
     }, []);
 
     // Persist messages to localStorage whenever they change (debounced via ref
@@ -121,6 +147,12 @@ export function useAIAssistant() {
                 const filtered = prev.filter(m => !m.id.startsWith('news-'));
                 return [...sysMsgs, ...filtered];
             });
+            // After news are loaded, scroll to top only when explicitly requested
+            // (app restart or clear history), not on manual refresh button clicks.
+            if (scrollOnNextNewsRef.current) {
+                scrollOnNextNewsRef.current = false;
+                setScrollToTopSeq(s => s + 1);
+            }
         }).catch(() => { /* silently ignore news fetch failures */ });
     }, []);
 
@@ -301,7 +333,10 @@ export function useAIAssistant() {
         streamingMsgIdRef.current = null;
         setMessages([]);
         localStorage.removeItem(STORAGE_KEY);
-    }, []);
+        // Re-fetch pinned news so they reappear after clearing history.
+        scrollOnNextNewsRef.current = true;
+        doFetchNews();
+    }, [doFetchNews]);
 
     const executeAction = useCallback((command: string) => {
         return sendMessage(command);
@@ -323,7 +358,7 @@ export function useAIAssistant() {
         };
     }, []);
 
-    return { messages, sending, streaming, ready, sendMessage, clearHistory, executeAction, refreshNews: doFetchNews };
+    return { messages, sending, streaming, ready, initStatus, sendMessage, clearHistory, executeAction, refreshNews: doFetchNews, scrollToTopSeq };
 }
 
 // Polyfill for Array.findLastIndex (not available in all environments)

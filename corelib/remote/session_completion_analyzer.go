@@ -57,6 +57,8 @@ func (a *CompletionAnalyzer) Analyze(lines []string, tool string, sdkResult *SDK
 			rest := strings.TrimSpace(lower[len("[gemini-acp] turn complete:"):])
 			if strings.Contains(rest, "success") || strings.Contains(rest, "done") || strings.Contains(rest, "completed") {
 				completionCount++
+			} else if strings.Contains(rest, "cancelled") || strings.Contains(rest, "canceled") {
+				incompletionCount++
 			}
 			continue
 		}

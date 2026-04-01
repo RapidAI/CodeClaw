@@ -11,12 +11,16 @@ interface AIAssistantPanelProps {
     sending: boolean;
     streaming: boolean;
     ready: boolean;
+    initStatus?: string; // "connecting" | "loading" | "warming" | "ready"
     sendMessage: (text: string) => Promise<void>;
     clearHistory: () => Promise<void>;
     executeAction: (command: string) => Promise<void>;
     refreshNews: () => void;
+    scrollToTopSeq?: number; // bumped when panel should scroll to top (e.g. after news reload)
     inline?: boolean; // when true, render as inline content instead of overlay
     onHideWindow?: () => void; // hide the entire window (inline mode)
+    onboardingIncomplete?: boolean; // true when onboarding was dismissed before completion
+    onOpenOnboarding?: () => void; // callback to re-open the onboarding wizard
 }
 
 /* ── Theme definitions ── */
@@ -510,7 +514,7 @@ if (typeof document !== "undefined" && !document.getElementById("ai-blink-style"
 
 /* ── Main component ── */
 
-export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, ready, sendMessage, clearHistory, executeAction, refreshNews, inline, onHideWindow }: AIAssistantPanelProps) {
+export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, ready, initStatus, sendMessage, clearHistory, executeAction, refreshNews, scrollToTopSeq, inline, onHideWindow, onboardingIncomplete, onOpenOnboarding }: AIAssistantPanelProps) {
     const [inputValue, setInputValue] = useState("");
     const [composing, setComposing] = useState(false);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -524,8 +528,18 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
 
     const title = lang === "en" ? "AI Assistant" : "AI 助手";
     const thinkingText = lang === "en" ? "Thinking..." : "正在思考...";
+
+    const initStatusLabels: Record<string, Record<string, string>> = {
+        connecting: { en: "Connecting to Hub...", zh: "正在连接 Hub..." },
+        loading:    { en: "Loading components...", zh: "正在加载组件..." },
+        warming:    { en: "Warming up...", zh: "正在预热..." },
+        ready:      { en: "Ready", zh: "就绪" },
+    };
+    const statusKey = initStatus || "connecting";
+    const initLabel = (initStatusLabels[statusKey] || initStatusLabels.connecting)[lang === "en" ? "en" : "zh"];
+
     const placeholderText = !ready
-        ? (lang === "en" ? "Initializing..." : "正在初始化...")
+        ? initLabel
         : streaming
         ? (lang === "en" ? "Thinking..." : "正在思考...")
         : sending
@@ -562,6 +576,17 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
         userScrolledUpRef.current =
             container.scrollHeight - container.scrollTop - container.clientHeight > threshold;
     }, []);
+
+    // Scroll to top when pinned news are (re)loaded — e.g. after clear history
+    // or app restart — so the user sees the pinned messages first.
+    useEffect(() => {
+        if (!scrollToTopSeq) return;
+        const container = outputContainerRef.current;
+        if (container) {
+            container.scrollTo({ top: 0, behavior: "smooth" });
+            userScrolledUpRef.current = true; // prevent auto-scroll-to-bottom from overriding
+        }
+    }, [scrollToTopSeq]);
 
     // Focus input on mount
     useEffect(() => {
@@ -703,7 +728,40 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
                 }}
                 onScroll={handleScroll}
             >
-                {messages.length === 0 ? (
+                {onboardingIncomplete ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: "16px" }}>
+                        <div style={{ color: t.textMuted, fontSize: "13px" }}>
+                            {lang === "en" ? "Setup not completed" : "设置未完成"}
+                        </div>
+                        <button
+                            onClick={onOpenOnboarding}
+                            style={{
+                                padding: "10px 28px", fontSize: "15px", fontWeight: 600,
+                                background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
+                                color: "#fff", border: "none", borderRadius: "8px",
+                                cursor: "pointer", transition: "opacity 0.2s",
+                            }}
+                            onMouseEnter={e => (e.currentTarget.style.opacity = "0.85")}
+                            onMouseLeave={e => (e.currentTarget.style.opacity = "1")}
+                        >
+                            {lang === "en" ? "Complete Setup" : "完成设置"}
+                        </button>
+                    </div>
+                ) : !ready ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: "12px" }}>
+                        <div style={{
+                            width: "28px", height: "28px",
+                            border: `3px solid ${t.inputBarBorder}`,
+                            borderTop: `3px solid ${t.promptColor}`,
+                            borderRadius: "50%",
+                            animation: "maclaw-spin 0.8s linear infinite",
+                        }} />
+                        <style>{`@keyframes maclaw-spin { to { transform: rotate(360deg); } }`}</style>
+                        <div style={{ color: t.textMuted, fontSize: "12px" }}>
+                            {initLabel}
+                        </div>
+                    </div>
+                ) : messages.length === 0 ? (
                     <span style={{ color: t.emptyHint }}>
                         {lang === "en" ? "Ask me anything..." : "有什么可以帮你的？"}
                     </span>
@@ -716,8 +774,18 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
                                 gap: '6px',
                                 marginBottom: '6px',
                             }}>
-                                {pinnedNews.map(msg => (
-                                    <div key={msg.id} className="pinned-news-card" style={{
+                                {pinnedNews.map(msg => {
+                                    // Split content into title (first line) and body (rest)
+                                    const lines = msg.content.split('\n');
+                                    const titleLine = lines[0] || '';
+                                    const bodyLines = lines.slice(1).filter(l => l.trim() !== '');
+                                    const bodyText = bodyLines.join('\n');
+                                    // Plain text for tooltip (strip markdown bold markers)
+                                    const plainTitle = titleLine.replace(/\*\*/g, '');
+                                    const plainBody = bodyLines.map(l => l.replace(/\*\*/g, '')).join('\n');
+                                    const tooltipText = plainTitle + (plainBody ? '\n' + plainBody : '');
+                                    return (
+                                    <div key={msg.id} className="pinned-news-card" title={tooltipText} style={{
                                         padding: "6px 8px",
                                         borderRadius: "6px",
                                         background: "linear-gradient(135deg, rgba(99,102,241,0.06), rgba(139,92,246,0.06))",
@@ -727,9 +795,31 @@ export function AIAssistantPanel({ onClose, lang, messages, sending, streaming, 
                                         lineHeight: "1.4",
                                         overflow: "hidden",
                                     }}>
-                                        {renderContentWithCodeBlocks(msg.content, t)}
+                                        {/* Title: single line, ellipsis */}
+                                        <div style={{
+                                            overflow: "hidden",
+                                            textOverflow: "ellipsis",
+                                            whiteSpace: "nowrap",
+                                            fontWeight: 600,
+                                        }}>
+                                            {renderInlineMarkdown(titleLine, t)}
+                                        </div>
+                                        {/* Body: max 2 lines, ellipsis */}
+                                        {bodyText && (
+                                        <div style={{
+                                            overflow: "hidden",
+                                            display: "-webkit-box",
+                                            WebkitLineClamp: 2,
+                                            WebkitBoxOrient: "vertical" as any,
+                                            marginTop: "2px",
+                                            color: t.textMuted,
+                                        }}>
+                                            {renderInlineMarkdown(bodyText, t)}
+                                        </div>
+                                        )}
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         )}
                         {renderedOtherMessages}

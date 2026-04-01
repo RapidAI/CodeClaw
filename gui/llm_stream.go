@@ -775,7 +775,7 @@ func convertToAnthropicMessages(messages []interface{}) anthropicConvertedMessag
 			toolCallID, _ := mm["tool_call_id"].(string)
 			content, _ := mm["content"].(string)
 			toolResultBlock := map[string]interface{}{
-				"type": "tool_result", "tool_use_id": toolCallID, "content": content,
+				"type": "tool_result", "id": "toolrslt_" + toolCallID, "tool_use_id": toolCallID, "content": content,
 			}
 			merged := false
 			if len(result.Messages) > 0 {

@@ -18,12 +18,31 @@ import (
 var (
 	seg     gse.Segmenter
 	segOnce sync.Once
+	segDone chan struct{} // closed when dictionary loading finishes
 )
+
+func init() {
+	segDone = make(chan struct{})
+}
+
+// PrewarmDict starts loading the gse dictionary in a background goroutine.
+// Call this early at startup so the dictionary is ready by the time the first
+// BM25 query arrives. Safe to call multiple times (sync.Once guarded).
+func PrewarmDict() {
+	go initSeg()
+}
 
 func initSeg() {
 	segOnce.Do(func() {
 		seg.LoadDict()
+		close(segDone)
 	})
+}
+
+// waitSeg blocks until the gse dictionary is loaded.
+func waitSeg() {
+	initSeg() // ensure started
+	<-segDone
 }
 
 // Doc represents a document in the index.
@@ -50,7 +69,7 @@ type indexedDoc struct {
 
 // New creates an empty BM25 index with standard parameters.
 func New() *Index {
-	initSeg()
+	waitSeg()
 	return &Index{k1: 1.2, b: 0.75}
 }
 
@@ -220,7 +239,7 @@ func Tokenize(text string) []string {
 	if text == "" {
 		return nil
 	}
-	initSeg()
+	waitSeg()
 
 	lower := strings.ToLower(text)
 	segments := seg.Cut(lower, true)

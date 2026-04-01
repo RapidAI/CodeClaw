@@ -198,6 +198,7 @@ type Adapter struct {
 	contentAuditor       *ContentAuditor       // optional; nil = no content audit
 	identity             IdentityResolver
 	limiter              *rateLimiter
+	taskDispatcher       *IMTaskDispatcher     // optional; nil = synchronous processing (legacy)
 }
 
 // NewAdapter creates a new IM Adapter with the given MessageRouter.
@@ -238,6 +239,34 @@ func (a *Adapter) SetOutboundInterceptor(interceptor *OutboundInterceptor) {
 // SetContentAuditor wires the content auditor for outbound content compliance checks.
 func (a *Adapter) SetContentAuditor(ca *ContentAuditor) {
 	a.contentAuditor = ca
+}
+
+// InitTaskDispatcher creates and wires the background task dispatcher.
+// Must be called after SetCoordinator (if used). capacity is the per-user
+// queue depth (recommended 3-5).
+func (a *Adapter) InitTaskDispatcher(capacity int) {
+	executor := func(ctx context.Context, task *IMTask) (*GenericResponse, error) {
+		// Re-stash attachments so routeToSingleMachine can pick them up.
+		if len(task.Attachments) > 0 {
+			a.messageRouter.StashAttachments(task.UserID, task.Attachments)
+		}
+		if a.coordinator != nil {
+			return a.coordinator.Coordinate(ctx, task.UserID, task.PlatformName, task.PlatformUID, task.Text)
+		}
+		return a.messageRouter.RouteToAgent(ctx, task.UserID, task.PlatformName, task.PlatformUID, task.Text)
+	}
+
+	delivery := func(ctx context.Context, userID, platformName, platformUID string, resp *GenericResponse) {
+		plugin := a.GetPlugin(platformName)
+		if plugin == nil {
+			log.Printf("[TaskDispatcher] no plugin for platform %q, cannot deliver result", platformName)
+			return
+		}
+		target := UserTarget{PlatformUID: platformUID, UnifiedUserID: userID}
+		a.sendResponse(ctx, plugin, target, resp)
+	}
+
+	a.taskDispatcher = NewIMTaskDispatcher(capacity, executor, delivery)
 }
 
 // RegisterPlugin registers an IM plugin with the adapter.
@@ -665,6 +694,35 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 		return
 	}
 
+	// 3f2. Handle /queue command — show task queue status.
+	if text == "/queue" {
+		if a.taskDispatcher == nil {
+			a.sendResponse(ctx, plugin, target, &GenericResponse{
+				StatusCode: 200,
+				StatusIcon: "📋",
+				Title:      "任务队列",
+				Body:       "任务队列未启用。",
+			})
+			return
+		}
+		stats := a.taskDispatcher.Stats(unifiedID)
+		var body string
+		if stats.Running {
+			body = fmt.Sprintf("🔄 正在执行 1 个任务，队列中还有 %d 个等待。（容量 %d）", stats.Pending, stats.Capacity)
+		} else if stats.Pending > 0 {
+			body = fmt.Sprintf("📋 队列中有 %d 个任务等待处理。（容量 %d）", stats.Pending, stats.Capacity)
+		} else {
+			body = "✅ 队列空闲，没有待处理任务。"
+		}
+		a.sendResponse(ctx, plugin, target, &GenericResponse{
+			StatusCode: 200,
+			StatusIcon: "📋",
+			Title:      "任务队列状态",
+			Body:       body,
+		})
+		return
+	}
+
 	// 3g. Unknown / command — friendly error.
 	if strings.HasPrefix(text, "/") {
 		cmd := text
@@ -721,8 +779,32 @@ func (a *Adapter) HandleMessage(ctx context.Context, msg IncomingMessage) {
 	}
 
 	// 5. Route to MaClaw Agent — via Coordinator (if wired) or MessageRouter.
-	log.Printf("[IM Adapter] routing: user=%s coordinator=%v text_len=%d attachments=%d", unifiedID, a.coordinator != nil, len(text), len(msg.Attachments))
+	log.Printf("[IM Adapter] routing: user=%s coordinator=%v dispatcher=%v text_len=%d attachments=%d",
+		unifiedID, a.coordinator != nil, a.taskDispatcher != nil, len(text), len(msg.Attachments))
 
+	// --- Fast-path: Hub direct answer (no device needed) ---
+	// When the task dispatcher is active and the Coordinator supports it,
+	// try to answer simple questions directly without queuing.
+	if a.taskDispatcher != nil && a.coordinator != nil {
+		if fastResp := a.coordinator.TryFastAnswer(ctx, unifiedID, msg.PlatformName, msg.PlatformUID, text); fastResp != nil {
+			a.sendResponse(ctx, plugin, target, fastResp)
+			return
+		}
+
+		// --- Slow-path: queue for background processing ---
+		task := &IMTask{
+			UserID:       unifiedID,
+			PlatformName: msg.PlatformName,
+			PlatformUID:  msg.PlatformUID,
+			Text:         text,
+			Attachments:  msg.Attachments,
+		}
+		queueResp := a.taskDispatcher.Enqueue(task)
+		a.sendResponse(ctx, plugin, target, queueResp)
+		return
+	}
+
+	// --- Legacy synchronous path (no task dispatcher) ---
 	// Stash attachments so routeToSingleMachine can include them in the
 	// WebSocket payload without changing the routing API signatures.
 	a.messageRouter.StashAttachments(unifiedID, msg.Attachments)

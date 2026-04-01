@@ -13,7 +13,48 @@ const (
 	CategoryInstruction         Category = "instruction"
 	CategoryConversationSummary Category = "conversation_summary"
 	CategorySessionCheckpoint   Category = "session_checkpoint"
+
+	// Claude-style four-type taxonomy (inspired by Claude Code memdir).
+	// These map to the original categories but provide a cleaner semantic model:
+	//   user     — user role, goals, knowledge (maps to user_fact)
+	//   feedback — corrections and confirmations on approach (maps to instruction)
+	//   project  — non-derivable project context, decisions, deadlines (maps to project_knowledge)
+	//   reference — pointers to external systems (maps to project_knowledge)
+	CategoryUser      Category = "user"
+	CategoryFeedback  Category = "feedback"
+	CategoryProject   Category = "project"
+	CategoryReference Category = "reference"
 )
+
+// ClaudeStyleCategories returns the four Claude-style category constants.
+func ClaudeStyleCategories() []Category {
+	return []Category{CategoryUser, CategoryFeedback, CategoryProject, CategoryReference}
+}
+
+// MapToCanonical maps a Claude-style category to the canonical internal
+// category used by scoring, scope inference, and protection checks.
+// Legacy categories pass through unchanged.
+func MapToCanonical(c Category) Category {
+	switch c {
+	case CategoryUser:
+		return CategoryUserFact
+	case CategoryFeedback:
+		return CategoryInstruction
+	case CategoryProject, CategoryReference:
+		return CategoryProjectKnowledge
+	default:
+		return c
+	}
+}
+
+// IsClaudeStyle returns true if the category is one of the four Claude-style types.
+func (c Category) IsClaudeStyle() bool {
+	switch c {
+	case CategoryUser, CategoryFeedback, CategoryProject, CategoryReference:
+		return true
+	}
+	return false
+}
 
 // IsProtected returns true for categories that must never be evicted or compressed.
 func (c Category) IsProtected() bool {
@@ -39,7 +80,9 @@ const (
 
 // InferScope returns the default scope for a given category.
 func InferScope(c Category) Scope {
-	switch c {
+	// Map Claude-style categories to canonical for scope inference.
+	canonical := MapToCanonical(c)
+	switch canonical {
 	case CategorySelfIdentity, CategoryUserFact, CategoryPreference, CategoryInstruction:
 		return ScopeGlobal
 	default:
@@ -57,7 +100,9 @@ const (
 
 // Tier returns the memory tier for a category.
 func (c Category) Tier() MemoryTier {
-	switch c {
+	// Map Claude-style categories to canonical for tier classification.
+	canonical := MapToCanonical(c)
+	switch canonical {
 	case CategoryConversationSummary, CategorySessionCheckpoint:
 		return TierEpisodic
 	default:

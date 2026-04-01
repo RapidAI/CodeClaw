@@ -119,6 +119,11 @@ func Bootstrap(cfg *config.Config, configPath string) (*App, error) {
 	coordinator := im.NewCoordinator(messageRouter, deviceFinder, llmConfigProvider)
 	imAdapter.SetCoordinator(coordinator)
 
+	// Initialize background task dispatcher — enables non-blocking IM:
+	// simple queries (direct_answer) are answered immediately, while
+	// device-bound tasks are queued and results pushed asynchronously.
+	imAdapter.InitTaskDispatcher(5)
+
 	// Wire smart route permission checker so only authorized users get LLM features.
 	smartRouteChecker := im.NewDBSmartRouteChecker(
 		&smartRouteUserAdapter{users: st.Users},

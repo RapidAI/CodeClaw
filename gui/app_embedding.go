@@ -342,8 +342,14 @@ func (a *App) emitDownloadProgress(pct int, downloaded, total int64, errMsg stri
 // Supports resume: if a previous .tmp file exists, the download continues from
 // where it left off (HTTP Range).
 func (a *App) backgroundPreloadEmbeddingModel() {
-	// Wait a bit for ensureRemoteInfra to initialize memoryStore/toolRouter etc.
-	time.Sleep(15 * time.Second)
+	// Wait for core infrastructure to be ready instead of a fixed sleep.
+	// Poll remoteInfraReady with a short interval; give up after 30s.
+	for i := 0; i < 60; i++ {
+		if a.remoteInfraReady.Load() {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 
 	// Only run if vector search is currently OFF and model doesn't exist.
 	cfg, err := a.LoadConfig()

@@ -31,6 +31,11 @@ type LLMConfigRefresher interface {
 	RefreshConfig()
 }
 
+// maxConsecutiveCompressFailures is the circuit breaker threshold.
+// After this many consecutive failures, the background loop stops retrying
+// until the next scheduled cycle (inspired by Claude Code's autocompact).
+const maxConsecutiveCompressFailures = 3
+
 // Compressor compresses long memory entries via LLM and manages backups.
 type Compressor struct {
 	store         *Store
@@ -40,12 +45,14 @@ type Compressor struct {
 	maxBackups    int
 	gcThreshold   int
 
-	mu         sync.Mutex
-	running    bool
-	cancelFn   context.CancelFunc
-	lastRun    time.Time
-	lastResult *CompressResult
-	lastError  string
+	mu                    sync.Mutex
+	running               bool
+	cancelFn              context.CancelFunc
+	lastRun               time.Time
+	lastResult            *CompressResult
+	lastError             string
+	consecutiveFailures   int  // circuit breaker: consecutive compress failures
+	circuitBreakerTripped bool // true when failures >= maxConsecutiveCompressFailures
 }
 
 // NewCompressor creates a Compressor.
@@ -586,6 +593,12 @@ func (mc *Compressor) loop(ctx context.Context) {
 			if refresher, ok := mc.llm.(LLMConfigRefresher); ok {
 				refresher.RefreshConfig()
 			}
+			// Reset circuit breaker on each scheduled cycle.
+			mc.mu.Lock()
+			mc.circuitBreakerTripped = false
+			mc.consecutiveFailures = 0
+			mc.mu.Unlock()
+
 			mc.maybeRunGC(ctx)
 			mc.runOnce(ctx)
 		}
@@ -600,14 +613,30 @@ func (mc *Compressor) maybeRunGC(ctx context.Context) {
 }
 
 func (mc *Compressor) runOnce(ctx context.Context) {
+	// Circuit breaker: skip if tripped.
+	mc.mu.Lock()
+	if mc.circuitBreakerTripped {
+		mc.mu.Unlock()
+		log.Printf("[memory_compress] circuit breaker active (%d consecutive failures) — skipping", mc.consecutiveFailures)
+		return
+	}
+	mc.mu.Unlock()
+
 	result, err := mc.Compress(ctx)
 	mc.mu.Lock()
 	mc.lastRun = time.Now()
 	mc.lastResult = result
 	if err != nil {
 		mc.lastError = err.Error()
+		mc.consecutiveFailures++
+		if mc.consecutiveFailures >= maxConsecutiveCompressFailures {
+			mc.circuitBreakerTripped = true
+			log.Printf("[memory_compress] circuit breaker tripped after %d consecutive failures", mc.consecutiveFailures)
+		}
 	} else {
 		mc.lastError = ""
+		mc.consecutiveFailures = 0
+		mc.circuitBreakerTripped = false
 	}
 	mc.mu.Unlock()
 

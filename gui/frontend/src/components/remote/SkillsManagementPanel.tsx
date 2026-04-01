@@ -13,6 +13,9 @@ import {
     ImportLearnedSkillsZip,
     UploadNLSkillToMarket,
     DiagnoseSkillFiles,
+    ListExternalSkillDirsDetailed,
+    AddExternalSkillDir,
+    RemoveExternalSkillDir,
 } from "../../../wailsjs/go/main/App";
 
 interface NLSkillStep {
@@ -71,6 +74,12 @@ interface SkillDiagEntry {
     reason?: string;
 }
 
+interface ExternalSkillDirInfo {
+    path: string;
+    skill_count: number;
+    error?: string;
+}
+
 const emptySkill: NLSkillDefinition = {
     name: "",
     description: "",
@@ -118,7 +127,7 @@ function makeLocalizeHubError(localizeText: Props["localizeText"]) {
 }
 
 export function SkillsManagementPanel({ localizeText }: Props) {
-    const [activeTab, setActiveTab] = useState<"local" | "hub" | "learned">("local");
+    const [activeTab, setActiveTab] = useState<"local" | "hub" | "learned" | "extdirs">("local");
     const [skills, setSkills] = useState<NLSkillDefinition[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
@@ -164,6 +173,15 @@ export function SkillsManagementPanel({ localizeText }: Props) {
     // Diagnose state
     const [diagEntries, setDiagEntries] = useState<SkillDiagEntry[] | null>(null);
     const [diagLoading, setDiagLoading] = useState(false);
+
+    // External skill directories state
+    const [extDirs, setExtDirs] = useState<ExternalSkillDirInfo[]>([]);
+    const [extDirsLoading, setExtDirsLoading] = useState(false);
+    const [extDirInput, setExtDirInput] = useState("");
+    const [extDirAdding, setExtDirAdding] = useState(false);
+    const [extDirError, setExtDirError] = useState("");
+    const [extDirRemoveTarget, setExtDirRemoveTarget] = useState<string | null>(null);
+    const [extDirRemoving, setExtDirRemoving] = useState(false);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -259,6 +277,26 @@ export function SkillsManagementPanel({ localizeText }: Props) {
             checkUpdates();
         }
     }, [activeTab, checkUpdates]);
+
+    // Load external dirs when switching to extdirs tab
+    const loadExtDirs = useCallback(async () => {
+        setExtDirsLoading(true);
+        setExtDirError("");
+        try {
+            const dirs = await ListExternalSkillDirsDetailed();
+            setExtDirs(Array.isArray(dirs) ? dirs : []);
+        } catch (err) {
+            setExtDirError(String(err));
+        } finally {
+            setExtDirsLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (activeTab === "extdirs") {
+            loadExtDirs();
+        }
+    }, [activeTab, loadExtDirs]);
 
     const handleInstall = useCallback(async (skill: HubSkillMeta) => {
         setInstallingSkills((prev) => [...prev, skill.id]);
@@ -522,6 +560,15 @@ export function SkillsManagementPanel({ localizeText }: Props) {
                     onClick={() => setActiveTab("learned")}
                 >
                     {localizeText("Learned Skills", "自学习技能", "自學習技能")}
+                </button>
+                <button
+                    style={{
+                        ...tabBtnStyle,
+                        ...(activeTab === "extdirs" ? tabBtnActiveStyle : {}),
+                    }}
+                    onClick={() => setActiveTab("extdirs")}
+                >
+                    {localizeText("External Dirs", "外部技能目录", "外部技能目錄")}
                 </button>
             </div>
 
@@ -965,6 +1012,189 @@ export function SkillsManagementPanel({ localizeText }: Props) {
                         </div>
                     )}
                 </>
+            )}
+
+            {/* === External Skill Directories Tab === */}
+            {activeTab === "extdirs" && (
+                <>
+                    <div style={{ fontSize: "0.76rem", color: "#5a6577", marginBottom: "4px" }}>
+                        {localizeText(
+                            "Add external directories that contain skill subdirectories (each with skill.md or skill.yaml).",
+                            "添加包含技能子目录的外部目录（每个子目录需包含 skill.md 或 skill.yaml）。",
+                            "添加包含技能子目錄的外部目錄（每個子目錄需包含 skill.md 或 skill.yaml）。"
+                        )}
+                    </div>
+
+                    {/* Add directory input */}
+                    <div style={{ display: "flex", gap: "6px" }}>
+                        <input
+                            className="form-input"
+                            value={extDirInput}
+                            onChange={(e) => setExtDirInput(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" && extDirInput.trim()) {
+                                    e.preventDefault();
+                                    (async () => {
+                                        setExtDirAdding(true);
+                                        setExtDirError("");
+                                        try {
+                                            await AddExternalSkillDir(extDirInput.trim());
+                                            setExtDirInput("");
+                                            await loadExtDirs();
+                                            await loadData();
+                                        } catch (err) {
+                                            setExtDirError(localizeHubError(String(err)));
+                                        } finally {
+                                            setExtDirAdding(false);
+                                        }
+                                    })();
+                                }
+                            }}
+                            placeholder={localizeText("Enter directory path...", "输入目录路径...", "輸入目錄路徑...")}
+                            spellCheck={false}
+                            style={{ flex: 1, fontSize: "0.78rem" }}
+                            disabled={extDirAdding}
+                        />
+                        <button
+                            className="btn-primary"
+                            style={{ fontSize: "0.78rem", padding: "4px 12px", flexShrink: 0 }}
+                            disabled={!extDirInput.trim() || extDirAdding}
+                            onClick={async () => {
+                                setExtDirAdding(true);
+                                setExtDirError("");
+                                try {
+                                    await AddExternalSkillDir(extDirInput.trim());
+                                    setExtDirInput("");
+                                    await loadExtDirs();
+                                    await loadData();
+                                } catch (err) {
+                                    setExtDirError(localizeHubError(String(err)));
+                                } finally {
+                                    setExtDirAdding(false);
+                                }
+                            }}
+                        >
+                            {extDirAdding ? localizeText("Adding...", "添加中...", "添加中...") : localizeText("+ Add", "+ 添加", "+ 添加")}
+                        </button>
+                        <button
+                            className="btn-secondary"
+                            style={{ fontSize: "0.78rem", padding: "4px 12px", flexShrink: 0 }}
+                            onClick={loadExtDirs}
+                            disabled={extDirsLoading}
+                        >
+                            {extDirsLoading ? localizeText("Refreshing...", "刷新中...", "重新整理中...") : localizeText("🔄 Refresh", "🔄 刷新", "🔄 重新整理")}
+                        </button>
+                    </div>
+
+                    {/* Error */}
+                    {extDirError && (
+                        <div style={{ fontSize: "0.78rem", color: "#c53030", background: "#fff5f5", padding: "6px 10px", borderRadius: "4px", border: "1px solid #fecdd3" }}>
+                            {extDirError}
+                        </div>
+                    )}
+
+                    {/* Loading */}
+                    {extDirsLoading && (
+                        <div style={{ textAlign: "center", padding: "16px", fontSize: "0.78rem", color: "#8b95a5" }}>
+                            {localizeText("Loading...", "加载中...", "載入中...")}
+                        </div>
+                    )}
+
+                    {/* Directory list */}
+                    {!extDirsLoading && extDirs.length > 0 && (
+                        <div style={{ border: "1px solid #e1e4e8", borderRadius: "6px", overflow: "hidden" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.76rem" }}>
+                                <thead>
+                                    <tr style={{ background: "#f4f5f7" }}>
+                                        <th style={thStyle}>{localizeText("Directory Path", "目录路径", "目錄路徑")}</th>
+                                        <th style={{ ...thStyle, width: "100px" }}>{localizeText("Skills Found", "技能数量", "技能數量")}</th>
+                                        <th style={{ ...thStyle, width: "120px" }}>{localizeText("Status", "状态", "狀態")}</th>
+                                        <th style={{ ...thStyle, width: "80px" }}>{localizeText("Actions", "操作", "操作")}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {extDirs.map((d) => (
+                                        <tr key={d.path} style={{ borderTop: "1px solid #e1e4e8" }}>
+                                            <td style={tdStyle}>
+                                                <span style={{ fontFamily: "monospace", fontSize: "0.74rem", wordBreak: "break-all" }}>{d.path}</span>
+                                            </td>
+                                            <td style={{ ...tdStyle, textAlign: "center" }}>{d.skill_count}</td>
+                                            <td style={tdStyle}>
+                                                {d.error ? (
+                                                    <span style={{ color: "#cb2431", fontSize: "0.72rem" }}>⚠ {d.error}</span>
+                                                ) : (
+                                                    <span style={{ color: "#22863a", fontSize: "0.72rem" }}>✅ {localizeText("OK", "正常", "正常")}</span>
+                                                )}
+                                            </td>
+                                            <td style={tdStyle}>
+                                                <button
+                                                    className="btn-secondary btn-danger"
+                                                    style={smallBtnStyle}
+                                                    onClick={() => setExtDirRemoveTarget(d.path)}
+                                                    disabled={extDirRemoving}
+                                                >
+                                                    {localizeText("Remove", "移除", "移除")}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    {!extDirsLoading && extDirs.length === 0 && !extDirError && (
+                        <div style={{ textAlign: "center", padding: "20px", fontSize: "0.78rem", color: "#8b95a5" }}>
+                            {localizeText(
+                                "No external skill directories configured. Add a directory above to scan for skills.",
+                                "暂无外部技能目录。在上方添加目录以扫描技能。",
+                                "暫無外部技能目錄。在上方添加目錄以掃描技能。"
+                            )}
+                        </div>
+                    )}
+                </>
+            )}
+
+            {/* Remove external dir confirmation dialog */}
+            {extDirRemoveTarget && (
+                <div className="modal-backdrop" onClick={() => setExtDirRemoveTarget(null)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: "340px" }}>
+                        <div className="modal-header">
+                            <h3 style={{ fontSize: "0.88rem", margin: 0 }}>{localizeText("Confirm Remove", "确认移除", "確認移除")}</h3>
+                            <button className="btn-close" onClick={() => setExtDirRemoveTarget(null)}>×</button>
+                        </div>
+                        <div className="modal-body">
+                            <p style={{ fontSize: "0.8rem", color: "#5a6577", margin: 0 }}>
+                                {localizeText(
+                                    `Remove external skill directory? Skills from this directory will no longer be scanned.`,
+                                    `确定要移除此外部技能目录吗？该目录下的技能将不再被扫描。`,
+                                    `確定要移除此外部技能目錄嗎？該目錄下的技能將不再被掃描。`
+                                )}
+                            </p>
+                            <p style={{ fontSize: "0.74rem", color: "#8b95a5", margin: "6px 0 0", fontFamily: "monospace", wordBreak: "break-all" }}>
+                                {extDirRemoveTarget}
+                            </p>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn-secondary" onClick={() => setExtDirRemoveTarget(null)} disabled={extDirRemoving}>{localizeText("Cancel", "取消", "取消")}</button>
+                            <button className="btn-secondary btn-danger" disabled={extDirRemoving} onClick={async () => {
+                                setExtDirRemoving(true);
+                                try {
+                                    await RemoveExternalSkillDir(extDirRemoveTarget);
+                                    setExtDirRemoveTarget(null);
+                                    await loadExtDirs();
+                                    await loadData();
+                                } catch (err) {
+                                    setExtDirError(localizeHubError(String(err)));
+                                } finally {
+                                    setExtDirRemoving(false);
+                                }
+                            }}>
+                                {extDirRemoving ? localizeText("Removing...", "移除中...", "移除中...") : localizeText("Remove", "移除", "移除")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {/* Upload result toast dialog */}

@@ -14,7 +14,7 @@ import cursorIcon from './assets/images/qodercli.png';
 import lobsterOffline from './assets/images/lobster_offline.svg';
 import lobsterHalf from './assets/images/lobster_half.svg';
 import clawnetIcon from './assets/images/clawnet.svg';
-import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, ClawNetIsRunning, ClawNetEnsureDaemonWithDownload, GetQQBotStatus, RestartQQBot, GetTelegramStatus, RestartTelegram, GetWeixinStatus, RestartWeixin, StopWeixin, StartWeixinQRLogin, WaitWeixinQRLogin, GetWeixinLocalMode, SetWeixinLocalMode, GetQQBotLocalMode, SetQQBotLocalMode, GetTelegramLocalMode, SetTelegramLocalMode, IsGossipAllowed, GetBrandInfo, GetUIZoomFactor, SetUIZoomFactor } from "../wailsjs/go/main/App";
+import { CheckToolsStatus, InstallTool, InstallToolOnDemand, IsToolBeingInstalled, LoadConfig, SaveConfig, CheckEnvironment, ResizeWindow, WindowHide, LaunchTool, SelectProjectDir, SetLanguage, GetUserHomeDir, CheckUpdate, ShowMessage, ReadBBS, ReadTutorial, ReadThanks, ListPythonEnvironments, PackLog, ShowItemInFolder, GetSystemInfo, OpenSystemUrl, DownloadUpdate, CancelDownload, LaunchInstallerAndExit, ListSkills, ListSkillsWithInstallStatus, AddSkill, DeleteSkill, SelectSkillFile, GetSkillsDir, SetEnvCheckInterval, GetEnvCheckInterval, ShouldCheckEnvironment, UpdateLastEnvCheckTime, InstallDefaultMarketplace, InstallSkill, IsWindowsTerminalAvailable, ListRemoteHubs, PingMaclawLLM, ClawNetIsRunning, ClawNetEnsureDaemonWithDownload, ClawNetStopDaemon, GetQQBotStatus, RestartQQBot, GetTelegramStatus, RestartTelegram, GetWeixinStatus, RestartWeixin, StopWeixin, StartWeixinQRLogin, WaitWeixinQRLogin, GetWeixinLocalMode, SetWeixinLocalMode, GetQQBotLocalMode, SetQQBotLocalMode, GetTelegramLocalMode, SetTelegramLocalMode, IsGossipAllowed, GetBrandInfo, GetUIZoomFactor, SetUIZoomFactor } from "../wailsjs/go/main/App";
 import { EventsOn, EventsOff, BrowserOpenURL, Quit } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
 import ReactMarkdown from 'react-markdown';
@@ -29,6 +29,7 @@ import { SkillsManagementPanel } from './components/remote/SkillsManagementPanel
 import { MCPManagementPanel } from './components/remote/MCPManagementPanel';
 import { LLMConfigPanel } from './components/remote/LLMConfigPanel';
 import { EmbeddingConfigPanel } from './components/remote/EmbeddingConfigPanel';
+import { ASRConfigPanel } from './components/remote/ASRConfigPanel';
 import { MaclawRolePanel } from './components/remote/MaclawRolePanel';
 import { MemoryManagementPanel } from './components/remote/MemoryManagementPanel';
 import { ScheduledTasksPanel } from './components/remote/ScheduledTasksPanel';
@@ -142,7 +143,7 @@ const recommendedModels: { [provider: string]: { id: string; note?: string }[] }
         { id: "glm-4.7" },
     ],
 };
-const APP_VERSION = "5.3.0.9800"
+const APP_VERSION = "5.4.0.9900"
 
 // Tool name constants to avoid repeated string arrays
 const TOOL_NAMES = ['claude', 'gemini', 'codex', 'opencode', 'codebuddy', 'cursor', 'iflow', 'kilo'] as const;
@@ -2088,13 +2089,8 @@ function App() {
                     const idx = toolCfg.models.findIndex((m: any) => m.model_name === toolCfg.current_model);
                     if (idx !== -1) setActiveTab(idx);
 
-                    // Check if any model has an API key configured for the active tool
-                    if (isToolTab(lastActiveTool)) {
-                        const hasAnyApiKey = toolCfg.models.some((m: any) => m.api_key && m.api_key.trim() !== "");
-                        if (!hasAnyApiKey) {
-                            setShowModelSettings(true);
-                        }
-                    }
+                    // NOTE: removed auto-popup of provider config when no API key is set.
+                    // Users can open it manually via the "服务商配置" button.
                 }
             }
         }).catch(err => {
@@ -2223,8 +2219,11 @@ function App() {
     // When the settings tab is active, ClawNetPanel also polls — but the
     // lightweight ClawNetIsRunning() call is idempotent, so the overlap is
     // harmless and keeps the globe indicator responsive on tab switches.
+    // NOTE: Only poll when clawnet_enabled — if disabled, report as not running.
     const clawNetAutoStarted = useRef(false);
     const clawNetPrevUp = useRef(false);
+    const clawNetEnabledRef = useRef(!!config?.clawnet_enabled);
+    useEffect(() => { clawNetEnabledRef.current = !!config?.clawnet_enabled; }, [config?.clawnet_enabled]);
     useEffect(() => {
         let retryTimer: ReturnType<typeof setTimeout> | null = null;
         const clearRetry = () => {
@@ -2232,6 +2231,13 @@ function App() {
         };
         const checkClawNet = () => {
             clearRetry();
+            // When ClawNet is disabled in config, don't report as running
+            // even if a residual daemon process happens to be alive.
+            if (!clawNetEnabledRef.current) {
+                clawNetPrevUp.current = false;
+                setClawNetRunning(false);
+                return;
+            }
             ClawNetIsRunning().then(up => {
                 if (!up && clawNetPrevUp.current) {
                     // Was online, now looks offline — quick retry in 2s to
@@ -2264,9 +2270,22 @@ function App() {
 
     // Auto-start ClawNet daemon when enabled in config, so the user doesn't
     // have to visit the settings panel to light up the globe icon.
+    // When disabled, actively stop any residual daemon.
     useEffect(() => {
+        // Skip when config hasn't loaded yet — don't kill a daemon before
+        // we know the user's preference.
+        if (!config) return;
+        if (!config.clawnet_enabled) {
+            // Disabled — stop residual daemon if it's still running.
+            ClawNetIsRunning().then(up => {
+                if (up) {
+                    ClawNetStopDaemon().catch(() => {});
+                }
+            }).catch(() => {});
+            setClawNetRunning(false);
+            return;
+        }
         if (clawNetAutoStarted.current) return;
-        if (!config?.clawnet_enabled) return;
         clawNetAutoStarted.current = true;
         ClawNetIsRunning().then(up => {
             if (!up) {
@@ -3531,8 +3550,12 @@ ${instruction}`;
                                 { label: 'LLM', on: maclawLLMOnline },
                                 { label: lang === 'zh-Hans' ? '虾网' : lang === 'zh-Hant' ? '蝦網' : 'ClawNet', on: clawNetRunning },
                                 { label: lang === 'zh-Hans' ? '移动端' : lang === 'zh-Hant' ? '行動端' : 'Mobile', on: !!remoteActivationStatus?.activated },
-                            ].map(({ label, on }) => (
-                                <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px' }}>
+                                { label: 'IM', on: qqBotStatus === 'connected' || telegramStatus === 'connected' || weixinStatus === 'connected', link: 'im' },
+                            ].map(({ label, on, link }) => (
+                                <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px', cursor: link ? 'pointer' : undefined }}
+                                    onClick={link ? () => { setNavTab('settings'); setSettingsTab(link as any); } : undefined}
+                                    title={link && !on ? (lang?.startsWith('zh') ? '点击配置' : 'Click to configure') : undefined}
+                                >
                                     <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: on ? '#22c55e' : '#ccc', display: 'inline-block', flexShrink: 0 }}></span>
                                     <span>{label}</span>
                                     <span style={{ marginLeft: 'auto', color: on ? '#22c55e' : '#aaa' }}>
@@ -3552,7 +3575,7 @@ ${instruction}`;
             <div className="main-container">
                 {/* AI assistant as main content (both lite and pro modes) */}
                 {navTab === 'ai' ? (
-                    <AIAssistantPanel onClose={() => { switchTool('settings'); }} lang={lang} inline={true} onHideWindow={() => WindowHide()} {...aiAssistant} />
+                    <AIAssistantPanel onClose={() => { switchTool('settings'); }} lang={lang} inline={true} onHideWindow={() => WindowHide()} onboardingIncomplete={!config?.onboarding_done && !showMaclawLLMPopup} onOpenOnboarding={() => setShowMaclawLLMPopup(true)} {...aiAssistant} />
                 ) : (
                 <><div className="top-header" style={{ '--wails-draggable': 'no-drag' } as any}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
@@ -4217,6 +4240,7 @@ ${instruction}`;
 
                             <div className="settings-panel" style={{ display: settingsTab === 'embedding' ? 'block' : 'none' }}>
                                 <EmbeddingConfigPanel lang={lang} />
+                                <ASRConfigPanel lang={lang} />
                             </div>
 
                             <div className="settings-panel" style={{ display: settingsTab === 'scheduler' ? 'block' : 'none' }}>
@@ -5610,10 +5634,16 @@ ${instruction}`;
                         {status}
                     </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        {(!maclawLLMOnline || !remoteActivationStatus?.activated || !clawNetRunning) && !(navTab === 'settings' && settingsTab === 'llm') && (
+                        {(() => {
+                            const imConnected = qqBotStatus === 'connected' || telegramStatus === 'connected' || weixinStatus === 'connected';
+                            const anyImConfigured = !!(config as any)?.qqbot_enabled || !!(config as any)?.telegram_enabled || !!(config as any)?.weixin_enabled;
+                            const showImWarning = anyImConfigured && !imConnected;
+                            if ((!maclawLLMOnline || !remoteActivationStatus?.activated || !clawNetRunning || showImWarning) && !(navTab === 'settings' && settingsTab === 'llm')) {
+                                const isImIssue = maclawLLMOnline && !!remoteActivationStatus?.activated && clawNetRunning && showImWarning;
+                                return (
                             <span
                                 style={{ fontSize: '0.72rem', color: '#f59e0b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}
-                                onClick={() => { setNavTab('settings'); setSettingsTab('llm'); }}
+                                onClick={() => { if (isImIssue) { setNavTab('settings'); setSettingsTab('im'); } else { setNavTab('settings'); setSettingsTab('llm'); } }}
                                 title={lang?.startsWith('zh') ? '点击配置' : 'Click to configure'}
                             >
                                 <img src={(() => {
@@ -5626,9 +5656,14 @@ ${instruction}`;
                                         : (lang?.startsWith('zh') ? 'MaClaw 未配置 LLM，无法响应远程命令' : 'LLM not configured, remote commands unavailable'))
                                     : !remoteActivationStatus?.activated
                                         ? (lang?.startsWith('zh') ? '移动端未注册' : 'Mobile not registered')
-                                        : (lang?.startsWith('zh') ? '虾网未连接' : 'ClawNet not connected')}
+                                        : !clawNetRunning
+                                            ? (lang?.startsWith('zh') ? '虾网未连接' : 'ClawNet not connected')
+                                            : (lang?.startsWith('zh') ? 'IM 未连接' : 'IM not connected')}
                             </span>
-                        )}
+                                );
+                            }
+                            return null;
+                        })()}
                         {backgroundInstallStatus && (
                         <span style={{ 
                             fontSize: '0.75rem', 

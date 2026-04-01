@@ -159,6 +159,14 @@ export function ListNLSkills():Promise<Array<any>>;
 
 export function DiagnoseSkillFiles():Promise<Array<any>>;
 
+export function ListExternalSkillDirs():Promise<Array<string>>;
+
+export function ListExternalSkillDirsDetailed():Promise<Array<any>>;
+
+export function AddExternalSkillDir(arg1:string):Promise<number>;
+
+export function RemoveExternalSkillDir(arg1:string):Promise<void>;
+
 export function CreateNLSkill(arg1:any):Promise<void>;
 
 export function UpdateNLSkill(arg1:any):Promise<void>;
@@ -412,6 +420,8 @@ export function ClawNetNutshellUnpack(arg1:string, arg2:string):Promise<any>;
 // AI Assistant bindings
 export function IsAIAssistantReady():Promise<boolean>;
 
+export function GetAIAssistantInitStatus():Promise<string>;
+
 export function SendAIAssistantMessage(arg1:string):Promise<any>;
 
 export function ClearAIAssistantHistory():Promise<void>;
@@ -520,3 +530,11 @@ export function SetVectorSearchEnabled(arg1:boolean):Promise<void>;
 export function CheckEmbeddingModel():Promise<{[key:string]:any}>;
 
 export function DownloadEmbeddingModel():Promise<void>;
+
+export function GetASREnabled():Promise<boolean>;
+
+export function SetASREnabled(arg1:boolean):Promise<void>;
+
+export function CheckASRModel():Promise<{[key:string]:any}>;
+
+export function DownloadASRModel():Promise<void>;

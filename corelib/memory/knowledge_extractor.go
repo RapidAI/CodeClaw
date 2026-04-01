@@ -25,6 +25,46 @@ type KnowledgeExtractor struct {
 	mu          sync.Mutex
 }
 
+// HasRecentMemoryWrites checks if the conversation contains assistant messages
+// that explicitly wrote to memory (e.g. "I've saved this to memory", tool calls
+// to memory save). When the main agent already wrote memories, the background
+// extractor should skip to avoid duplicates (inspired by Claude Code's
+// extractMemories mutual exclusion pattern).
+func HasRecentMemoryWrites(messages []ConversationMessage) bool {
+	// Signals in assistant text indicating memory was saved.
+	textSignals := []string{
+		"已保存到记忆", "saved to memory", "记住了", "已记录",
+	}
+	// Signals in tool-role messages indicating a memory save tool was called.
+	toolSignals := []string{
+		"memory:save", "memory_save", "save_memory", "memory:update",
+	}
+
+	start := len(messages) - 10
+	if start < 0 {
+		start = 0
+	}
+	for i := len(messages) - 1; i >= start; i-- {
+		m := messages[i]
+		lower := strings.ToLower(m.Content)
+		switch m.Role {
+		case "assistant":
+			for _, signal := range textSignals {
+				if strings.Contains(lower, signal) {
+					return true
+				}
+			}
+		case "tool":
+			for _, signal := range toolSignals {
+				if strings.Contains(lower, signal) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // NewKnowledgeExtractor creates a KnowledgeExtractor with a default 1-hour cooldown.
 func NewKnowledgeExtractor(store *Store, llm LLMChatCaller) *KnowledgeExtractor {
 	return &KnowledgeExtractor{
@@ -92,11 +132,18 @@ func (ke *KnowledgeExtractor) isDuplicate(content string) bool {
 }
 
 // Extract performs post-session knowledge extraction from conversation history.
-// Steps: cooldown check → filter → preCompress (if >20 turns) → LLM extract → dedup → save.
+// Steps: cooldown check → mutual exclusion → filter → preCompress (if >20 turns) → LLM extract → dedup → save.
 // Returns nil on cooldown, empty conversation, or unconfigured LLM.
+// Skips extraction when the main agent already wrote memories (mutual exclusion).
 func (ke *KnowledgeExtractor) Extract(userID string, messages []ConversationMessage) error {
 	// LLM not configured: no-op.
 	if ke.llm == nil || !ke.llm.IsConfigured() {
+		return nil
+	}
+
+	// Mutual exclusion: if the main agent already wrote memories in this
+	// conversation, skip background extraction to avoid duplicates.
+	if HasRecentMemoryWrites(messages) {
 		return nil
 	}
 

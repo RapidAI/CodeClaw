@@ -71,6 +71,72 @@ func PrimarySkillsDir() (string, error) {
 	return filepath.Join(home, ".maclaw", "data", "skills"), nil
 }
 
+// SkillScanRootsWithExternal returns SkillScanRoots() plus the given
+// external directories appended at the end (lower priority).
+func SkillScanRootsWithExternal(externalDirs []string) []string {
+	roots := SkillScanRoots()
+	for _, d := range externalDirs {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			roots = append(roots, d)
+		}
+	}
+	return roots
+}
+
+// ScanAllSkillDirsWithExternal scans built-in roots plus external directories.
+func ScanAllSkillDirsWithExternal(externalDirs []string) []corelib.NLSkillEntry {
+	roots := SkillScanRootsWithExternal(externalDirs)
+	seen := make(map[string]bool)
+	var result []corelib.NLSkillEntry
+	for _, root := range roots {
+		skills := ScanSkillDir(root)
+		for _, s := range skills {
+			if !seen[s.Name] {
+				result = append(result, s)
+				seen[s.Name] = true
+			}
+		}
+	}
+	return result
+}
+
+// ValidateExternalSkillDir checks whether a directory is a valid skill
+// directory (contains at least one subdirectory with skill.md, skill.yaml,
+// or skill.yml). Returns the count of valid skill subdirectories and an error
+// if the directory is not usable.
+func ValidateExternalSkillDir(dir string) (int, error) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return 0, fmt.Errorf("cannot access directory: %w", err)
+	}
+	if !info.IsDir() {
+		return 0, fmt.Errorf("path is not a directory")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("cannot read directory: %w", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		subInfo, err := os.Stat(filepath.Join(dir, entry.Name()))
+		if err != nil || !subInfo.IsDir() {
+			continue
+		}
+		subDir := filepath.Join(dir, entry.Name())
+		for _, name := range []string{"skill.md", "skill.yaml", "skill.yml"} {
+			if _, err := os.Stat(filepath.Join(subDir, name)); err == nil {
+				count++
+				break
+			}
+		}
+	}
+	if count == 0 {
+		return 0, fmt.Errorf("no valid skill subdirectories found (need skill.md or skill.yaml)")
+	}
+	return count, nil
+}
+
 // ScanAllSkillDirs scans all known skill directories and returns
 // deduplicated NLSkillEntry list. Earlier roots have higher priority.
 func ScanAllSkillDirs() []corelib.NLSkillEntry {

@@ -455,7 +455,9 @@ type recallScored struct {
 
 // CategoryImportanceWeight returns a base importance weight for each category.
 func CategoryImportanceWeight(c Category) float64 {
-	switch c {
+	// Map Claude-style categories to canonical for scoring.
+	canonical := MapToCanonical(c)
+	switch canonical {
 	case CategorySelfIdentity:
 		return 4.0
 	case CategoryInstruction:
@@ -1190,4 +1192,104 @@ func mergeTags(existing, incoming []string) []string {
 	}
 	sort.Strings(merged)
 	return merged
+}
+
+// ---------------------------------------------------------------------------
+// LLM-based relevance filtering (inspired by Claude Code findRelevantMemories)
+// ---------------------------------------------------------------------------
+
+// LLMRelevanceFilter selects the most relevant memory entries from a candidate
+// set using an LLM sideQuery. This sits on top of BM25+Vector recall and
+// provides semantic precision that keyword/embedding fusion alone cannot achieve.
+type LLMRelevanceFilter interface {
+	// SelectRelevant receives a user query and a list of candidate memory
+	// summaries (id + one-line description), and returns the IDs of the
+	// most relevant entries (up to maxResults).
+	SelectRelevant(query string, candidates []MemoryCandidate, maxResults int) ([]string, error)
+}
+
+// MemoryCandidate is a lightweight summary of a memory entry for LLM selection.
+type MemoryCandidate struct {
+	ID          string   `json:"id"`
+	Category    Category `json:"category"`
+	Description string   `json:"description"` // first 150 chars of content or CompactForm
+	Tags        []string `json:"tags"`
+}
+
+// RecallWithLLMFilter performs a two-stage recall:
+//  1. BM25+Vector fusion via RecallForProject (broad candidate set, up to 20)
+//  2. LLM sideQuery to select the top-N most relevant entries (default 5)
+//
+// If llmFilter is nil or returns an error, falls back to stage-1 results.
+// This mirrors Claude Code's findRelevantMemories pattern where Sonnet
+// selects from a manifest of memory file headers.
+func (s *Store) RecallWithLLMFilter(userMessage, projectPath string, llmFilter LLMRelevanceFilter, maxResults int) []Entry {
+	if maxResults <= 0 {
+		maxResults = 5
+	}
+
+	// Stage 1: broad recall via existing BM25+Vector+Graph pipeline.
+	candidates := s.RecallForProject(userMessage, projectPath)
+	if len(candidates) == 0 {
+		return candidates
+	}
+
+	// If no LLM filter or too few candidates, return as-is.
+	if llmFilter == nil || len(candidates) <= maxResults {
+		if len(candidates) > maxResults {
+			return candidates[:maxResults]
+		}
+		return candidates
+	}
+
+	// Build lightweight candidate summaries for the LLM.
+	summaries := make([]MemoryCandidate, len(candidates))
+	for i, e := range candidates {
+		desc := e.CompactForm
+		if desc == "" {
+			desc = e.Content
+		}
+		if len([]rune(desc)) > 150 {
+			desc = string([]rune(desc)[:150])
+		}
+		summaries[i] = MemoryCandidate{
+			ID:          e.ID,
+			Category:    e.Category,
+			Description: desc,
+			Tags:        e.Tags,
+		}
+	}
+
+	// Stage 2: LLM selects the most relevant.
+	selectedIDs, err := llmFilter.SelectRelevant(userMessage, summaries, maxResults)
+	if err != nil || len(selectedIDs) == 0 {
+		// Fallback: return top-N from stage 1.
+		if len(candidates) > maxResults {
+			return candidates[:maxResults]
+		}
+		return candidates
+	}
+
+	// Build result preserving LLM selection order.
+	idToEntry := make(map[string]Entry, len(candidates))
+	for _, e := range candidates {
+		idToEntry[e.ID] = e
+	}
+	var result []Entry
+	for _, id := range selectedIDs {
+		if e, ok := idToEntry[id]; ok {
+			result = append(result, e)
+		}
+	}
+
+	// Touch access counts for selected entries.
+	if len(result) > 0 {
+		ids := make([]string, len(result))
+		for i, e := range result {
+			ids[i] = e.ID
+		}
+		go s.TouchAccess(ids)
+	}
+
+	return result
 }

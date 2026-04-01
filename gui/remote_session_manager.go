@@ -1439,6 +1439,9 @@ func (m *RemoteSessionManager) runGeminiACPOutputLoop(s *RemoteSession) {
 			// Analyze completion level (pure function, safe under s.mu)
 			level := m.completionAnalyzer.Analyze(s.RawOutputLines, s.Tool, nil)
 			s.CompletionLevel = level
+			if level == CompletionIncomplete {
+				s.AutoContinueCount++
+			}
 			snap := s.Summary
 			s.mu.Unlock()
 			if m.hubClient != nil {
