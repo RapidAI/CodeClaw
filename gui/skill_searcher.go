@@ -77,17 +77,27 @@ func (s *SkillSearcher) Search(ctx context.Context, query string, tags []string,
 	return results, nil
 }
 
+// ClawHubMirrorURL is the China mirror for ClawHub skill search.
+const ClawHubMirrorURL = "https://cn.clawhub-mirror.com"
+
 // SearchAndInstall 搜索并自动安装最佳匹配的 Skill。
+// 搜索顺序: SkillMarket → ClawHub 中国镜像 → GitHub。
 // 搜索无结果时记录日志并返回 nil，不中断任务。
 // 根据 SkillPurchaseMode 配置过滤结果：free_only 模式只选择免费 Skill。
 func (s *SkillSearcher) SearchAndInstall(ctx context.Context, query string) (*SkillSearchResult, error) {
+	// Step 1: SkillMarket (HubCenter)
 	results, err := s.Search(ctx, query, nil, 5)
 	if err != nil {
-		log.Printf("[skill-search] search error: %v", err)
-		return nil, nil // 不中断任务
+		log.Printf("[skill-search] skillmarket search error: %v", err)
 	}
 	if len(results) == 0 {
-		log.Printf("[skill-search] no results for query: %s, trying GitHub fallback...", query)
+		// Step 2: ClawHub 中国镜像
+		log.Printf("[skill-search] no skillmarket results for: %s, trying ClawHub mirror...", query)
+		results = s.searchClawHubMirror(ctx, query)
+	}
+	if len(results) == 0 {
+		// Step 3: GitHub fallback
+		log.Printf("[skill-search] no ClawHub results for: %s, trying GitHub fallback...", query)
 		return s.searchGitHubFallback(ctx, query)
 	}
 
@@ -111,6 +121,64 @@ func (s *SkillSearcher) SearchAndInstall(ctx context.Context, query string) (*Sk
 	best := &results[0]
 	log.Printf("[skill-search] found: %s (score=%.2f, rating=%.1f)", best.Name, best.Score, best.AvgRating)
 	return best, nil
+}
+
+// searchClawHubMirror queries the ClawHub China mirror for skills.
+// Returns nil on any error (non-fatal fallback).
+func (s *SkillSearcher) searchClawHubMirror(ctx context.Context, query string) []SkillSearchResult {
+	endpoint := ClawHubMirrorURL + "/api/v1/skills/search?q=" + url.QueryEscape(query) + "&page=1"
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		log.Printf("[skill-search] clawhub mirror request error: %v", err)
+		return nil
+	}
+	req.Header.Set("User-Agent", "MaClaw/1.0")
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("[skill-search] clawhub mirror error: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[skill-search] clawhub mirror HTTP %d", resp.StatusCode)
+		return nil
+	}
+
+	var raw struct {
+		Skills []struct {
+			ID          string   `json:"id"`
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			Tags        []string `json:"tags"`
+			Version     string   `json:"version"`
+			Downloads   int      `json:"downloads"`
+			AvgRating   float64  `json:"avg_rating"`
+		} `json:"skills"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		log.Printf("[skill-search] clawhub mirror decode error: %v", err)
+		return nil
+	}
+
+	var results []SkillSearchResult
+	for _, sk := range raw.Skills {
+		results = append(results, SkillSearchResult{
+			ID:            sk.ID,
+			Name:          sk.Name,
+			Description:   sk.Description,
+			Tags:          sk.Tags,
+			AvgRating:     sk.AvgRating,
+			DownloadCount: sk.Downloads,
+			Status:        "clawhub",
+		})
+	}
+	if len(results) > 0 {
+		log.Printf("[skill-search] clawhub mirror found %d results for: %s", len(results), query)
+	}
+	return results
 }
 
 // searchGitHubFallback searches GitHub for skill.yaml files when SkillMarket

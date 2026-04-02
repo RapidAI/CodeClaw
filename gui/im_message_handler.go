@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/RapidAI/CodeClaw/corelib/remote"
+	cskill "github.com/RapidAI/CodeClaw/corelib/skill"
 )
 
 // imHeartbeatMsg is the sentinel value sent as a progress update to keep the
@@ -393,8 +394,9 @@ func (h *IMMessageHandler) getTools() []map[string]interface{} {
 		if cached != nil && time.Since(cacheTime) < toolsCacheTTL {
 			tools = cached
 		} else {
-			// Sync dynamic tools (ClawNet) only on cache rebuild, not every call.
+			// Sync dynamic tools (ClawNet, SkillHub) only on cache rebuild, not every call.
 			h.syncClawNetTools()
+			h.syncSkillHubTools()
 
 			tools = h.toolBuilder.BuildAll()
 
@@ -450,6 +452,163 @@ func (h *IMMessageHandler) routeTools(userMessage string, allTools []map[string]
 		return allTools
 	}
 	return router.Route(userMessage, allTools)
+}
+
+// syncSkillHubTools registers the search_and_install_skill tool when a
+// SkillMarket (HubCenter) is reachable, giving the LLM the ability to
+// proactively search the SkillMarket and install skills during a session.
+func (h *IMMessageHandler) syncSkillHubTools() {
+	if h.registry == nil {
+		return
+	}
+	// The tool is available as long as we have an App (which provides HubCenter URL).
+	hasApp := h.app != nil
+	_, hasSearchTool := h.registry.Get("search_and_install_skill")
+
+	if hasApp && !hasSearchTool {
+		h.registry.Register(RegisteredTool{
+			Name: "search_and_install_skill",
+			Description: "在 SkillMarket 技能市场中搜索并安装技能。当你发现现有工具无法满足用户需求时，" +
+				"主动调用此工具搜索可用的 Skill，找到后自动安装并执行。" +
+				"Search and install a skill from SkillMarket when existing tools cannot fulfill the request.",
+			Category: ToolCategoryBuiltin,
+			Tags:     []string{"skill", "skillmarket", "install", "search", "capability"},
+			Status:   RegToolAvailable,
+			InputSchema: map[string]interface{}{
+				"query": map[string]string{"type": "string", "description": "搜索关键词，描述你需要的能力（如 '生成PDF'、'发送邮件'、'图片处理'）"},
+			},
+			Required: []string{"query"},
+			HandlerProg: func(args map[string]interface{}, onProgress ProgressCallback) string {
+				return h.toolSearchAndInstallSkill(args, onProgress)
+			},
+		})
+	} else if !hasApp && hasSearchTool {
+		h.registry.Unregister("search_and_install_skill")
+	}
+}
+
+// toolSearchAndInstallSkill handles the search_and_install_skill tool call.
+// Search order: SkillMarket (HubCenter) → ClawHub mirror → GitHub.
+// If a match is found, it downloads and registers the skill locally.
+func (h *IMMessageHandler) toolSearchAndInstallSkill(args map[string]interface{}, onProgress ProgressCallback) string {
+	query, _ := args["query"].(string)
+	if query == "" {
+		return "错误: 缺少 query 参数"
+	}
+
+	sendStatus := func(msg string) {
+		if onProgress != nil {
+			onProgress(msg)
+		}
+	}
+
+	ctx := context.Background()
+
+	smClient := NewSkillMarketClient(h.app)
+	searcher := NewSkillSearcher(smClient)
+
+	sendStatus("🔍 正在搜索 SkillMarket...")
+	best, err := searcher.SearchAndInstall(ctx, query)
+	if err != nil {
+		return fmt.Sprintf("搜索 SkillMarket 失败: %v", err)
+	}
+	if best == nil {
+		return fmt.Sprintf("在 SkillMarket、ClawHub 和 GitHub 上均未找到与 %q 匹配的 Skill", query)
+	}
+
+	sendStatus(fmt.Sprintf("📦 找到 Skill: %s — %s (来源: %s)", best.Name, best.Description, best.Status))
+
+	return h.installAndExecuteSkill(ctx, best, query, sendStatus)
+}
+
+// installAndExecuteSkill handles the download, security review, registration,
+// and execution of a found skill. Shared by both active (tool call) and
+// passive (capability gap) paths.
+func (h *IMMessageHandler) installAndExecuteSkill(ctx context.Context, best *SkillSearchResult, query string, sendStatus func(string)) string {
+	// GitHub result → import via GitHubSearcher.
+	// We re-search by the exact repo name (best.ID = "owner/repo") to get
+	// the GitHubSkillCandidate with RawURL needed for ImportFromCandidate.
+	if best.Status == "github" {
+		gs := cskill.NewGitHubSearcher("")
+		candidates, err := gs.SearchGitHub(best.ID)
+		if err != nil || len(candidates) == 0 {
+			return fmt.Sprintf("找到 GitHub Skill「%s」但导入失败", best.Name)
+		}
+		imported, err := gs.ImportFromCandidate(candidates[0])
+		if err != nil {
+			return fmt.Sprintf("GitHub Skill 导入失败: %v", err)
+		}
+		return h.registerAndExecuteSkill(ctx, imported, best.Name, "github", sendStatus)
+	}
+
+	// SkillMarket or ClawHub result → download via SkillHubClient if available.
+	if h.app.skillHubClient != nil {
+		smClient := NewSkillMarketClient(h.app)
+		hubURL := smClient.baseURL()
+		if best.Status == "clawhub" {
+			hubURL = ClawHubMirrorURL
+		}
+		sendStatus(fmt.Sprintf("⬇️ 正在安装: %s ...", best.Name))
+		skill, installErr := h.app.skillHubClient.Install(ctx, best.ID, hubURL)
+		if installErr == nil {
+			return h.registerAndExecuteSkill(ctx, skill, best.Name, best.Status, sendStatus)
+		}
+	}
+
+	// Fallback: report the found skill info.
+	return fmt.Sprintf("🔎 找到 Skill「%s」: %s\n评分: %.1f | 下载量: %d\n请在设置面板的 Hub 市场中手动安装。",
+		best.Name, best.Description, best.AvgRating, best.DownloadCount)
+}
+
+// registerAndExecuteSkill registers a skill locally, runs security review,
+// executes it, and returns the result string.
+func (h *IMMessageHandler) registerAndExecuteSkill(ctx context.Context, skill *NLSkillEntry, displayName, source string, sendStatus func(string)) string {
+	if h.app.skillExecutor == nil {
+		return fmt.Sprintf("找到 Skill「%s」但 SkillExecutor 未初始化", displayName)
+	}
+
+	// Security review via RiskAssessor if available.
+	if h.app.riskAssessor != nil {
+		sendStatus("🔒 正在进行安全审查...")
+		assessment := h.app.riskAssessor.AssessSkill(skill, skill.TrustLevel)
+		if assessment.Level == RiskCritical {
+			if h.app.auditLog != nil {
+				_ = h.app.auditLog.Log(AuditEntry{
+					Timestamp:    time.Now(),
+					Action:       AuditActionHubSkillReject,
+					ToolName:     source + "_skill_install",
+					RiskLevel:    RiskCritical,
+					PolicyAction: PolicyDeny,
+					Result:       fmt.Sprintf("rejected skill %s: critical risk", displayName),
+				})
+			}
+			return fmt.Sprintf("⚠️ Skill「%s」包含高风险操作，已拒绝自动安装", displayName)
+		}
+	}
+
+	sendStatus(fmt.Sprintf("📝 正在注册 Skill: %s ...", skill.Name))
+	if err := h.app.skillExecutor.Register(*skill); err != nil {
+		return fmt.Sprintf("注册 Skill「%s」失败: %v", displayName, err)
+	}
+
+	// Audit log.
+	if h.app.auditLog != nil {
+		_ = h.app.auditLog.Log(AuditEntry{
+			Timestamp:    time.Now(),
+			Action:       AuditActionHubSkillInstall,
+			ToolName:     source + "_skill_install",
+			RiskLevel:    RiskLow,
+			PolicyAction: PolicyAllow,
+			Result:       fmt.Sprintf("installed skill %s from %s", displayName, source),
+		})
+	}
+
+	sendStatus(fmt.Sprintf("▶️ 正在执行 Skill: %s ...", skill.Name))
+	execResult, execErr := h.app.skillExecutor.Execute(skill.Name)
+	if execErr != nil {
+		return fmt.Sprintf("✅ 已安装 Skill「%s」但执行失败: %v", skill.Name, execErr)
+	}
+	return fmt.Sprintf("✅ 已自动安装并执行 Skill「%s」\n%s", skill.Name, execResult)
 }
 
 // syncClawNetTools dynamically registers or unregisters ClawNet tools
@@ -1289,17 +1448,25 @@ func (h *IMMessageHandler) runAgentLoop(ctx *LoopContext, userID, systemPrompt s
 		// treat the response as final when there are genuinely no tool calls.
 		if len(choice.Message.ToolCalls) == 0 {
 			// Check for capability gap before returning.
+			// Uses SkillSearcher (SkillMarket → ClawHub mirror → GitHub) for
+			// unified search order, then installAndExecuteSkill for the install
+			// path — no duplicate searches.
 			if h.capabilityGapDetector != nil && h.capabilityGapDetector.Detect(msgContent) {
-				skillName, result, err := h.capabilityGapDetector.Resolve(
-					context.Background(), userText, nil,
-					func(status string) {
-						// Status updates are logged but not sent to user in this context.
-					},
-				)
-				if skillName != "" && err == nil {
-					finalText := fmt.Sprintf("✅ 已自动安装并执行 Skill「%s」\n%s", skillName, result)
-					h.memory.save(userID, trimHistory(history))
-					return &IMAgentResponse{Text: stripThinkingTags(finalText)}
+				goCtx, goCancel := ctx.Context()
+				smClient := NewSkillMarketClient(h.app)
+				searcher := NewSkillSearcher(smClient)
+				best, searchErr := searcher.SearchAndInstall(goCtx, userText)
+				if searchErr == nil && best != nil {
+					sendProgress(fmt.Sprintf("📦 找到 Skill: %s", best.Name))
+					installResult := h.installAndExecuteSkill(goCtx, best, userText,
+						func(status string) { sendProgress(status) })
+					goCancel()
+					if strings.HasPrefix(installResult, "✅") {
+						h.memory.save(userID, trimHistory(history))
+						return &IMAgentResponse{Text: stripThinkingTags(installResult)}
+					}
+				} else {
+					goCancel()
 				}
 			}
 			h.memory.save(userID, trimHistory(history))
