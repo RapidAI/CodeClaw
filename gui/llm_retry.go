@@ -24,5 +24,6 @@ func isRetryableLLMError(err error) bool {
 	return strings.Contains(s, "context deadline exceeded") ||
 		strings.Contains(s, "Client.Timeout") ||
 		strings.Contains(s, "connection reset") ||
-		strings.Contains(s, "connection refused")
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "SSE stream idle timeout")
 }

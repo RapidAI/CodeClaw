@@ -3803,7 +3803,13 @@ func (a *App) saveToPath(path string, config AppConfig) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	// Atomic write: write to temp file first, then rename to avoid
+	// concurrent LoadConfig reading a half-written file.
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 type UpdateResult struct {

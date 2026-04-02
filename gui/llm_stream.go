@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/RapidAI/CodeClaw/corelib"
 	"github.com/RapidAI/CodeClaw/corelib/freeproxy"
@@ -91,8 +92,13 @@ func (h *IMMessageHandler) doLLMRequestStream(
 	httpClient *http.Client,
 	onToken TokenCallback,
 ) (*llmResponse, error) {
+	// Always use the streaming path even when onToken is nil (e.g. WeChat IM
+	// standalone mode). The non-streaming DoOpenAIRequest path uses io.ReadAll
+	// which blocks until the entire SSE stream finishes — causing multi-minute
+	// delays when the API returns SSE despite stream:false. A noop callback
+	// lets us stream incrementally and discard tokens we don't need to display.
 	if onToken == nil {
-		return h.doLLMRequest(cfg, messages, tools, httpClient)
+		onToken = func(string) {}
 	}
 	if cfg.Protocol == "anthropic" {
 		return h.doAnthropicLLMRequestStream(reqCtx, cfg, messages, tools, httpClient, onToken)
@@ -217,7 +223,28 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 	scanner := bufio.NewScanner(bodyReader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 
+	// SSE idle watchdog: if no data line arrives within 120s, close the
+	// response body so scanner.Scan() unblocks. This prevents indefinite
+	// hangs when the API establishes an SSE connection but stops sending data.
+	const sseIdleTimeout = 30 * time.Second
+	idleTimer := time.NewTimer(sseIdleTimeout)
+	defer idleTimer.Stop()
+	sseTimedOut := false
+	watchdogDone := make(chan struct{})
+	go func() {
+		select {
+		case <-idleTimer.C:
+			sseTimedOut = true
+			log.Printf("[LLM Stream] SSE idle timeout (%v) — aborting stalled request", sseIdleTimeout)
+			resp.Body.Close() // unblocks scanner.Scan()
+		case <-watchdogDone:
+		case <-reqCtx.Done():
+		}
+	}()
+	defer close(watchdogDone)
+
 	for scanner.Scan() {
+		idleTimer.Reset(sseIdleTimeout)
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
 			continue
@@ -262,6 +289,12 @@ func (h *IMMessageHandler) doOpenAILLMRequestStream(
 		if choice.FinishReason != nil {
 			finishReason = *choice.FinishReason
 		}
+	}
+
+	// If the watchdog fired and we got no content, return a retryable error
+	// so the agent loop's retry logic can re-attempt the request.
+	if sseTimedOut && contentBuf.Len() == 0 && reasoningBuf.Len() == 0 && len(toolAccums) == 0 {
+		return nil, fmt.Errorf("SSE stream idle timeout (%v): no data received from %s", sseIdleTimeout, endpoint)
 	}
 
 	tf.Flush()
@@ -388,7 +421,26 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 
+	// SSE idle watchdog (same as OpenAI path).
+	const anthIdleTimeout = 30 * time.Second
+	anthIdleTimer := time.NewTimer(anthIdleTimeout)
+	defer anthIdleTimer.Stop()
+	anthTimedOut := false
+	anthWatchdogDone := make(chan struct{})
+	go func() {
+		select {
+		case <-anthIdleTimer.C:
+			anthTimedOut = true
+			log.Printf("[LLM Stream] Anthropic SSE idle timeout (%v) — aborting stalled request", anthIdleTimeout)
+			resp.Body.Close()
+		case <-anthWatchdogDone:
+		case <-reqCtx.Done():
+		}
+	}()
+	defer close(anthWatchdogDone)
+
 	for scanner.Scan() {
+		anthIdleTimer.Reset(anthIdleTimeout)
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
 			continue
@@ -485,6 +537,10 @@ func (h *IMMessageHandler) doAnthropicLLMRequestStream(
 		if len(blocks) == 0 {
 			return nil, fmt.Errorf("SSE stream read error: %w", err)
 		}
+	}
+	// If the watchdog fired and we got no content, return a retryable error.
+	if anthTimedOut && len(blocks) == 0 {
+		return nil, fmt.Errorf("SSE stream idle timeout (%v): no data received from %s", anthIdleTimeout, endpoint)
 	}
 	tf.Flush()
 	fcf.Flush()

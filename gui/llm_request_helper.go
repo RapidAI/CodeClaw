@@ -56,6 +56,7 @@ func doSimpleOpenAIRequest(ctx context.Context, cfg MaclawLLMConfig, messages []
 	reqBody := map[string]interface{}{
 		"model":    cfg.Model,
 		"messages": messages,
+		"stream":   false,
 	}
 	data, _ := json.Marshal(reqBody)
 

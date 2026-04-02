@@ -2094,7 +2094,24 @@ function App() {
                 }
             }
         }).catch(err => {
+            console.error("Failed to load config on startup:", err);
             setStatus("Error loading config: " + err);
+            // Fallback: retry once after a short delay. If the config file was
+            // being written by a concurrent SaveConfig, it should be ready now.
+            setTimeout(() => {
+                LoadConfig().then((cfg) => {
+                    setConfig(cfg);
+                    if (cfg && cfg.language) {
+                        setLang(cfg.language);
+                        SetLanguage(cfg.language);
+                    }
+                }).catch(err2 => {
+                    console.error("Retry load config also failed:", err2);
+                    // Last resort: set a minimal default config so the UI is not stuck
+                    // on "加载配置中" forever. User can still use the app and reconfigure.
+                    setConfig(new main.AppConfig({}));
+                });
+            }, 1500);
         });
 
         // Listen for external config changes (e.g. from Tray)
@@ -6720,20 +6737,31 @@ ${instruction}`;
                     onLLMConfigured={() => {
                         setMaclawLLMOnline(true);
                         setMaclawLLMConfigured(true);
-                        // Reload config to pick up CodeGen model injected into tool configs by SSO
-                        LoadConfig().then((c: any) => setConfig(c)).catch(() => {});
+                        // Reload config to pick up CodeGen model injected into tool configs by SSO.
+                        // Delay slightly to avoid racing with SaveConfig writing the file.
+                        setTimeout(() => {
+                            LoadConfig().then((c: any) => setConfig(c)).catch((err) => {
+                                console.error("Failed to reload config after LLM configured:", err);
+                                // Retry once after a short delay
+                                setTimeout(() => {
+                                    LoadConfig().then((c: any) => setConfig(c)).catch((err2) => {
+                                        console.error("Retry reload config also failed:", err2);
+                                    });
+                                }, 1000);
+                            });
+                        }, 500);
                     }}
                     onRegistered={() => {
                         refreshRemotePanel();
                     }}
                     onSaveField={(patch) => {
-                        saveRemoteConfigField(patch as any);
-                        // If ui_mode changed, update config immediately for reactivity
+                        // If ui_mode changed, merge into config for immediate reactivity
+                        // before calling saveRemoteConfigField (which will persist it).
                         if (patch.ui_mode && config) {
                             const c = new main.AppConfig({ ...config, ...patch });
                             setConfig(c);
-                            SaveConfig(c);
                         }
+                        saveRemoteConfigField(patch as any);
                     }}
                 />
             )}
